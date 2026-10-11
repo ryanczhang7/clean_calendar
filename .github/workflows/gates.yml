@@ -1,0 +1,149 @@
+name: gates
+
+# WHAT RUNS WHEN, AND WHY IT COSTS WHAT IT COSTS. Private-repo Actions bill per
+# JOB, rounded UP to the whole minute, so a job's price is ceil(seconds/60) and
+# not its duration. Measured on this repository at release 42:
+#
+#   gates      147 s  -> 3 billed minutes
+#   boundaries   8 s  -> 1 billed minute
+#
+# NO `push: branches: [main]`. It was here and it re-ran the whole job on the
+# merge commit - 3 more billed minutes to re-prove the tree the pull_request run
+# had just proved. With required PR checks and a linear history the merge commit
+# carries the same tree, so the second run could only ever agree with the first.
+# Six pull requests in one day cost eighteen minutes saying so twice.
+#
+# A project that merges without required checks, or that lands commits directly
+# on main, genuinely does need a push trigger - main is then a tree nothing has
+# judged. Add it back there; it is removed here because neither is true.
+on:
+  pull_request:
+  # The colour-forced self-test below runs on these two, not on every pull
+  # request. See the `if:` on that step for the reasoning.
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The harness itself needs nothing but bash. Add the toolchain your
+      # project.conf gate commands actually invoke - the bootstrap story should
+      # add the setup step for the chosen stack here.
+      #
+      # - uses: actions/setup-python@v7
+      #   with: { python-version: "3.12" }
+      # - uses: astral-sh/setup-uv@v10
+      #
+      # - uses: pnpm/action-setup@v6
+      # - uses: actions/setup-node@v7
+      #   with: { node-version: "22", cache: pnpm }
+
+      # The harness's own tests. They need nothing but bash and git, and they
+      # guard the machinery every other check in this workflow depends on: the
+      # phase lock, the path classifier, the quote-aware command parsing.
+      #
+      # IT LIVES HERE BECAUSE THIS JOB IS THE CHEAP, BASH-ONLY ONE. That is a
+      # property of this workflow, not a rule about this file, and it stops
+      # being true the moment a project changes `runs-on`. Measured, same suites,
+      # same commit:
+      #
+      #   ubuntu-latest      31 s
+      #   windows-latest     21-27 min      about 40x
+      #
+      # It is almost entirely process spawn, which is what Windows is slow at,
+      # and this suite spawns a subshell per assertion. A real project whose
+      # gates job is `windows-latest` (for WebView2, for a Tauri bundle) measured
+      # its gate run at 17m57s against `timeout-minutes: 45`; adding the
+      # self-test there would have put the first run at ~39/45, 87% of the cap,
+      # on the one thing in the repository guaranteed to grow. The failure mode
+      # is not "CI is slower", it is a job that starts timing out a few stories
+      # later for a reason nobody connects to this line.
+      #
+      # So: put this step in whichever job is cheapest and needs only bash and
+      # git. If that is not this one, move it - boundaries.yml is usually the
+      # right home, since it is already `on: pull_request` and already required.
+      # Nothing downstream cares which file it is in: doctor.sh accepts any
+      # workflow, and ci-local.sh globs *.yml.
+      - name: Harness self-test
+        run: bash scripts/selftest.sh
+
+      # NOT ON EVERY PULL REQUEST, and the reason is what this step is FOR.
+      #
+      # It re-runs all 17 suites with every colour-capable tool forced to
+      # colour. Measured: 61 s of the job's 147 s - 43% of the bill - to
+      # exercise one property.
+      #
+      # THE PROPERTY IS REAL. A consuming project lost two required gates when
+      # escapes landed BETWEEN the two words of `Test Files  1 passed`, so its
+      # guard's regex could not match. Nine local passes, piped and therefore
+      # uncoloured; two of two failures on CI, where colour is forced. That is
+      # deterministic per environment, which is worse than a flake: repeating
+      # the run locally is structurally incapable of finding it.
+      #
+      # BUT THE EXPOSURE IS PROJECT-SHAPED, and in THIS repository it is small.
+      # The only colour-capable tool here is git - the harness's own scripts
+      # print with plain `printf` and colour nothing - and five suites capture
+      # git output. In a consuming project the test RUNNER colours heavily, and
+      # a guard reading `vitest`, `pytest` or `cargo test` output is exposed on
+      # every run.
+      #
+      # So: weekly and on demand here, where nothing has ever regressed and the
+      # tool surface is one program; MOVE IT BACK INTO THE PULL_REQUEST PATH in
+      # a project whose runner colours, where it is cheap insurance against the
+      # defect above. Deleting it is the wrong saving in both cases.
+      #
+      # `ci-local.sh` still reads this step out of this file and runs it
+      # locally, where it is free - so a local run keeps full coverage and
+      # `ci-local.test.sh`'s derivation still holds.
+      - name: Harness self-test, with colour forced
+        if: github.event_name != 'pull_request'
+        run: FORCE_COLOR=1 CLICOLOR_FORCE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=always bash scripts/selftest.sh
+
+      # The SIGPIPE guard. Five instances of one defect shipped in this
+      # repository before it existed, and a hand sweep that fixed four of them
+      # left NINE more standing, across five files - including the
+      # blocked-pattern check in gates.sh, which stops blocking when the pattern
+      # lands early in a large log. A sweep looks for the shape it has already
+      # seen; a guard looks for the class.
+      #
+      # IT BELONGS IN CI RATHER THAN THE SELF-TEST because the defect is a race
+      # on the pipe buffer: the same file passes on a Windows checkout and fails
+      # on ubuntu-latest, so the run that matters is the one on the runner. Two
+      # of the original five were found exactly that way and never locally.
+      # Needs nothing but bash and git, so it sits in this job for the same
+      # reason the self-test does.
+      - name: Refuse pipefail SIGPIPE matchers
+        run: bash scripts/check-sigpipe.sh
+
+      # The sibling guard: `grep -c` prints 0 AND exits 1 on no-match, so a
+      # fallback that PRINTS appends a second value and the caller gets "0\n0",
+      # which equals neither the count nor zero. `|| true` is correct and is not
+      # flagged. Same family as the step above - both produce a matcher that
+      # reports the opposite of the truth while every process in it exits
+      # cleanly - and here for the same reason: bash and git only.
+      - name: Refuse a printing grep -c fallback
+        run: bash scripts/check-grep-count.sh
+
+      - name: Show configured gates
+        run: bash scripts/gates.sh --list
+
+      # Catches a gate whose command was emptied, whose cwd was moved away, or
+      # whose evidence line was dropped - none of which the gate run itself can
+      # report, because a gate that no longer does anything still exits 0.
+      - name: Audit the gate manifest
+        run: bash scripts/gates.sh --audit
+
+      - name: Run gates
+        run: bash scripts/gates.sh
+
+      - name: Upload gate logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gate-logs
+          path: .claude/state/gate-logs/
+          if-no-files-found: ignore
