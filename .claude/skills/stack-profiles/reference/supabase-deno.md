@@ -75,6 +75,17 @@ than a threshold nobody wrote.
 
     discovery | functions | supabase/functions | deno test --allow-env --allow-read --allow-net=127.0.0.1 --dry-run 2>&1 | grep "_test\.ts" > /dev/null
 
+**Measured in Clean Calendar CAL-001 (Deno 2.9.7): `--dry-run` does not
+exist** ("unexpected argument '--dry-run'"), and `--no-run` prints nothing
+once the modules are cached. What works there:
+
+    discovery | functions | supabase/functions | deno test --allow-read --filter __discovery_lists_modules_only__ --reporter=tap 2>&1 | grep "_test\.ts" > /dev/null
+
+The TAP reporter names every module it loaded (`# ./_shared/health_test.ts`)
+even when the filter runs no test. The same story measured that `deno check`
+over **no** files exits 0 silently, so `evidence | typecheck | -` is unsafe;
+its project.conf prints a module count after the check and asserts on that.
+
 Deno discovers `*_test.ts`, `*.test.ts`, `test.ts` and `*_test.{js,mjs,jsx,tsx}`
 under the given path. A function directory renamed, or a test file named
 `capture.spec.ts`, silently leaves the suite; the dry run names each module it
@@ -192,10 +203,15 @@ claim; and one manual push-delivery check per reminder story, recorded.
 
     # Windows
     winget install --id DenoLand.Deno
-    winget install --id Supabase.cli
+    # The Supabase CLI is NOT in winget (measured 2026-10-12, winget 1.29:
+    # "No package found"). Add it to the project instead and run it as
+    # `pnpm exec supabase` (Clean Calendar CAL-001, 2.120.0):
+    pnpm add -D supabase
+    # or globally through scoop: scoop bucket add supabase https://github.com/supabase/scoop-bucket.git && scoop install supabase
     # macOS
     brew install deno supabase/tap/supabase
     # Docker Desktop for `supabase start` (db / integration gates only)
 
-Verify: `deno --version` prints `deno 2.x`; `supabase --version` prints `2.x`;
+Verify: `deno --version` prints `deno 2.x`; `supabase --version` (or
+`pnpm exec supabase --version`) prints `2.x`;
 `docker info` succeeds if the optional gates are wanted.

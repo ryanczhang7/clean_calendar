@@ -10,9 +10,9 @@ the bootstrap story (CAL-001) confirms or corrects them._
 | Tool | Expected | Needed by |
 |---|---|---|
 | git, bash | any recent (Git for Windows) | the harness: hooks, `gates.sh`, `doctor.sh` |
-| Node.js | 22.x LTS or later (`stack.md` pins 22.20.0; see Notes) | Vite build, Vitest `unit` + coverage gate, Biome `lint`/`format`, `tsc` `types` gate |
-| pnpm | 10.x, via corepack and the `packageManager` field | installs and runs every Node gate |
-| Deno | 2.x (`stack.md` pins 2.5.x) | `deno check` / `deno test` over `supabase/functions/**` — part of the `types` and `unit` gates |
+| Node.js | 24.x LTS (`.nvmrc` 24, `engines.node >=24`; pinned by CAL-001) | Vite build, Vitest `unit` + coverage gate, Biome `lint`/`format`, `tsc` `types` gate |
+| pnpm | 10.34.7, via corepack and the `packageManager` field | installs and runs every Node gate |
+| Deno | 2.9.x (pinned by CAL-001; 2.9.7 measured) | `deno check` / `deno test` over `supabase/functions/**` — part of the `types` and `unit` gates |
 | Supabase CLI | 2.x, project-local dev dependency (`pnpm exec supabase`) | local stack, migrations, function deploy; `supabase start` for the optional gates |
 
 ## Optional (skippable)
@@ -59,8 +59,8 @@ pick up the new PATH.
 
 | Command | Expected shape |
 |---|---|
-| `node --version` | `v22.x` or later |
-| `pnpm --version` (inside the repo, after CAL-001) | `10.x` |
+| `node --version` | `v24.x` |
+| `pnpm --version` (inside the repo) | `10.34.7` |
 | `deno --version` | `deno 2.x (...)` on the first line |
 | `pnpm exec supabase --version` (after CAL-001) | `2.x.y` |
 | `docker info` (optional) | prints Server details, no "cannot connect" error |
@@ -93,3 +93,27 @@ pick up the new PATH.
   (`rules.md`, Portability).
 - **Shells:** harness scripts run under Git Bash. Run `pnpm`/`deno` from Git
   Bash or PowerShell; both resolve the same executables.
+- **CAL-001, 2026-10-13 — pins decided and measured on this machine.**
+  Node 24 (`.nvmrc` `24`, `engines.node >=24`) and Deno 2.9 are now the pins;
+  `stack.md` is corrected to match. Every Node gate (biome 2.5.15, tsc 5.9.3,
+  vitest 5.0.4, vite 7.3.7) ran green on Node v24.19.0.
+- **pnpm inside the repo — observed, CAL-001:** with
+  `"packageManager": "pnpm@10.34.7"` in `package.json`, corepack printed
+  `Corepack is about to download …pnpm-10.34.7.tgz` once, and `pnpm --version`
+  inside the repo then prints `10.34.7`. Outside it the shim still says 12.3.4.
+  pnpm 10 skips dependency build scripts by default: `esbuild` and `msw` were
+  reported as "Ignored build scripts" and nothing needed them (build, tests and
+  `supabase --version` all worked); `supabase` was not in the ignored list and
+  its binary runs. Approve one with `pnpm approve-builds` only if a
+  later story shows it is needed.
+- **Supabase CLI — CAL-001:** `pnpm exec supabase --version` prints `2.120.0`;
+  `pnpm exec supabase init` ran without Docker.
+- **Stale PATH after the Deno install — measured CAL-001:** shells started
+  before winget installed Deno (including the agent session that ran CAL-001)
+  do not find `deno`. Every Deno command there was run with
+  `export PATH="/c/Users/ryanc/AppData/Local/Microsoft/WinGet/Packages/DenoLand.Deno_Microsoft.Winget.Source_8wekyb3d8bbwe:$PATH"`
+  prefixed. `project.conf` says plain `deno …`, which a fresh terminal finds.
+  If `doctor.sh` reports `deno` MISSING, open a new terminal before anything else.
+- **Docker and Playwright Chromium — CAL-001:** neither is installed, so the
+  optional `db` and `integration` gates carry waivers in `project.conf` and
+  report KNOWN, not WARN.
