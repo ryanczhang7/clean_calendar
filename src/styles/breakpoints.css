@@ -1,0 +1,17 @@
+/*
+ * Breakpoints (layout.md, Breakpoints). Mobile first: the phone layout is the
+ * base, and min-width queries add to it.
+ *   tablet  : min-width 600px
+ *   desktop : min-width 1024px
+ * Raw px, because custom properties cannot be used in @media conditions and
+ * Vite does not support @custom-media without a plugin.
+ */
+
+/* Print (layout.md, Print): hide the bottom nav and the top-bar controls so
+   a month prints sanely, nothing more. */
+@media print {
+  nav[data-bottomnav],
+  div[data-topbar-controls] {
+    display: none;
+  }
+}
