@@ -1,0 +1,28 @@
+@import "./tokens.css";
+@import "./breakpoints.css";
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-family);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+  font-weight: var(--font-weight-regular);
+  color: var(--color-text);
+  background: var(--color-surface);
+}
+
+[data-tabular] {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Focus (tokens.md, Focus): the one rule everywhere. */
+:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

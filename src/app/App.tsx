@@ -1,9 +1,9 @@
 import type { JSX } from "react";
+import { createBrowserRouter, RouterProvider } from "react-router";
+import { routes } from "./routes";
+
+const router = createBrowserRouter(routes);
 
 export function App(): JSX.Element {
-  return (
-    <main>
-      <h1>Clean Calendar</h1>
-    </main>
-  );
+  return <RouterProvider router={router} />;
 }
