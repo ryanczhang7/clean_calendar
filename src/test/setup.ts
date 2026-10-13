@@ -1,4 +1,37 @@
 import "@testing-library/jest-dom/vitest";
+import { cleanup } from "@testing-library/react";
+import { afterEach, vi } from "vitest";
+
+// Testing Library installs its own afterEach(cleanup) only when the runner
+// exposes a global `afterEach`, which vitest does not without `globals: true`.
+// Without this every render stays mounted into the next test (CAL-002
+// Regressions, defect 1).
+afterEach(() => {
+  cleanup();
+});
+
+// @testing-library/react 16.3's asyncWrapper (used by every user-event call)
+// awaits a setTimeout(0) and flushes it only when `jestFakeTimersAreEnabled()`:
+// a global `jest` exists AND `setTimeout` carries the fake clock's own `clock`
+// property. Under vitest there is no `jest`, so with faked timers that
+// setTimeout(0) never fires and every `await user.click` hangs (CAL-002
+// Regressions, defect 2). The shim exposes the one method RTL calls, and only
+// while setTimeout is faked: the getter returns undefined otherwise, so
+// `typeof jest` reads "undefined" in every test using real timers. It advances
+// by 0 ms in asyncWrapper, so it moves no fake clock across a boundary.
+// Limit worth knowing: @testing-library/dom's waitFor/findBy also consult
+// `jest` and, under faked setTimeout, advance the fake clock by their polling
+// interval - a test faking setTimeout that uses them gets that behaviour.
+const jestShim = {
+  advanceTimersByTime: (ms: number) => {
+    vi.advanceTimersByTime(ms);
+  },
+};
+Object.defineProperty(globalThis, "jest", {
+  configurable: true,
+  get: () =>
+    Object.hasOwn(globalThis.setTimeout, "clock") ? jestShim : undefined,
+});
 
 // jsdom 30.1.2 does not implement HTMLDialogElement#showModal or #close
 // (measured 2026-10-13, CAL-002 Contract, Dialog). This is the minimum a
