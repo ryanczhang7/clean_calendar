@@ -69,3 +69,19 @@ out/
 coverage/
 htmlcov/
 .coverage
+
+# Clean Calendar (CAL-001): Vite, Vitest, Playwright, Supabase CLI, Deno
+.vite/
+blob-report/
+playwright/.cache/
+supabase/.branches/
+supabase/.temp/
+supabase/.env.local
+supabase/.env.keys
+supabase/.env.*.local
+supabase/functions/.env
+.env.local
+.deno-cov/
+*.tsbuildinfo
+.stryker-tmp/
+reports/mutation/

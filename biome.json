@@ -1,0 +1,46 @@
+{
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
+  "vcs": {
+    "enabled": true,
+    "clientKind": "git",
+    "useIgnoreFile": true
+  },
+  "files": {
+    "includes": [
+      "src/**",
+      "shared/**",
+      "e2e/**",
+      "index.html",
+      "vite.config.ts",
+      "vitest.config.ts",
+      "playwright.config.ts",
+      "stryker.config.mjs",
+      "biome.json",
+      "tsconfig.json",
+      "package.json",
+      "!.claude",
+      "!docs",
+      "!scripts",
+      "!supabase",
+      "!dist",
+      "!coverage"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 80
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended"
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double"
+    }
+  }
+}
