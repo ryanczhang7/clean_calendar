@@ -1,0 +1,146 @@
+import { act, render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { createMemoryRouter, RouterProvider } from "react-router";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { routes } from "./routes";
+
+// AC-2 (one <h1> per route, the not-found page) and AC-4 (focus on the new
+// page's <h1> after a route change). Headings: CAL-002 Contract, Router.
+
+function renderAt(path: string) {
+  const router = createMemoryRouter(routes, { initialEntries: [path] });
+  render(<RouterProvider router={router} />);
+  return router;
+}
+
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(new Date(2026, 9, 14, 12, 0, 0));
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+const PAGES: Array<[path: string, heading: string]> = [
+  ["/", "Calendar"],
+  ["/month/2026-10", "Calendar"],
+  ["/week/2026-10-12", "Calendar"],
+  ["/day/2026-10-14", "Calendar"],
+  ["/welcome", "Your event kinds"],
+  ["/kinds", "Event kinds"],
+  ["/capture", "Capture"],
+  ["/capture/confirm", "Check the details"],
+  ["/settings/notifications", "Notifications"],
+  ["/signin", "Clean Calendar"],
+];
+
+describe("routes (AC-2)", () => {
+  it.each(PAGES)("%s renders exactly one <h1>, reading %j", (path, heading) => {
+    renderAt(path);
+    const h1s = screen.getAllByRole("heading", { level: 1 });
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0]).toHaveAccessibleName(heading);
+    expect(document.querySelectorAll("h1")).toHaveLength(1);
+  });
+
+  it.each(PAGES.filter(([path]) => path !== "/signin"))(
+    "%s renders inside the app shell",
+    (path) => {
+      renderAt(path);
+      expect(screen.getByRole("banner")).toBeInTheDocument();
+      expect(screen.getByRole("main")).toContainElement(
+        screen.getByRole("heading", { level: 1 }),
+      );
+    },
+  );
+
+  it("renders /signin outside the app shell, with no top bar or bottom navigation", () => {
+    renderAt("/signin");
+    expect(screen.queryByRole("banner")).toBeNull();
+    expect(
+      screen.queryByRole("navigation", { name: "Bottom navigation" }),
+    ).toBeNull();
+  });
+
+  it("renders 'Nothing here' with a 'Go to today' link to / for an unknown path", () => {
+    renderAt("/unknown/x");
+    const h1s = screen.getAllByRole("heading", { level: 1 });
+    expect(h1s).toHaveLength(1);
+    expect(h1s[0]).toHaveAccessibleName("Nothing here");
+    expect(screen.getByRole("link", { name: "Go to today" })).toHaveAttribute(
+      "href",
+      "/",
+    );
+  });
+
+  it("takes the user to today's calendar from the not-found page", async () => {
+    const user = userEvent.setup();
+    renderAt("/unknown/x");
+    await user.click(screen.getByRole("link", { name: "Go to today" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("focus on route change (AC-4)", () => {
+  it("focuses the page's <h1> on first render", async () => {
+    renderAt("/");
+    const h1 = screen.getByRole("heading", { level: 1, name: "Calendar" });
+    await waitFor(() => expect(h1).toHaveFocus());
+  });
+
+  it("moves focus to the new page's <h1> after following the Capture link", async () => {
+    const user = userEvent.setup();
+    renderAt("/");
+    await user.click(
+      within(screen.getByRole("banner")).getByRole("link", { name: "Capture" }),
+    );
+    const h1 = await screen.findByRole("heading", {
+      level: 1,
+      name: "Capture",
+    });
+    await waitFor(() => expect(h1).toHaveFocus());
+  });
+
+  it("moves focus to the new page's <h1> on a programmatic navigation", async () => {
+    const router = renderAt("/month/2026-10");
+    await act(async () => {
+      await router.navigate("/kinds");
+    });
+    const h1 = await screen.findByRole("heading", {
+      level: 1,
+      name: "Event kinds",
+    });
+    await waitFor(() => expect(h1).toHaveFocus());
+  });
+
+  it("moves focus to the <h1> again when only the calendar date changes", async () => {
+    const router = renderAt("/month/2026-10");
+    const before = screen.getByRole("heading", { level: 1, name: "Calendar" });
+    await waitFor(() => expect(before).toHaveFocus());
+    before.blur();
+    expect(before).not.toHaveFocus();
+    await act(async () => {
+      await router.navigate("/month/2026-11");
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole("heading", { level: 1, name: "Calendar" }),
+      ).toHaveFocus(),
+    );
+  });
+
+  it("focuses the sign-in page's <h1>, outside the shell", async () => {
+    const router = renderAt("/");
+    await act(async () => {
+      await router.navigate("/signin");
+    });
+    const h1 = await screen.findByRole("heading", {
+      level: 1,
+      name: "Clean Calendar",
+    });
+    await waitFor(() => expect(h1).toHaveFocus());
+  });
+});
