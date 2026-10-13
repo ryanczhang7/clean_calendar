@@ -7,7 +7,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, Outlet } from "react-router";
+import { Link, Outlet, useNavigate } from "react-router";
+import { signOut } from "../auth/session";
 import { SyncStatus } from "../sync/SyncStatus";
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import styles from "./AppShell.module.css";
@@ -16,6 +17,7 @@ function AccountMenu(): JSX.Element {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   useEffect(() => {
     if (!open) return;
@@ -70,6 +72,17 @@ function AccountMenu(): JSX.Element {
           >
             Notifications
           </Link>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={async () => {
+              setOpen(false);
+              await signOut();
+              navigate("/signin");
+            }}
+          >
+            Sign out
+          </button>
         </div>
       ) : null}
     </div>

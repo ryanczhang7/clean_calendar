@@ -83,13 +83,20 @@
   box-shadow: var(--shadow-2);
 }
 
-.menu > a {
+.menu > a,
+.menu > button {
   display: flex;
   align-items: center;
+  width: 100%;
   min-height: var(--size-touch);
   padding: 0 var(--space-4);
+  border: none;
+  background: none;
   color: var(--color-text);
+  font: inherit;
+  text-align: start;
   text-decoration: none;
+  cursor: pointer;
 }
 
 .main {
