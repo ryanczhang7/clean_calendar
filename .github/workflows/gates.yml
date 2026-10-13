@@ -41,6 +41,23 @@ jobs:
       # - uses: pnpm/action-setup@v6
       # - uses: actions/setup-node@v7
       #   with: { node-version: "22", cache: pnpm }
+      #
+      # Clean Calendar (CAL-001): Node + pnpm for the client gates, Deno for
+      # the edge-function gates. pnpm's version comes from `packageManager` in
+      # package.json and Node's from .nvmrc, so this file pins neither and
+      # cannot drift from them. Added after PR #1's first gates run reported
+      # every required gate BLOCKED on `pnpm: command not found` and
+      # `deno: command not found`.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.x
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
       # The harness's own tests. They need nothing but bash and git, and they
       # guard the machinery every other check in this workflow depends on: the
