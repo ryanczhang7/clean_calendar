@@ -401,13 +401,11 @@ deno_version = 2
 # secret_key = "env(SECRET_VALUE)"
 
 # Every function is called by the browser with the signed-in user's JWT, never
-# anonymously (supabase-deno profile). Pre-declared here; the functions
-# themselves are written by CAL-018 (capture) and the reminder stories.
-[functions.capture]
-verify_jwt = true
-
-[functions.send-reminders]
-verify_jwt = true
+# anonymously (supabase-deno profile). Each stanza is added by the story that
+# writes the function - CAL-018 (capture), CAL-028 (send-reminders) - with
+# `verify_jwt = true`. They were pre-declared by CAL-001, but `supabase start`
+# reads every declared function's index.ts and refuses to start while the
+# file is missing (measured 2026-10-14, CLI 2.120.0, CAL-004).
 
 [analytics]
 enabled = true

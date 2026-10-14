@@ -117,3 +117,15 @@ pick up the new PATH.
 - **Docker and Playwright Chromium — CAL-001:** neither is installed, so the
   optional `db` and `integration` gates carry waivers in `project.conf` and
   report KNOWN, not WARN.
+- **Docker Desktop and the local Supabase stack — measured 2026-10-14 on this
+  machine (CAL-004):** Docker Desktop is installed per-user
+  (`%LOCALAPPDATA%\Programs\DockerDesktop`) and `docker info` answers.
+  `pnpm exec supabase start` (CLI 2.120.0) brought the stack up on the
+  first run after one config fix: it refuses to start while
+  `supabase/config.toml` declares a `[functions.<name>]` whose
+  `index.ts` does not exist (`failed to read file: open
+  supabase/functions/capture/index.ts`), and `-x edge-runtime` does not
+  avoid the read. API `http://127.0.0.1:54321`, DB
+  `postgresql://postgres:postgres@127.0.0.1:54322/postgres`, Studio
+  `:54323`. With stdout not a terminal the CLI prints its status as one
+  JSON object; `supabase status -o env` prints `KEY=value` lines.
