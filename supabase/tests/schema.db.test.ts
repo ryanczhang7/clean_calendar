@@ -469,9 +469,13 @@ describe("AC-1/AC-6: updated_at is maintained by a trigger", () => {
           where id = ${ins?.id as string} returning updated_at::text as u`;
         out.push(r?.u as string);
       }
+      // Each value goes back as a text parameter and is cast server-side: a
+      // timestamptz-typed parameter is serialised by postgres.js through a JS
+      // Date, which drops microseconds, and two updates a microsecond apart
+      // would then compare equal however correct the trigger is.
       const [cmp] = await tx<{ ok: boolean }[]>`
-        select ${out[0] as string}::timestamptz < ${out[1] as string}::timestamptz
-           and ${out[1] as string}::timestamptz < ${out[2] as string}::timestamptz as ok`;
+        select ${out[0] as string}::text::timestamptz < ${out[1] as string}::text::timestamptz
+           and ${out[1] as string}::text::timestamptz < ${out[2] as string}::text::timestamptz as ok`;
       return { values: out, increasing: cmp?.ok };
     });
     expect(seen).toEqual({ values: seen.values, increasing: true });
