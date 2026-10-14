@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { Outlet, type RouteObject, useLocation } from "react-router";
+import { RequireOwner } from "../auth/RequireOwner";
 import { SignInPage } from "../auth/SignInPage";
 import { CalendarPage } from "../calendar/CalendarPage";
 import { CapturePage } from "../capture/CapturePage";
@@ -14,6 +15,9 @@ import { NotFoundPage } from "./NotFoundPage";
  * Moves focus to the page's <h1> on first render and on every pathname
  * change (accessibility.md, Focus). Every page heading carries
  * tabIndex={-1}, and nothing in the shell above the page is an <h1>.
+ * On first load the session is still loading when this runs, so the gate
+ * and the sign-in page also focus the <h1> once the session settles
+ * (useFocusHeadingWhenSettled, CAL-003).
  */
 export function RouteFocus(): null {
   const { pathname } = useLocation();
@@ -39,18 +43,27 @@ export const routes: RouteObject[] = [
     element: <FocusLayout />,
     children: [
       {
-        element: <AppShell />,
+        // CAL-003: every shell route is the owner's only.
+        element: <RequireOwner />,
         children: [
-          { path: "/", element: <CalendarPage /> },
-          { path: "/month/:ym", element: <CalendarPage /> },
-          { path: "/week/:date", element: <CalendarPage /> },
-          { path: "/day/:date", element: <CalendarPage /> },
-          { path: "/welcome", element: <WalkthroughPage /> },
-          { path: "/kinds", element: <KindsPage /> },
-          { path: "/capture", element: <CapturePage /> },
-          { path: "/capture/confirm", element: <ConfirmPage /> },
-          { path: "/settings/notifications", element: <NotificationsPage /> },
-          { path: "*", element: <NotFoundPage /> },
+          {
+            element: <AppShell />,
+            children: [
+              { path: "/", element: <CalendarPage /> },
+              { path: "/month/:ym", element: <CalendarPage /> },
+              { path: "/week/:date", element: <CalendarPage /> },
+              { path: "/day/:date", element: <CalendarPage /> },
+              { path: "/welcome", element: <WalkthroughPage /> },
+              { path: "/kinds", element: <KindsPage /> },
+              { path: "/capture", element: <CapturePage /> },
+              { path: "/capture/confirm", element: <ConfirmPage /> },
+              {
+                path: "/settings/notifications",
+                element: <NotificationsPage />,
+              },
+              { path: "*", element: <NotFoundPage /> },
+            ],
+          },
         ],
       },
       // Outside the shell: components.md, Sign-in screen (a centred card, no

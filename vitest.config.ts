@@ -26,7 +26,15 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**", "shared/**"],
-      exclude: ["src/main.tsx", "src/sw.ts", "src/test/**", "**/*.test.*"],
+      exclude: [
+        "src/main.tsx",
+        "src/sw.ts",
+        "src/test/**",
+        "**/*.test.*",
+        // A two-line createClient factory with no branch; every test mocks
+        // it whole at this boundary, so it never executes under test (CAL-003).
+        "src/lib/supabase.ts",
+      ],
       // A floor on the whole project: the gate fails when any one of the
       // four is below 80.00 over the included files.
       thresholds: {
