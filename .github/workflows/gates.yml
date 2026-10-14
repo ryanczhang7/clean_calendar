@@ -59,6 +59,13 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The `db` gate (CAL-004) runs supabase/tests/**/*.db.test.ts against a
+      # RUNNING local stack and does not start one itself. Docker is present
+      # on ubuntu-latest; the CLI is the `supabase` dev dependency. `start`
+      # applies supabase/migrations and supabase/seed.sql.
+      - name: Start local Supabase
+        run: pnpm exec supabase start
+
       # The harness's own tests. They need nothing but bash and git, and they
       # guard the machinery every other check in this workflow depends on: the
       # phase lock, the path classifier, the quote-aware command parsing.

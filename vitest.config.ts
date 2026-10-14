@@ -20,6 +20,10 @@ export default defineConfig({
           name: "db",
           environment: "node",
           include: ["supabase/tests/**/*.db.test.ts"],
+          // Every db suite truncates the same tables of the one local
+          // database in its beforeEach; two files in parallel would wipe
+          // each other's rows mid-test (CAL-004).
+          fileParallelism: false,
         },
       },
     ],
