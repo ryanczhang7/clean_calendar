@@ -8,6 +8,7 @@
   "files": {
     "includes": [
       "src/**",
+      "!src/data/database.types.ts",
       "shared/**",
       "e2e/**",
       "index.html",
