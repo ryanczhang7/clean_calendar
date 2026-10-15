@@ -129,3 +129,11 @@ pick up the new PATH.
   `postgresql://postgres:postgres@127.0.0.1:54322/postgres`, Studio
   `:54323`. With stdout not a terminal the CLI prints its status as one
   JSON object; `supabase status -o env` prints `KEY=value` lines.
+- **Harness self-test duration — measured on this machine, 2026-10-13…15:**
+  CAL-001 3 h 18 min, CAL-002 2 h 44 min, CAL-003 3 h 27 min (no Docker
+  installed), CAL-004 4 h 44 min (Supabase stack running, 12 containers),
+  CAL-005 **32 min** (stack stopped, first run after a machine restart).
+  The harness docs quote ~25 min for a Windows host. Cause of the slow runs
+  not established; the two differences observed for the fast run are a
+  recent restart and no running containers. If a self-test is far slower
+  than ~30 min, try those two before anything else, and record the result.
