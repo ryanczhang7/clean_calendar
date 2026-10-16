@@ -2,7 +2,15 @@
 // the policies and the predicate) and AC-6 (trigger-maintained updated_at),
 // inspected through direct SQL as `postgres`. Needs a running local stack
 // with the migration applied (`pnpm exec supabase db reset`).
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+} from "vitest";
 import {
   ALL_TABLES,
   CLIENT_TABLES,
@@ -401,6 +409,82 @@ describe("AC-1/AC-3: row-level security is on, policies and predicate as pinned"
       });
       expect(result).toBe(owner);
     });
+  }
+});
+
+// CAL-032: the predicate's emptiness rule, against a configured owner that is
+// blank or needs normalising. Both sides are normalised BEFORE the emptiness
+// check (CAL-003's isOwnerEmail), so an owner configured as '' or spaces
+// admits nobody - not even a claim that also normalises to ''. Each case
+// changes app_config.owner_email inside a transaction that is rolled back.
+describe("CAL-032: is_owner() against a blank or unnormalised configured owner", () => {
+  /** Thrown from the `begin` callback so postgres.js rolls the update back. */
+  class Rollback extends Error {
+    constructor(readonly value: boolean | null | undefined) {
+      super("rollback");
+    }
+  }
+
+  const NO_EMAIL = { sub: "00000000-0000-0000-0000-000000000000" };
+
+  // The story's Contract, Block 2: owner_email stored × email claim → result.
+  const ownerCases: [
+    label: string,
+    ownerEmail: string,
+    claims: Record<string, unknown>,
+    expected: boolean,
+  ][] = [
+    ["owner '' and claim ''", "", { email: "" }, false],
+    ["owner '' and claim '   '", "", { email: "   " }, false],
+    ["owner '' and no e-mail claim", "", NO_EMAIL, false],
+    ["owner '   ' and claim ''", "   ", { email: "" }, false],
+    ["owner '   ' and claim '   '", "   ", { email: "   " }, false],
+    ["owner '   ' and no e-mail claim", "   ", NO_EMAIL, false],
+    [
+      "owner '' and claim 'owner@example.com'",
+      "",
+      { email: OWNER_EMAIL },
+      false,
+    ],
+    [
+      "owner '  Owner@Example.COM ' and claim 'owner@example.com'",
+      "  Owner@Example.COM ",
+      { email: OWNER_EMAIL },
+      true,
+    ],
+  ];
+
+  // AC-3: whatever a case did to app_config, the seeded owner is back.
+  afterEach(async () => {
+    const rows = await sql(env)<{ owner_email: string }[]>`
+      select owner_email from public.app_config`;
+    expect(rows.map((r) => r.owner_email)).toEqual([OWNER_EMAIL]);
+  }, BUDGET_MS);
+
+  for (const [label, ownerEmail, claims, expected] of ownerCases) {
+    it(
+      `is_owner() is ${expected} for ${label}`,
+      async () => {
+        let result: boolean | null | undefined;
+        try {
+          await sql(env).begin(async (tx) => {
+            // As postgres, before switching role: RLS would refuse it after.
+            await tx`update public.app_config set owner_email = ${ownerEmail}`;
+            await tx`select set_config('request.jwt.claims', ${JSON.stringify(claims)}, true)`;
+            await tx`set local role authenticated`;
+            const [r] = await tx<{ owner: boolean | null }[]>`
+              select public.is_owner() as owner`;
+            throw new Rollback(r?.owner);
+          });
+          throw new Error("the transaction committed; it must roll back");
+        } catch (e) {
+          if (!(e instanceof Rollback)) throw e;
+          result = e.value;
+        }
+        expect(result).toBe(expected);
+      },
+      BUDGET_MS,
+    );
   }
 });
 
