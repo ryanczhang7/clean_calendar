@@ -2,13 +2,24 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fake, OWNER_EMAIL, sessionFor } from "../test/supabase-mock";
+import { installServer } from "../test/msw";
+import {
+  answerKindsSeed,
+  fake,
+  OWNER_EMAIL,
+  sessionFor,
+} from "../test/supabase-mock";
 import { routes } from "./routes";
 
 vi.mock(
   "../lib/supabase",
   async () => (await import("../test/supabase-mock")).supabaseModule,
 );
+
+// CAL-006 Block 7: the owner path seeds the default kinds through a real
+// PostgREST call, which MSW answers (an empty table, then the insert echoed).
+// An unanswered request fails the test.
+installServer();
 
 // AC-3. The shell is a layout route, so it is rendered through the real
 // route table (CAL-002 Contract, Shell). Today is pinned to Wed 14 Oct 2026.
@@ -28,6 +39,7 @@ beforeEach(() => {
   fake.reset();
   fake.setSession(sessionFor(OWNER_EMAIL));
   sessionStorage.clear();
+  answerKindsSeed();
 });
 
 afterEach(() => {

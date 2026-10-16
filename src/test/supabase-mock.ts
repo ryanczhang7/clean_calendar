@@ -1,4 +1,8 @@
+import { createClient } from "@supabase/supabase-js";
+import { HttpResponse } from "msw";
 import { vi } from "vitest";
+import type { Database } from "../data/database.types";
+import { onTable, type Recorded, TEST_ORIGIN } from "./msw";
 
 // The fake `src/lib/supabase.ts` every CAL-003 test mocks in (CAL-003
 // Contract, Supabase client). Use it with
@@ -130,8 +134,53 @@ export const fake = {
   },
 };
 
+// CAL-006 Contract, Block 7. The mocked `supabase` is a REAL supabase-js
+// client aimed at TEST_ORIGIN, so `supabase.from("kinds")` is a real
+// PostgREST fetch that MSW (src/test/msw.ts) answers - and a request nobody
+// answers fails the test. Only its `auth` is the fake above.
+//
+// `accessToken: async () => null` (RED amendment to Block 7): without it,
+// supabase-js 2.117 calls `this.auth.getSession()` before EVERY PostgREST
+// request to find a bearer token - i.e. the fake's getSession - which would
+// add calls to its recorded count and could consume a `holdSession()` meant
+// for the app. With the option set, a request never touches `auth` and is
+// sent with the anon key; supabase-js replaces `auth` with a throwing Proxy,
+// which the defineProperty below then replaces with the fake.
+const client = createClient<Database>(TEST_ORIGIN, "test-anon-key", {
+  auth: { persistSession: false, autoRefreshToken: false },
+  db: { retry: false },
+  accessToken: async () => null,
+});
+Object.defineProperty(client, "auth", {
+  value: auth,
+  configurable: true,
+  writable: true,
+});
+
 /** What `vi.mock("../lib/supabase", …)` returns. */
 export const supabaseModule = {
-  supabase: { auth },
+  supabase: client,
   OWNER_EMAIL,
 };
+
+/**
+ * Answer the owner-path seed (CAL-006) where the seed is not what the test is
+ * about: a GET on `kinds` finds an empty table, and the POST that follows is
+ * echoed back as the inserted rows. Call it after `installServer()` has been
+ * called at the file's top level, in a beforeEach. Returns the recorded
+ * requests.
+ */
+export function answerKindsSeed(): Recorded[] {
+  return onTable("kinds", (req) => {
+    if (req.method !== "POST") return HttpResponse.json([]);
+    const inputs = Array.isArray(req.body) ? req.body : [req.body];
+    const rows = inputs.map((input, i) => ({
+      id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+      ...(input as object),
+      deleted_at: null,
+      created_at: "2026-10-16T08:00:00.000001+00:00",
+      updated_at: "2026-10-16T08:00:00.000001+00:00",
+    }));
+    return HttpResponse.json(rows, { status: 201 });
+  });
+}

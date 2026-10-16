@@ -29,6 +29,10 @@ export type KindsRepo = {
     expectedUpdatedAt: string,
   ): Promise<Result<Kind>>;
   remove(id: string, expectedUpdatedAt: string): Promise<Result<Kind>>;
+  /** Every row, live and soft-deleted, ascending sort_order (CAL-006). */
+  listAll(): Promise<ListResult<Kind>>;
+  /** One POST carrying a JSON array; PostgREST inserts it as one statement. */
+  insertMany(inputs: NewKind[]): Promise<ListResult<Kind>>;
 };
 
 export function kindsRepo(client: SupabaseClient<Database>): KindsRepo {
@@ -81,6 +85,19 @@ export function kindsRepo(client: SupabaseClient<Database>): KindsRepo {
         id,
         { deleted_at: new Date().toISOString() },
         expectedUpdatedAt,
+      ),
+    // No deleted_at filter: the seed counts soft-deleted rows (CAL-006 AC-4).
+    listAll: async () =>
+      fromPostgrest(
+        await table().select("*").order("sort_order", { ascending: true }),
+        toKind,
+      ),
+    // One atomic statement, so two racing devices cannot each land a subset
+    // (CAL-006 AC-5). A 23505 comes back as an error; nothing retries.
+    insertMany: async (inputs) =>
+      fromPostgrest(
+        await table().insert(inputs.map(fromNewKind)).select("*"),
+        toKind,
       ),
   };
 }

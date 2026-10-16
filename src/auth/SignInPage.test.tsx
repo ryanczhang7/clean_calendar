@@ -3,12 +3,24 @@ import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { routes } from "../app/routes";
-import { fake, OWNER_EMAIL, sessionFor } from "../test/supabase-mock";
+import { installServer } from "../test/msw";
+import {
+  answerKindsSeed,
+  fake,
+  OWNER_EMAIL,
+  sessionFor,
+} from "../test/supabase-mock";
 
 vi.mock(
   "../lib/supabase",
   async () => (await import("../test/supabase-mock")).supabaseModule,
 );
+
+// CAL-006 Block 7: an owner arriving at /signin is sent on through
+// RequireOwner, which seeds the default kinds through a real PostgREST call.
+// MSW answers it (an empty table, then the insert echoed); an unanswered
+// request fails the test.
+installServer();
 
 // CAL-003 AC-1, AC-2, AC-3, AC-4 (on /signin) and AC-5, through the real
 // route table so redirects land where a user would see them. Copy:
@@ -34,6 +46,7 @@ function signInButton() {
 beforeEach(() => {
   fake.reset();
   sessionStorage.clear();
+  answerKindsSeed();
 });
 
 afterEach(() => {
