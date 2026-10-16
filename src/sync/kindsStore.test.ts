@@ -5,6 +5,11 @@ import type { Kind } from "../data/rows";
 import type { SeedRepo } from "../kinds/seedKinds";
 import { createKindsStore, useKinds } from "./kindsStore";
 
+vi.mock(
+  "../lib/supabase",
+  async () => (await import("../test/supabase-mock")).supabaseModule,
+);
+
 // CAL-006 AC-6, Contract Block 5. A hand-written SeedRepo fake (Block 7):
 // the repository's HTTP shape is kinds.test.ts's business.
 
