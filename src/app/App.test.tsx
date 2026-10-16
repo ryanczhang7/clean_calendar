@@ -1,6 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fake, OWNER_EMAIL, sessionFor } from "../test/supabase-mock";
+import { installServer } from "../test/msw";
+import {
+  answerKindsSeed,
+  fake,
+  OWNER_EMAIL,
+  sessionFor,
+} from "../test/supabase-mock";
 import { App } from "./App";
 
 vi.mock(
@@ -8,10 +14,16 @@ vi.mock(
   async () => (await import("../test/supabase-mock")).supabaseModule,
 );
 
+// CAL-006 Block 7: the owner path seeds the default kinds through a real
+// PostgREST call, which MSW answers (an empty table, then the insert echoed).
+// An unanswered request fails the test.
+installServer();
+
 beforeEach(() => {
   fake.reset();
   fake.setSession(sessionFor(OWNER_EMAIL));
   sessionStorage.clear();
+  answerKindsSeed();
 });
 
 // Smoke test only (CAL-002 Contract, Router): routing is tested through

@@ -236,3 +236,181 @@ describe("kinds failures resolve, never throw (AC-6)", () => {
     ).resolves.toStrictEqual({ status: "offline" });
   });
 });
+
+// CAL-006 Contract, Block 3: the two members the seed needs.
+
+describe("kinds.listAll (CAL-006 AC-4: soft-deleted rows count)", () => {
+  test("GETs every row ordered by sort_order ascending, with no deleted_at filter at all", async () => {
+    const seen = onTable("kinds", () => HttpResponse.json([]));
+    await kindsRepo(testClient()).listAll();
+
+    expect(seen).toHaveLength(1);
+    const [req] = seen;
+    expect(req?.method).toBe("GET");
+    expect(req?.url.pathname).toBe("/rest/v1/kinds");
+    expect(req?.url.searchParams.get("select")).toBe("*");
+    expect(req?.url.searchParams.get("order")).toBe("sort_order.asc");
+    expect(req?.url.searchParams.has("deleted_at")).toBe(false);
+    expect([...(req?.url.searchParams.keys() ?? [])].sort()).toStrictEqual([
+      "order",
+      "select",
+    ]);
+  });
+
+  test("returns live and soft-deleted rows mapped to Kind objects, in the server's order", async () => {
+    onTable("kinds", () => HttpResponse.json([kindRowNulls, kindRowFull]));
+    await expect(kindsRepo(testClient()).listAll()).resolves.toStrictEqual({
+      status: "ok",
+      rows: [kindNulls, kindFull],
+    });
+  });
+
+  test("an empty table is ok with no rows", async () => {
+    onTable("kinds", () => HttpResponse.json([]));
+    await expect(kindsRepo(testClient()).listAll()).resolves.toStrictEqual({
+      status: "ok",
+      rows: [],
+    });
+  });
+
+  test("a network failure is offline", async () => {
+    onTable("kinds", () => HttpResponse.error());
+    await expect(kindsRepo(testClient()).listAll()).resolves.toStrictEqual({
+      status: "offline",
+    });
+  });
+});
+
+describe("kinds.insertMany (CAL-006 AC-3, AC-5: one atomic statement)", () => {
+  const inputs = [
+    {
+      name: "Movies",
+      colorLight: "#7E3FB8",
+      colorDark: "#CFA8F0",
+      sortOrder: 1,
+      isDefault: true,
+    },
+    {
+      name: "Entertainment",
+      colorLight: "#BD8200",
+      colorDark: "#F5CC6A",
+      sortOrder: 2,
+      isDefault: false,
+    },
+  ];
+
+  const rowMovies = {
+    id: "0b6f7c1e-3d0a-4c55-9a51-6a2f6f0e9a11",
+    name: "Movies",
+    color_light: "#7E3FB8",
+    color_dark: "#CFA8F0",
+    sort_order: 1,
+    is_default: true,
+    deleted_at: null,
+    created_at: "2026-10-16T08:00:00.000001+00:00",
+    updated_at: "2026-10-16T08:00:00.000002+00:00",
+  };
+  const rowEntertainment = {
+    id: "0b6f7c1e-3d0a-4c55-9a51-6a2f6f0e9a12",
+    name: "Entertainment",
+    color_light: "#BD8200",
+    color_dark: "#F5CC6A",
+    sort_order: 2,
+    is_default: false,
+    deleted_at: null,
+    created_at: "2026-10-16T08:00:00.000003+00:00",
+    updated_at: "2026-10-16T08:00:00.000004+00:00",
+  };
+  const kindMovies = {
+    id: "0b6f7c1e-3d0a-4c55-9a51-6a2f6f0e9a11",
+    name: "Movies",
+    colorLight: "#7E3FB8",
+    colorDark: "#CFA8F0",
+    sortOrder: 1,
+    isDefault: true,
+    deletedAt: null,
+    createdAt: "2026-10-16T08:00:00.000001+00:00",
+    updatedAt: "2026-10-16T08:00:00.000002+00:00",
+  };
+  const kindEntertainment = {
+    id: "0b6f7c1e-3d0a-4c55-9a51-6a2f6f0e9a12",
+    name: "Entertainment",
+    colorLight: "#BD8200",
+    colorDark: "#F5CC6A",
+    sortOrder: 2,
+    isDefault: false,
+    deletedAt: null,
+    createdAt: "2026-10-16T08:00:00.000003+00:00",
+    updatedAt: "2026-10-16T08:00:00.000004+00:00",
+  };
+
+  test("sends ONE POST whose body is the array of snake_case rows, in order, asking for the rows back", async () => {
+    const seen = onTable("kinds", () =>
+      HttpResponse.json([rowMovies, rowEntertainment], { status: 201 }),
+    );
+    await kindsRepo(testClient()).insertMany(inputs);
+
+    expect(seen.map((r) => r.method)).toStrictEqual(["POST"]);
+    const [req] = seen;
+    expect(req?.url.pathname).toBe("/rest/v1/kinds");
+    expect(req?.url.searchParams.get("select")).toBe("*");
+    expect(preferTokens(req?.prefer ?? null)).toContain(
+      "return=representation",
+    );
+    expect(req?.body).toStrictEqual([
+      {
+        name: "Movies",
+        color_light: "#7E3FB8",
+        color_dark: "#CFA8F0",
+        sort_order: 1,
+        is_default: true,
+      },
+      {
+        name: "Entertainment",
+        color_light: "#BD8200",
+        color_dark: "#F5CC6A",
+        sort_order: 2,
+        is_default: false,
+      },
+    ]);
+  });
+
+  test("returns every inserted row mapped to a Kind, in the server's order", async () => {
+    onTable("kinds", () =>
+      HttpResponse.json([rowEntertainment, rowMovies], { status: 201 }),
+    );
+    await expect(
+      kindsRepo(testClient()).insertMany(inputs),
+    ).resolves.toStrictEqual({
+      status: "ok",
+      rows: [kindEntertainment, kindMovies],
+    });
+  });
+
+  test("a 23505 from the unique live-name index is an error carrying the code, and nothing retries", async () => {
+    const seen = onTable("kinds", () =>
+      pgError(
+        409,
+        "23505",
+        'duplicate key value violates unique constraint "kinds_live_name_key"',
+      ),
+    );
+    await expect(
+      kindsRepo(testClient()).insertMany(inputs),
+    ).resolves.toStrictEqual({
+      status: "error",
+      code: "23505",
+      message:
+        'duplicate key value violates unique constraint "kinds_live_name_key"',
+    });
+    expect(seen).toHaveLength(1);
+  });
+
+  test("a network failure is offline, in one request", async () => {
+    const seen = onTable("kinds", () => HttpResponse.error());
+    await expect(
+      kindsRepo(testClient()).insertMany(inputs),
+    ).resolves.toStrictEqual({ status: "offline" });
+    expect(seen).toHaveLength(1);
+  });
+});
