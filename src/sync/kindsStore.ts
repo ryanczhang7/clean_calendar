@@ -1,6 +1,7 @@
 import { useEffect, useSyncExternalStore } from "react";
-import { type KindsRepo, kindsRepo } from "../data/kinds";
+import { kindsRepo } from "../data/kinds";
 import type { Kind } from "../data/rows";
+import { supabase } from "../lib/supabase";
 import {
   ensureDefaultKinds,
   type SeedOutcome,
@@ -95,26 +96,11 @@ export function createKindsStore(repo: SeedRepo): KindsStore {
 
 /**
  * The app's one store, over `kindsRepo(supabase)` from `../lib/supabase`.
- * That module is loaded on the store's first request rather than at import:
- * it builds the client from the environment when evaluated, and a module
- * that only reads kinds (or a test of `createKindsStore`) must be importable
- * without one.
+ * That module builds the client from the environment when evaluated, so
+ * tests that import this module mock it, as every other suite reaching it
+ * does (`vi.mock("../lib/supabase", …)`).
  */
-export const kindsStore: KindsStore = createKindsStore(lazyAppRepo());
-
-function lazyAppRepo(): SeedRepo {
-  let repo: Promise<KindsRepo> | null = null;
-  const load = () => {
-    repo ??= import("../lib/supabase").then(({ supabase }) =>
-      kindsRepo(supabase),
-    );
-    return repo;
-  };
-  return {
-    listAll: async () => (await load()).listAll(),
-    insertMany: async (inputs) => (await load()).insertMany(inputs),
-  };
-}
+export const kindsStore: KindsStore = createKindsStore(kindsRepo(supabase));
 
 export function useKinds(store: KindsStore = kindsStore): KindsSnapshot {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
