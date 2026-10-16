@@ -46,6 +46,9 @@ function signInButton() {
 beforeEach(() => {
   fake.reset();
   sessionStorage.clear();
+  // CAL-007 Block 8: an onboarded device, so an owner sent on to / sees the calendar, not the kinds walkthrough.
+  localStorage.clear();
+  localStorage.setItem("cc.onboarded", "1");
   answerKindsSeed();
 });
 

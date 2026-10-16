@@ -4,7 +4,13 @@ import {
   CHIP_TEXT_LIGHT,
   chipText,
   contrast,
+  darkCounterpart,
+  nearestPassing,
   relativeLuminance,
+  SURFACE_DARK,
+  SURFACE_FLOOR,
+  SURFACE_LIGHT,
+  TEXT_FLOOR,
 } from "./colour";
 
 // CAL-006 AC-2, Contract Block 1. Every expected value below is READ OUT of
@@ -172,4 +178,147 @@ describe("hex input (Block 1)", () => {
       expect(message).toContain(bad);
     },
   );
+});
+
+// CAL-007 AC-3 and AC-4, Contract Block 1. The expected hexes are READ OUT of
+// Block 1 (#808080 -> #858585 lighter; #BD8200 and #FFFFFF -> null) or were
+// derived by RED from Block 1's HSL algorithm in a standalone script that
+// imports nothing from src/ (CAL-007 Handoff, "Expected values"). None is
+// recomputed here from the module under test.
+
+describe("the CAL-007 constants (Block 1)", () => {
+  it("the surfaces are tokens.css --color-surface: #FFFFFF light, #121417 dark", () => {
+    expect(SURFACE_LIGHT).toBe("#FFFFFF");
+    expect(SURFACE_DARK).toBe("#121417");
+  });
+
+  it("the text floor is 4.5 and the surface floor is 3", () => {
+    expect(TEXT_FLOOR).toBe(4.5);
+    expect(SURFACE_FLOOR).toBe(3);
+  });
+});
+
+describe("nearestPassing (AC-4, Block 1)", () => {
+  it("moves #808080 (4.35:1) two points lighter to #858585, not four darker", () => {
+    expect(nearestPassing("#808080")).toStrictEqual({
+      hex: "#858585",
+      direction: "lighter",
+    });
+  });
+
+  it("moves #777777 (4.48:1) one point darker to #757575, not five lighter", () => {
+    expect(nearestPassing("#777777")).toStrictEqual({
+      hex: "#757575",
+      direction: "darker",
+    });
+  });
+
+  it("moves #7F7F7F (4.29:1), which shares #808080's lightness, to #858585 too", () => {
+    expect(nearestPassing("#7F7F7F")).toStrictEqual({
+      hex: "#858585",
+      direction: "lighter",
+    });
+  });
+
+  it("breaks a tie toward darker: #7E7E7E (4.23:1) is three points from passing either way and goes to #757575", () => {
+    expect(nearestPassing("#7E7E7E")).toStrictEqual({
+      hex: "#757575",
+      direction: "darker",
+    });
+  });
+
+  it("keeps hue and saturation: #3C8D40 (4.15:1) goes two points darker to #38843C", () => {
+    expect(nearestPassing("#3C8D40")).toStrictEqual({
+      hex: "#38843C",
+      direction: "darker",
+    });
+  });
+
+  it("returns null for a colour that already passes: #BD8200 (5.20:1)", () => {
+    expect(nearestPassing("#BD8200")).toBeNull();
+  });
+
+  it("returns null for #FFFFFF", () => {
+    expect(nearestPassing("#FFFFFF")).toBeNull();
+  });
+
+  it("returns null for a grey just above the floor: #888888 (4.84:1)", () => {
+    expect(nearestPassing("#888888")).toBeNull();
+  });
+
+  it("always returns an upper-case #RRGGBB whose chip text reaches 4.5:1", () => {
+    const failing = [
+      "#808080",
+      "#7F7F7F",
+      "#777777",
+      "#7A7A7A",
+      "#7E7E7E",
+      "#3C8D40",
+      "#c8602e",
+      "#5c7fd6",
+      "#c0567a",
+      "#b0608a",
+      "#e91e63",
+    ];
+    const violations: string[] = [];
+    for (const hex of failing) {
+      if (chipText(hex).ratio >= 4.5) {
+        violations.push(`${hex} already passes, so it is not a failing input`);
+        continue;
+      }
+      const result = nearestPassing(hex);
+      if (result === null) {
+        violations.push(`${hex} -> null`);
+      } else if (!/^#[0-9A-F]{6}$/.test(result.hex)) {
+        violations.push(`${hex} -> ${result.hex} is not upper-case #RRGGBB`);
+      } else if (chipText(result.hex).ratio < 4.5) {
+        violations.push(
+          `${hex} -> ${result.hex} at ${chipText(result.hex).ratio}:1`,
+        );
+      }
+    }
+    expect(violations).toStrictEqual([]);
+  });
+});
+
+describe("darkCounterpart (AC-3, Block 1)", () => {
+  it("lightens #1565C0 to #7EB4F1, the first lightness point at relative luminance >= 0.42", () => {
+    expect(darkCounterpart("#1565C0")).toBe("#7EB4F1");
+  });
+
+  it("lightens #2E7D32 to #5BC360, keeping hue and saturation at full precision", () => {
+    // Whole-degree hue and whole-percent saturation would give #5BC260.
+    expect(darkCounterpart("#2E7D32")).toBe("#5BC360");
+  });
+
+  it("returns a colour already at or above 0.42 unchanged: #F5CC6A", () => {
+    expect(darkCounterpart("#F5CC6A")).toBe("#F5CC6A");
+  });
+
+  it("returns #FFFFFF unchanged", () => {
+    expect(darkCounterpart("#FFFFFF")).toBe("#FFFFFF");
+  });
+
+  it("always returns an upper-case #RRGGBB at relative luminance >= 0.42", () => {
+    const inputs = [
+      "#1565C0",
+      "#2E7D32",
+      "#808080",
+      "#000000",
+      "#6A1B9A",
+      "#00695C",
+      "#bf4a17",
+      "#121417",
+    ];
+    const violations: string[] = [];
+    for (const hex of inputs) {
+      const out = darkCounterpart(hex);
+      if (!/^#[0-9A-F]{6}$/.test(out)) {
+        violations.push(`${hex} -> ${out} is not upper-case #RRGGBB`);
+      } else if (relativeLuminance(out) < 0.42) {
+        violations.push(`${hex} -> ${out} at ${relativeLuminance(out)}`);
+      }
+    }
+    expect(violations).toStrictEqual([]);
+  });
 });

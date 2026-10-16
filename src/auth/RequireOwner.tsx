@@ -1,5 +1,6 @@
 import { type JSX, useEffect, useState } from "react";
 import { Navigate, Outlet, useLocation } from "react-router";
+import { isOnboarded } from "../kinds/onboarding";
 import { kindsStore } from "../sync/kindsStore";
 import { Refusal, useFocusHeadingWhenSettled } from "./SignInPage";
 import { rememberPath, useSession } from "./session";
@@ -45,6 +46,20 @@ export function RequireOwner(): JSX.Element | null {
     case "other":
       return <Refusal />;
     case "owner":
-      return seedSettled ? <Outlet /> : null;
+      if (!seedSettled) return null;
+      // CAL-007 Block 7: the walkthrough comes before the calendar until
+      // this device is onboarded. Only calendar routes redirect, so
+      // /welcome, /kinds, /capture and settings stay reachable and the
+      // remembered return path (CAL-003) still lands where it pointed.
+      if (!isOnboarded() && isCalendarRoute(location.pathname)) {
+        return <Navigate to="/welcome" replace />;
+      }
+      return <Outlet />;
   }
 }
+
+function isCalendarRoute(pathname: string): boolean {
+  return pathname === "/" || CALENDAR_PREFIXES.test(pathname);
+}
+
+const CALENDAR_PREFIXES = /^\/(month|week|day)\//;

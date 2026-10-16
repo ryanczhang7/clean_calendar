@@ -1,4 +1,11 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { HttpResponse } from "msw";
 import {
@@ -53,7 +60,11 @@ vi.mock("../sync/kindsStore", async (importOriginal) => {
     subscribe: (listener) => store().subscribe(listener),
     getSnapshot: () => store().getSnapshot(),
   };
-  return { ...real, kindsStore: delegate };
+  // CAL-007: useKinds() with no argument defaults to the real module's own
+  // binding, which this mock cannot reach; default it to the delegate too, so
+  // the walkthrough reads the same per-test store RequireOwner seeds.
+  const useKinds = (store: KindsStore = delegate) => real.useKinds(store);
+  return { ...real, kindsStore: delegate, useKinds };
 });
 
 installServer();
@@ -81,6 +92,8 @@ async function settle() {
 beforeEach(() => {
   fake.reset();
   sessionStorage.clear();
+  // CAL-007 Block 8: no test inherits another's onboarded flag.
+  localStorage.clear();
   generation.value += 1;
   // Where the seed is not what a test is about: an empty table, seeded.
   answerKindsSeed();
@@ -371,5 +384,126 @@ describe("the owner's sign-in seeds the default kinds first (CAL-006 AC-3, Block
       name: "Event kinds",
     });
     await waitFor(() => expect(document.activeElement).toBe(h1));
+  });
+});
+
+// --- CAL-007 ------------------------------------------------------------------
+
+describe("the kinds walkthrough before the calendar (CAL-007 AC-1, AC-7; Block 7)", () => {
+  const STAMP = "2026-10-16T08:00:00.000001+00:00";
+  const row = (n: number, name: string, light: string, dark: string) => ({
+    id: `00000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    name,
+    color_light: light,
+    color_dark: dark,
+    sort_order: n,
+    is_default: true,
+    deleted_at: null as string | null,
+    created_at: STAMP,
+    updated_at: STAMP,
+  });
+  // The server's order is sort_order ascending (kindsRepo.listAll); one row
+  // is soft-deleted and must not be listed.
+  const ROWS = [
+    row(1, "Movies", "#7E3FB8", "#CFA8F0"),
+    row(2, "Entertainment", "#BD8200", "#F5CC6A"),
+    { ...row(3, "Flights", "#0B6E80", "#7AD4E4"), deleted_at: STAMP },
+    row(8, "Gym", "#2E7D32", "#9BD69B"),
+  ];
+  const LINE =
+    "Every event gets a kind, and the kind decides its colour. Rename, recolour or remove these, or add your own. You can change them later.";
+
+  beforeEach(() => {
+    fake.setSession(sessionFor(OWNER_EMAIL));
+    onTable("kinds", (req) =>
+      req.method === "GET"
+        ? HttpResponse.json(ROWS)
+        : pgError(400, "XX000", `unexpected ${req.method}`),
+    );
+  });
+
+  it.each(["/", "/month/2026-10", "/week/2026-10-12", "/day/2026-10-14"])(
+    "an owner on a device not yet onboarded who visits %s is shown /welcome instead",
+    async (path) => {
+      const router = renderAt(path);
+      expect(
+        await screen.findByRole("heading", {
+          level: 1,
+          name: "Your event kinds",
+        }),
+      ).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe("/welcome");
+      expect(router.state.historyAction).toBe("REPLACE");
+      expect(screen.queryByRole("heading", { name: "Calendar" })).toBeNull();
+    },
+  );
+
+  it("the walkthrough shows the line and one row per live kind in sort_order, each with its swatch, initial, name and Edit {name}", async () => {
+    renderAt("/");
+    await screen.findByRole("button", { name: "Edit Gym" });
+    expect(screen.getByText(LINE).tagName).toBe("P");
+    const list = screen.getByRole("list", { name: "Kinds" });
+    const items = within(list).getAllByRole("listitem");
+    expect(
+      items.map((li) =>
+        within(li).getByRole("button").getAttribute("aria-label"),
+      ),
+    ).toStrictEqual(["Edit Movies", "Edit Entertainment", "Edit Gym"]);
+    const first = items[0] as HTMLElement;
+    const swatch = first.querySelector<HTMLElement>('[aria-hidden="true"]');
+    expect(swatch?.textContent).toBe("M");
+    expect(swatch?.style.getPropertyValue("--swatch-light")).toBe("#7E3FB8");
+    expect(swatch?.style.getPropertyValue("--swatch-dark")).toBe("#CFA8F0");
+    expect(within(first).getByText("Movies")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["/kinds", "Event kinds"],
+    ["/capture", "Capture"],
+  ])(
+    "visiting %s on a device not yet onboarded is not redirected",
+    async (path, heading) => {
+      const router = renderAt(path);
+      expect(
+        await screen.findByRole("heading", { level: 1, name: heading }),
+      ).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe(path);
+    },
+  );
+
+  it("an onboarded device visiting / renders the calendar, not the walkthrough", async () => {
+    localStorage.setItem("cc.onboarded", "1");
+    const router = renderAt("/");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+    ).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(
+      screen.queryByRole("heading", { name: "Your event kinds" }),
+    ).toBeNull();
+  });
+
+  it("Done on the walkthrough lands on the calendar, and the next visit to / on this device goes straight there (AC-7)", async () => {
+    const user = userEvent.setup();
+    const router = renderAt("/");
+    await screen.findByRole("button", { name: "Edit Gym" });
+    await user.click(
+      screen.getByRole("button", { name: "Done, show my calendar" }),
+    );
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+    ).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/");
+    expect(localStorage.getItem("cc.onboarded")).toBe("1");
+
+    cleanup();
+    const again = renderAt("/");
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+    ).toBeInTheDocument();
+    expect(again.state.location.pathname).toBe("/");
+    expect(
+      screen.queryByRole("heading", { name: "Your event kinds" }),
+    ).toBeNull();
   });
 });

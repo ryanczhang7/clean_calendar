@@ -23,6 +23,10 @@ beforeEach(() => {
   fake.reset();
   fake.setSession(sessionFor(OWNER_EMAIL));
   sessionStorage.clear();
+  // CAL-007 Block 8: an onboarded device, so a calendar route renders the
+  // calendar rather than redirecting to the kinds walkthrough.
+  localStorage.clear();
+  localStorage.setItem("cc.onboarded", "1");
   answerKindsSeed();
 });
 
