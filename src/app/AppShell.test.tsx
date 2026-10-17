@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_KINDS } from "../kinds/defaultKinds";
 import { installServer } from "../test/msw";
 import {
   answerKindsSeed,
@@ -248,5 +249,141 @@ describe("app shell live regions (AC-5, Contract)", () => {
     );
     expect(toast).toHaveLength(1);
     expect(toast[0]).toHaveAttribute("aria-live", "polite");
+  });
+});
+
+// CAL-008 Contract Block 4: the two Legend buttons open one KindLegend, owned
+// by the shell, through the real routes over the seeded default kinds.
+describe("the kind legend in the shell (CAL-008 AC-1, AC-2, AC-3, Block 4)", () => {
+  const topLegend = () =>
+    within(screen.getByRole("banner")).getByRole("button", { name: "Legend" });
+  const navLegend = () =>
+    within(
+      screen.getByRole("navigation", { name: "Bottom navigation" }),
+    ).getByRole("button", { name: "Legend" });
+  const legends = () =>
+    screen.queryAllByRole("dialog", { name: "Kind legend" });
+
+  /** The legend lists rows once the seeded kinds are in the store. */
+  async function openedLegend(): Promise<HTMLElement> {
+    const dialog = screen.getByRole("dialog", { name: "Kind legend" });
+    await within(dialog).findByRole("link", { name: "Movies" });
+    return dialog;
+  }
+
+  it("both Legend buttons carry data-legend-toggle and are type=button", async () => {
+    await renderAt("/month/2026-10");
+    for (const button of [topLegend(), navLegend()]) {
+      expect(button).toHaveAttribute("data-legend-toggle");
+      expect(button).toHaveAttribute("type", "button");
+      expect(button).toHaveAttribute("aria-expanded", "false");
+    }
+    expect(legends()).toHaveLength(0);
+  });
+
+  it("the top-bar Legend opens the one legend, right after itself, listing the eleven defaults in order, then Manage kinds", async () => {
+    const user = userEvent.setup();
+    await renderAt("/month/2026-10");
+    await user.click(topLegend());
+    expect(legends()).toHaveLength(1);
+    const dialog = await openedLegend();
+    expect(topLegend().nextElementSibling).toBe(dialog);
+    const items = within(within(dialog).getByRole("list")).getAllByRole(
+      "listitem",
+    );
+    expect(items).toHaveLength(DEFAULT_KINDS.length);
+    for (const [i, k] of DEFAULT_KINDS.entries()) {
+      expect(
+        within(items[i] as HTMLElement).getByRole("link"),
+      ).toHaveAccessibleName(k.name);
+    }
+    expect(
+      within(dialog).getByRole("link", { name: "Manage kinds" }),
+    ).toHaveAttribute("href", "/kinds");
+  });
+
+  it("both buttons toggle the same legend, and aria-expanded follows it on both", async () => {
+    const user = userEvent.setup();
+    await renderAt("/week/2026-10-12");
+    await user.click(topLegend());
+    expect(legends()).toHaveLength(1);
+    expect(topLegend()).toHaveAttribute("aria-expanded", "true");
+    expect(navLegend()).toHaveAttribute("aria-expanded", "true");
+    await user.click(navLegend());
+    expect(legends()).toHaveLength(0);
+    expect(topLegend()).toHaveAttribute("aria-expanded", "false");
+    expect(navLegend()).toHaveAttribute("aria-expanded", "false");
+    await user.click(navLegend());
+    expect(legends()).toHaveLength(1);
+    expect(topLegend()).toHaveAttribute("aria-expanded", "true");
+    expect(navLegend()).toHaveAttribute("aria-expanded", "true");
+    await user.click(topLegend());
+    expect(legends()).toHaveLength(0);
+  });
+
+  it.each([
+    ["top-bar", topLegend],
+    ["bottom-nav", navLegend],
+  ])(
+    "Escape closes the legend opened by the %s Legend and returns focus to that button",
+    async (_where, button) => {
+      const user = userEvent.setup();
+      await renderAt("/month/2026-10");
+      await user.click(button());
+      await openedLegend();
+      await user.keyboard("{Escape}");
+      expect(legends()).toHaveLength(0);
+      expect(button()).toHaveAttribute("aria-expanded", "false");
+      expect(button()).toHaveFocus();
+    },
+  );
+
+  it("L from the page toggles the legend, and both buttons follow it", async () => {
+    const user = userEvent.setup();
+    await renderAt("/day/2026-10-14");
+    await vi.waitFor(() => expect(document.activeElement?.tagName).toBe("H1"));
+    await user.keyboard("l");
+    expect(legends()).toHaveLength(1);
+    expect(topLegend()).toHaveAttribute("aria-expanded", "true");
+    expect(navLegend()).toHaveAttribute("aria-expanded", "true");
+    await openedLegend();
+    await user.keyboard("l");
+    expect(legends()).toHaveLength(0);
+    expect(topLegend()).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("a legend row opens /kinds?kind={id} with that kind's editor open, carrying the calendar route as state.from (AC-3)", async () => {
+    const user = userEvent.setup();
+    const router = await renderAt("/week/2026-10-12");
+    await user.click(topLegend());
+    const dialog = await openedLegend();
+    await user.click(within(dialog).getByRole("link", { name: "Movies" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Event kinds" }),
+    ).toBeInTheDocument();
+    const editor = await screen.findByRole("dialog", { name: "Edit Movies" });
+    expect(within(editor).getByRole("textbox", { name: "Name" })).toHaveValue(
+      "Movies",
+    );
+    expect(legends()).toHaveLength(0);
+    expect(router.state.location.pathname).toBe("/kinds");
+    expect(router.state.location.search).toBe(
+      "?kind=00000000-0000-4000-8000-000000000001",
+    );
+    expect(router.state.location.state).toStrictEqual({
+      from: "/week/2026-10-12",
+    });
+  });
+
+  it("the account menu's Kinds item carries the calendar route as state.from too", async () => {
+    const user = userEvent.setup();
+    const router = await renderAt("/month/2026-10");
+    await user.click(screen.getByRole("button", { name: "Account" }));
+    await user.click(screen.getByRole("menuitem", { name: "Kinds" }));
+    await screen.findByRole("heading", { level: 1, name: "Event kinds" });
+    expect(router.state.location.pathname).toBe("/kinds");
+    expect(router.state.location.state).toStrictEqual({
+      from: "/month/2026-10",
+    });
   });
 });

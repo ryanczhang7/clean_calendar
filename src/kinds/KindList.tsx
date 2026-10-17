@@ -7,10 +7,11 @@ import styles from "./KindList.module.css";
 // caller's store has already sorted them). The swatch carries both themes'
 // colours as custom properties and KindList.module.css picks one with
 // prefers-color-scheme, so nothing here asks which theme is on (PO decision
-// 3). No reorder controls in v1 (PO decision 7).
+// 3). No reorder controls in v1 (PO decision 7). CAL-008 Block 1 exports the
+// initial and the swatch so the kind legend renders the same markup.
 
-/** The first code point of the trimmed name, upper-cased. */
-function initialOf(name: string): string {
+/** The first code point of the trimmed name, upper-cased; "" for a blank name. */
+export function initialOf(name: string): string {
   return (Array.from(name.trim())[0] ?? "").toUpperCase();
 }
 
@@ -23,6 +24,20 @@ function swatchStyle(kind: Kind): CSSProperties {
   } as CSSProperties;
 }
 
+/** The kind's swatch: its initial on its colour, hidden from assistive tech. */
+export function KindSwatch(props: { kind: Kind }): JSX.Element {
+  const { kind } = props;
+  return (
+    <span
+      aria-hidden="true"
+      className={styles.swatch}
+      style={swatchStyle(kind)}
+    >
+      {initialOf(kind.name)}
+    </span>
+  );
+}
+
 export function KindList(props: {
   kinds: Kind[];
   onEdit: (kind: Kind) => void;
@@ -32,13 +47,7 @@ export function KindList(props: {
     <ul aria-label="Kinds" className={styles.list}>
       {kinds.map((kind) => (
         <li key={kind.id} className={styles.row}>
-          <span
-            aria-hidden="true"
-            className={styles.swatch}
-            style={swatchStyle(kind)}
-          >
-            {initialOf(kind.name)}
-          </span>
+          <KindSwatch kind={kind} />
           <span className={styles.name}>{kind.name}</span>
           <button
             type="button"
