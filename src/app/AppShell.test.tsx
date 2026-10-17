@@ -341,7 +341,7 @@ describe("the kind legend in the shell (CAL-008 AC-1, AC-2, AC-3, Block 4)", () 
   it("L from the page toggles the legend, and both buttons follow it", async () => {
     const user = userEvent.setup();
     await renderAt("/day/2026-10-14");
-    expect(document.activeElement?.tagName).toBe("H1");
+    await vi.waitFor(() => expect(document.activeElement?.tagName).toBe("H1"));
     await user.keyboard("l");
     expect(legends()).toHaveLength(1);
     expect(topLegend()).toHaveAttribute("aria-expanded", "true");
