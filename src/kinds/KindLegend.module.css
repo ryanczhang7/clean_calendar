@@ -1,0 +1,94 @@
+/* components.md, "Kind legend". Phone is the base: a bottom sheet. From
+   600px the same element is a popover under the top-bar Legend control
+   (AppShell's .controls is position: relative). jsdom sees none of this;
+   CAL-031 does. */
+.legend {
+  position: fixed;
+  inset: auto 0 0 0;
+  z-index: var(--z-panel);
+  max-height: 70dvh;
+  overflow-y: auto;
+  padding: var(--space-2) 0 calc(var(--space-2) + env(safe-area-inset-bottom));
+  background: var(--color-surface-raised);
+  border-top: 1px solid var(--color-border);
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  box-shadow: var(--shadow-2);
+}
+
+.title {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--font-size-md);
+  font-weight: var(--font-weight-semibold);
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row,
+.manage,
+.add {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 48px;
+  padding: 0 var(--space-4);
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  text-align: start;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.row:hover,
+.manage:hover,
+.add:hover {
+  background: var(--color-surface);
+}
+
+.row:focus-visible,
+.manage:focus-visible,
+.add:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: -2px;
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.manage,
+.add {
+  color: var(--color-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.manage {
+  border-top: 1px solid var(--color-border);
+}
+
+.empty {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  color: var(--color-text-muted);
+}
+
+@media (min-width: 600px) {
+  .legend {
+    position: absolute;
+    inset: calc(100% + var(--space-1)) 0 auto auto;
+    min-width: 240px;
+    max-height: none;
+    padding: var(--space-1) 0;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+}

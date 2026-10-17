@@ -7,8 +7,9 @@ import {
   useRef,
   useState,
 } from "react";
-import { Link, Outlet, useNavigate } from "react-router";
+import { Link, Outlet, useLocation, useNavigate } from "react-router";
 import { signOut } from "../auth/session";
+import { KindLegend } from "../kinds/KindLegend";
 import { SyncStatus } from "../sync/SyncStatus";
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import styles from "./AppShell.module.css";
@@ -18,6 +19,9 @@ function AccountMenu(): JSX.Element {
   const button = useRef<HTMLButtonElement>(null);
   const menu = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+  const location = useLocation();
+  // The route the menu was opened on, so the kinds page can go back (CAL-008).
+  const from = location.pathname + location.search;
 
   useEffect(() => {
     if (!open) return;
@@ -62,7 +66,12 @@ function AccountMenu(): JSX.Element {
           aria-label="Account"
           className={styles.menu}
         >
-          <Link role="menuitem" to="/kinds" onClick={() => setOpen(false)}>
+          <Link
+            role="menuitem"
+            to="/kinds"
+            state={{ from }}
+            onClick={() => setOpen(false)}
+          >
             Kinds
           </Link>
           <Link
@@ -98,6 +107,9 @@ export function AppShell(props: { toolbar?: ReactNode }): JSX.Element {
   const today = new Date();
   const month = format(today, "yyyy-MM");
   const day = format(today, "yyyy-MM-dd");
+  // CAL-008 Block 4: both Legend buttons toggle the one legend.
+  const [legendOpen, setLegendOpen] = useState(false);
+  const toggleLegend = () => setLegendOpen((o) => !o);
   return (
     <ToastProvider>
       <div className={styles.shell}>
@@ -112,10 +124,13 @@ export function AppShell(props: { toolbar?: ReactNode }): JSX.Element {
             <button
               type="button"
               className={styles.ghost}
-              aria-expanded="false"
+              data-legend-toggle
+              aria-expanded={legendOpen}
+              onClick={toggleLegend}
             >
               Legend
             </button>
+            <KindLegend open={legendOpen} onToggle={setLegendOpen} />
             <Link to="/capture" className={styles.primary}>
               Capture
             </Link>
@@ -133,7 +148,14 @@ export function AppShell(props: { toolbar?: ReactNode }): JSX.Element {
           <Link to={`/month/${month}`}>Month</Link>
           <Link to={`/week/${day}`}>Week</Link>
           <Link to={`/day/${day}`}>Day</Link>
-          <button type="button">Legend</button>
+          <button
+            type="button"
+            data-legend-toggle
+            aria-expanded={legendOpen}
+            onClick={toggleLegend}
+          >
+            Legend
+          </button>
           <Link to="/capture">Capture</Link>
         </nav>
         <ToastHost />
