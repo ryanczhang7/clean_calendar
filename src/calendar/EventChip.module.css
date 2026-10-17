@@ -1,0 +1,85 @@
+/* components.md, "Event chip" (CAL-009 Contract, Block 5). 20px tall with a
+   24px hit area (accessibility.md, Targets). A timed chip keeps grid text and
+   carries its colour on the dot; an all-day chip's fill and text colour are
+   inline, chosen for the active scheme in EventChip.tsx. */
+.chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  width: 100%;
+  min-width: 0;
+  height: 20px;
+  margin: 2px 0;
+  padding: 2px var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-xs);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* The 24px hit area around the 20px chip. */
+.chip::before {
+  content: "";
+  position: absolute;
+  inset: -2px 0;
+}
+
+.chip:hover {
+  box-shadow: var(--shadow-1);
+}
+
+.chip:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.chip:active {
+  filter: brightness(0.88);
+}
+
+.initial {
+  flex: none;
+  width: 16px;
+  text-align: center;
+  font-weight: var(--font-weight-semibold);
+}
+
+.dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--color-chip-neutral);
+}
+
+.text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A soft-deleted or unknown kind (kinds-palette.md): neutral, dashed, "?". */
+.chip[data-neutral="true"] {
+  background: var(--color-chip-neutral);
+  color: var(--color-chip-text-light);
+  border: 1px dashed currentColor;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .chip[data-neutral="true"] {
+    color: var(--color-chip-text-dark);
+  }
+}
+
+:root[data-theme="dark"] .chip[data-neutral="true"] {
+  color: var(--color-chip-text-dark);
+}

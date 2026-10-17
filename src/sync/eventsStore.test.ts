@@ -1,0 +1,376 @@
+import { act, renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import type { ListResult } from "../data/result";
+import type { Event } from "../data/rows";
+import {
+  createEventsStore,
+  type EventsReader,
+  eventsInRange,
+  eventsStore,
+  useEventsInRange,
+} from "./eventsStore";
+
+vi.mock(
+  "../lib/supabase",
+  async () => (await import("../test/supabase-mock")).supabaseModule,
+);
+
+// CAL-009 Contract, Block 4. The events read model, the same shape and
+// discipline as kindsStore.ts, over a hand-written EventsReader fake (vi.fn
+// per member). The overlap rule `startsAt < end && endsAt > start` is the
+// story's central claim (Contract, "A day is [D 00:00, D+1 00:00) local");
+// every instant is built with the local-time constructor.
+
+const STAMP = "2026-10-16T08:00:00.000001+00:00";
+
+/** Local time, `month` 1..12. */
+const at = (month: number, date: number, hour = 0, minute = 0) =>
+  new Date(2026, month - 1, date, hour, minute);
+
+function ev(
+  n: number,
+  startsAt: Date,
+  endsAt: Date,
+  extra: Partial<Event> = {},
+): Event {
+  return {
+    id: `10000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    title: `Event ${n}`,
+    kindId: "00000000-0000-4000-8000-000000000001",
+    startsAt,
+    endsAt,
+    allDay: false,
+    location: null,
+    notes: null,
+    recurrence: null,
+    origin: "manual",
+    captureJobId: null,
+    deletedAt: null,
+    createdAt: STAMP,
+    updatedAt: STAMP,
+    ...extra,
+  };
+}
+
+type FakeReader = { listLive: Mock<EventsReader["listLive"]> };
+
+let repo: FakeReader;
+
+beforeEach(() => {
+  repo = { listLive: vi.fn<EventsReader["listLive"]>() };
+});
+
+/** A listLive answer the test releases by hand. */
+function held(): {
+  promise: Promise<ListResult<Event>>;
+  release: (r: ListResult<Event>) => void;
+} {
+  let release: (r: ListResult<Event>) => void = () => {};
+  const promise = new Promise<ListResult<Event>>((done) => {
+    release = done;
+  });
+  return { promise, release };
+}
+
+const ids = (events: Event[]) => events.map((e) => e.id).sort();
+
+// The week of Monday 12 October 2026: [12 Oct 00:00, 19 Oct 00:00).
+const START = at(10, 12);
+const END = at(10, 19);
+
+describe("eventsInRange(events, start, end) - the overlap rule (Block 4)", () => {
+  const inside = ev(1, at(10, 14, 9), at(10, 14, 10));
+  const straddlesStart = ev(2, at(10, 11, 22), at(10, 12, 1));
+  const straddlesEnd = ev(3, at(10, 18, 23), at(10, 19, 1));
+  const covers = ev(4, at(10, 5), at(10, 25));
+  const endsAtStart = ev(5, at(10, 11, 23), at(10, 12, 0));
+  const startsAtEnd = ev(6, at(10, 19, 0), at(10, 19, 1));
+  const startsAtStart = ev(7, at(10, 12, 0), at(10, 12, 1));
+  const endsAtEnd = ev(8, at(10, 18, 23), at(10, 19, 0));
+  const before = ev(9, at(10, 1, 9), at(10, 1, 10));
+  const after = ev(10, at(10, 20, 9), at(10, 20, 10));
+
+  it("keeps an event wholly inside the range", () => {
+    expect(ids(eventsInRange([inside], START, END))).toStrictEqual(
+      ids([inside]),
+    );
+  });
+
+  it("keeps an event straddling the start, one straddling the end, and one covering the whole range", () => {
+    expect(
+      ids(eventsInRange([straddlesStart, straddlesEnd, covers], START, END)),
+    ).toStrictEqual(ids([straddlesStart, straddlesEnd, covers]));
+  });
+
+  it("drops an event that ends exactly at start: the end is exclusive", () => {
+    expect(eventsInRange([endsAtStart], START, END)).toStrictEqual([]);
+  });
+
+  it("drops an event that starts exactly at end: the range is half-open", () => {
+    expect(eventsInRange([startsAtEnd], START, END)).toStrictEqual([]);
+  });
+
+  it("keeps an event that starts exactly at start, and one that ends exactly at end", () => {
+    expect(
+      ids(eventsInRange([startsAtStart, endsAtEnd], START, END)),
+    ).toStrictEqual(ids([startsAtStart, endsAtEnd]));
+  });
+
+  it("drops events wholly before or after the range", () => {
+    expect(eventsInRange([before, after], START, END)).toStrictEqual([]);
+  });
+
+  it("drops a soft-deleted event even when it overlaps", () => {
+    const gone = ev(11, at(10, 14, 9), at(10, 14, 10), { deletedAt: STAMP });
+    expect(ids(eventsInRange([inside, gone], START, END))).toStrictEqual(
+      ids([inside]),
+    );
+  });
+
+  it("returns exactly the overlapping ones out of a mixed list, and does not touch its input", () => {
+    const all = [
+      after,
+      inside,
+      endsAtStart,
+      straddlesStart,
+      startsAtEnd,
+      covers,
+      before,
+      startsAtStart,
+      straddlesEnd,
+      endsAtEnd,
+    ];
+    const copy = [...all];
+    expect(ids(eventsInRange(all, START, END))).toStrictEqual(
+      ids([
+        inside,
+        straddlesStart,
+        covers,
+        startsAtStart,
+        straddlesEnd,
+        endsAtEnd,
+      ]),
+    );
+    expect(all).toStrictEqual(copy);
+  });
+
+  it("returns [] for no events", () => {
+    expect(eventsInRange([], START, END)).toStrictEqual([]);
+  });
+});
+
+describe("createEventsStore(repo) (Block 4)", () => {
+  it("is loading with no events before any load, and has not asked the repository", () => {
+    const store = createEventsStore(repo);
+    expect(store.getSnapshot()).toStrictEqual({
+      status: "loading",
+      events: [],
+    });
+    expect(repo.listLive).not.toHaveBeenCalled();
+  });
+
+  it("refresh() publishes ready with the live events in ascending startsAt, then createdAt", async () => {
+    const late = ev(1, at(10, 20, 9), at(10, 20, 10));
+    const early = ev(2, at(10, 2, 9), at(10, 2, 10));
+    const tieSecond = ev(3, at(10, 14, 9), at(10, 14, 10), {
+      createdAt: "2026-10-02T00:00:00+00:00",
+    });
+    const tieFirst = ev(4, at(10, 14, 9), at(10, 14, 11), {
+      createdAt: "2026-10-01T00:00:00+00:00",
+    });
+    const gone = ev(5, at(10, 3, 9), at(10, 3, 10), { deletedAt: STAMP });
+    repo.listLive.mockResolvedValueOnce({
+      status: "ok",
+      rows: [late, tieSecond, gone, early, tieFirst],
+    });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    const snap = store.getSnapshot();
+    expect(snap.status).toBe("ready");
+    expect(snap.events).toStrictEqual([early, tieFirst, tieSecond, late]);
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("an unavailable repository reports unavailable and keeps the last rows", async () => {
+    const a = ev(1, at(10, 14, 9), at(10, 14, 10));
+    repo.listLive
+      .mockResolvedValueOnce({ status: "ok", rows: [a] })
+      .mockResolvedValueOnce({ status: "offline" });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    await store.refresh();
+    expect(store.getSnapshot()).toStrictEqual({
+      status: "unavailable",
+      events: [a],
+    });
+  });
+
+  it("an unavailable first load reports unavailable with no events", async () => {
+    repo.listLive.mockResolvedValueOnce({
+      status: "error",
+      code: "42501",
+      message: "denied",
+    });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    expect(store.getSnapshot()).toStrictEqual({
+      status: "unavailable",
+      events: [],
+    });
+  });
+
+  it("two concurrent refreshes share one listLive call", async () => {
+    const answer = held();
+    repo.listLive.mockReturnValueOnce(answer.promise);
+    const store = createEventsStore(repo);
+    const first = store.refresh();
+    const second = store.refresh();
+    answer.release({ status: "ok", rows: [] });
+    await Promise.all([first, second]);
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+    expect(store.getSnapshot().status).toBe("ready");
+  });
+
+  it("a refresh after one has settled asks again", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [] });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    await store.refresh();
+    expect(repo.listLive).toHaveBeenCalledTimes(2);
+  });
+
+  it("getSnapshot() is the same object between changes and a new one after a load", async () => {
+    repo.listLive.mockResolvedValueOnce({ status: "ok", rows: [] });
+    const store = createEventsStore(repo);
+    const before = store.getSnapshot();
+    expect(store.getSnapshot()).toBe(before);
+    await store.refresh();
+    const after = store.getSnapshot();
+    expect(after).not.toBe(before);
+    expect(store.getSnapshot()).toBe(after);
+  });
+
+  it("notifies a subscriber on a change, and not after it unsubscribes", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [] });
+    const store = createEventsStore(repo);
+    const listener = vi.fn();
+    const unsubscribe = store.subscribe(listener);
+    await store.refresh();
+    expect(listener).toHaveBeenCalled();
+    const calls = listener.mock.calls.length;
+    unsubscribe();
+    await store.refresh();
+    expect(listener).toHaveBeenCalledTimes(calls);
+  });
+});
+
+describe("eventsStore, the app's one store (Block 4)", () => {
+  it("is an EventsStore that has not loaded yet", () => {
+    expect(typeof eventsStore.refresh).toBe("function");
+    expect(typeof eventsStore.subscribe).toBe("function");
+    expect(eventsStore.getSnapshot().status).toBe("loading");
+  });
+});
+
+describe("useEventsInRange(start, end, store) (Block 4)", () => {
+  const inWeek = ev(1, at(10, 14, 9), at(10, 14, 10));
+  const nextWeek = ev(2, at(10, 21, 9), at(10, 21, 10));
+
+  it("asks a loading store to refresh once, then returns ready with only the events in range", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [nextWeek, inWeek] });
+    const store = createEventsStore(repo);
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.events).toStrictEqual([inWeek]);
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("is loading with no events while the first load is in flight", () => {
+    repo.listLive.mockReturnValueOnce(held().promise);
+    const store = createEventsStore(repo);
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    expect(result.current).toStrictEqual({ status: "loading", events: [] });
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not refresh a store that has already loaded", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [inWeek] });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+    expect(result.current.events).toStrictEqual([inWeek]);
+  });
+
+  it("re-rendered with new but equal Date objects, makes no new request and returns the same events array", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [nextWeek, inWeek] });
+    const store = createEventsStore(repo);
+    const { result, rerender } = renderHook(
+      ({ start, end }: { start: Date; end: Date }) =>
+        useEventsInRange(start, end, store),
+      { initialProps: { start: at(10, 12), end: at(10, 19) } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    const first = result.current.events;
+    rerender({ start: at(10, 12), end: at(10, 19) });
+    rerender({ start: at(10, 12), end: at(10, 19) });
+    expect(result.current.events).toBe(first);
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-filters when the range moves", async () => {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [nextWeek, inWeek] });
+    const store = createEventsStore(repo);
+    const { result, rerender } = renderHook(
+      ({ start, end }: { start: Date; end: Date }) =>
+        useEventsInRange(start, end, store),
+      { initialProps: { start: at(10, 12), end: at(10, 19) } },
+    );
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    rerender({ start: at(10, 19), end: at(10, 26) });
+    expect(result.current.events).toStrictEqual([nextWeek]);
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-renders when the store changes", async () => {
+    repo.listLive
+      .mockResolvedValueOnce({ status: "ok", rows: [] })
+      .mockResolvedValueOnce({ status: "ok", rows: [inWeek] });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    expect(result.current.events).toStrictEqual([]);
+    await act(async () => {
+      await store.refresh();
+    });
+    expect(result.current.status).toBe("ready");
+    expect(result.current.events).toStrictEqual([inWeek]);
+  });
+
+  it("reports unavailable with the last rows still filtered", async () => {
+    repo.listLive
+      .mockResolvedValueOnce({ status: "ok", rows: [nextWeek, inWeek] })
+      .mockResolvedValueOnce({ status: "offline" });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    await store.refresh();
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    expect(result.current).toStrictEqual({
+      status: "unavailable",
+      events: [inWeek],
+    });
+  });
+});

@@ -1,0 +1,70 @@
+/* components.md, "Empty states": a 320px raised card centred over the grid on
+   tablet and desktop; below the grid, in the day-list area, on phone. */
+.card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--space-3);
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 320px;
+  margin: var(--space-4) auto;
+  padding: var(--space-5);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+  box-shadow: var(--shadow-1);
+  text-align: center;
+}
+
+@media (min-width: 600px) {
+  .card {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    margin: 0;
+    transform: translate(-50%, -50%);
+    z-index: var(--z-panel);
+  }
+}
+
+.title {
+  margin: 0;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.line {
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.primary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--size-touch);
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-md);
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+  font-weight: var(--font-weight-semibold);
+  text-decoration: none;
+}
+
+.secondary {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-3);
+  border: none;
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

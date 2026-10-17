@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { HttpResponse } from "msw";
 import { vi } from "vitest";
 import type { Database } from "../data/database.types";
+import type { EventRow } from "../data/rows";
 import { onTable, type Recorded, TEST_ORIGIN } from "./msw";
 
 // The fake `src/lib/supabase.ts` every CAL-003 test mocks in (CAL-003
@@ -183,4 +184,18 @@ export function answerKindsSeed(): Recorded[] {
     }));
     return HttpResponse.json(rows, { status: 201 });
   });
+}
+
+/**
+ * Answer the calendar page's events read (CAL-009 Contract, Block 9) where
+ * the events are not what the test is about: every request on `events` is
+ * answered with `rows` (an empty table by default). Without it the page's
+ * `GET /rest/v1/events` is unhandled - measured in CAL-009 RED: MSW's "error"
+ * strategy prints "[MSW] Error: intercepted a request without a matching
+ * request handler" to stderr and the fetch rejects, so the repository
+ * resolves `offline` and the test still passes, dirty. Call it beside
+ * `answerKindsSeed()` in a beforeEach. Returns the recorded requests.
+ */
+export function answerEvents(rows: EventRow[] = []): Recorded[] {
+  return onTable("events", () => HttpResponse.json(rows));
 }

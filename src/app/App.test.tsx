@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installServer } from "../test/msw";
 import {
+  answerEvents,
   answerKindsSeed,
   fake,
   OWNER_EMAIL,
@@ -28,6 +29,8 @@ beforeEach(() => {
   localStorage.clear();
   localStorage.setItem("cc.onboarded", "1");
   answerKindsSeed();
+  // CAL-009 Block 9: the calendar page now reads events too.
+  answerEvents();
 });
 
 // Smoke test only (CAL-002 Contract, Router): routing is tested through
