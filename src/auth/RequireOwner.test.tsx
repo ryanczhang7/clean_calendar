@@ -19,6 +19,7 @@ import type { KindsStore } from "../sync/kindsStore";
 import { installServer, onTable, pgError } from "../test/msw";
 import { kindRowNulls } from "../test/rows-fixtures";
 import {
+  answerEvents,
   answerKindsSeed,
   fake,
   OWNER_EMAIL,
@@ -97,6 +98,8 @@ beforeEach(() => {
   generation.value += 1;
   // Where the seed is not what a test is about: an empty table, seeded.
   answerKindsSeed();
+  // CAL-009 Block 9: the calendar page now reads events too.
+  answerEvents();
 });
 
 describe("RequireOwner on its own, around a stand-in page", () => {
