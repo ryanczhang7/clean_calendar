@@ -1,0 +1,130 @@
+/* components.md, "Calendar grid"; layout.md, "Month grid". Seven equal
+   columns, six week rows, 1px --color-border lines. Phone rows are 64px with
+   dots; tablet and desktop rows grow from 96px with chips. jsdom sees none
+   of this (CAL-031 does); the chip count per breakpoint lives in
+   MonthView.tsx. */
+.month {
+  position: relative;
+}
+
+.grid {
+  display: grid;
+  grid-template-rows: auto repeat(6, 64px);
+  border-top: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.head {
+  padding: var(--space-1) 0;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  color: var(--color-text-muted);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  line-height: var(--line-height-xs);
+  text-align: center;
+}
+
+.cell {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  padding: var(--space-1);
+  overflow: hidden;
+  border-right: 1px solid var(--color-border);
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-surface);
+}
+
+.cell:hover {
+  background: var(--color-surface-raised);
+}
+
+.day {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  width: 24px;
+  height: 24px;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+/* Outside the month: only the number is muted; the surface is unchanged. */
+.cell[data-outside="true"] .day {
+  color: var(--color-text-muted);
+}
+
+.cell[aria-current="date"] .day {
+  border-radius: var(--radius-full);
+  background: var(--color-today);
+  color: var(--color-primary-contrast);
+}
+
+.dots {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px;
+  font-size: var(--font-size-xs);
+  line-height: 6px;
+}
+
+.dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+}
+
+.dot[data-neutral="true"] {
+  background: var(--color-chip-neutral);
+}
+
+.more {
+  align-self: flex-start;
+  min-height: 24px;
+  padding: 0 var(--space-2);
+  border: none;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+}
+
+.more:hover {
+  background: var(--color-surface-sunken);
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* Loading: cells drawn, chip slots muted; aria-busy is on the grid. */
+.grid[aria-busy="true"] .cell {
+  opacity: 0.6;
+}
+
+@media (min-width: 600px) {
+  .grid {
+    grid-template-rows: auto repeat(6, minmax(96px, auto));
+  }
+}
+
+@media (min-width: 1024px) {
+  .grid {
+    min-height: calc(100vh - var(--size-topbar));
+    grid-template-rows: auto repeat(6, minmax(96px, 1fr));
+  }
+}
