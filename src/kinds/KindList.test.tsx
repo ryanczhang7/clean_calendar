@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { Kind } from "../data/rows";
-import { KindList } from "./KindList";
+import { initialOf, KindList, KindSwatch } from "./KindList";
 
 vi.mock(
   "../lib/supabase",
@@ -169,5 +169,33 @@ describe("the kind list (AC-1, Block 4)", () => {
     expect(
       buttons.every((b) => b.getAttribute("aria-label")?.startsWith("Edit ")),
     ).toBe(true);
+  });
+});
+
+// CAL-008 Contract Block 1: the initial and the swatch are exported so the
+// legend renders them from the same code (PO decision 6).
+describe("the initial and the swatch, exported for the legend (CAL-008 Block 1)", () => {
+  it('initialOf is the first code point of the trimmed name, upper-cased, and "" for a blank name', () => {
+    expect(
+      ["Movies", " movie night", "🎬 Films", "élan", "", "   "].map(initialOf),
+    ).toStrictEqual(["M", "M", "🎬", "É", "", ""]);
+  });
+
+  it("KindSwatch renders the list's swatch: an aria-hidden span with the initial and both themes' colours and chip text colours", () => {
+    const { container } = render(<KindSwatch kind={MOVIES} />);
+    const swatch = container.firstElementChild as HTMLElement;
+    expect(container.childElementCount).toBe(1);
+    expect(swatch.tagName).toBe("SPAN");
+    expect(swatch).toHaveAttribute("aria-hidden", "true");
+    expect(swatch).toHaveTextContent(/^M$/);
+    expect(swatch.style.getPropertyValue("--swatch-light")).toBe("#7E3FB8");
+    expect(swatch.style.getPropertyValue("--swatch-dark")).toBe("#CFA8F0");
+    expect(swatch.style.getPropertyValue("--swatch-text-light")).toBe(
+      "#FFFFFF",
+    );
+    expect(swatch.style.getPropertyValue("--swatch-text-dark")).toBe("#1B1B1F");
+    // The same element KindList's row renders, class included.
+    const { rows } = renderList([MOVIES]);
+    expect(swatchOf(rows[0] as HTMLElement).outerHTML).toBe(swatch.outerHTML);
   });
 });
