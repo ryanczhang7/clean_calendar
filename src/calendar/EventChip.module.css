@@ -83,3 +83,31 @@
 :root[data-theme="dark"] .chip[data-neutral="true"] {
   color: var(--color-chip-text-dark);
 }
+
+/* CAL-010 Block 2: the week/day block. Filled inline like the all-day chip
+   (EventChip.tsx); it takes the height of its block in the time grid, the
+   title on the first line and, at 40px and over, the time on a second. */
+.block {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  align-content: flex-start;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+.title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.time {
+  flex-basis: 100%;
+  padding-left: calc(16px + var(--space-1));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

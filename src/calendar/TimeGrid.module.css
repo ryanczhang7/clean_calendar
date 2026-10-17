@@ -1,0 +1,148 @@
+/* components.md, "Week / day time grid"; layout.md, "What reflows" and
+   "Desktop specifics" (CAL-010 Contract, Block 3). The hour height arrives
+   inline as --hour-height (48px tablet/desktop, 56px phone); every row is a
+   gutter followed by one equal column per day, however many days there are. */
+.timeGrid {
+  --gutter: 56px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  height: 100%;
+}
+
+.timeGrid[data-breakpoint="phone"] {
+  --gutter: 48px;
+}
+
+.grid {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+.header,
+.allDay,
+.hour,
+.overlay {
+  display: grid;
+  grid-template-columns: var(--gutter);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+}
+
+.header {
+  flex: none;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.head {
+  padding: var(--space-1) 0;
+  text-align: center;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-muted);
+}
+
+.head[aria-current="date"] {
+  color: var(--color-now);
+}
+
+.gutter {
+  padding-right: var(--space-1);
+  text-align: right;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-muted);
+}
+
+.allDay {
+  flex: none;
+  padding: 4px 0;
+  background: var(--color-surface-sunken);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.allDayCell {
+  min-width: 0;
+  padding: 0 1px;
+}
+
+.more {
+  height: 20px;
+  margin: 2px 0;
+  padding: 0 var(--space-2);
+  border: none;
+  background: none;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.more:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+/* The scroll region fills the viewport under the header rows. */
+.scroll {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.hour {
+  height: var(--hour-height);
+}
+
+.hour > .gutter {
+  transform: translateY(-0.5em);
+}
+
+.slot {
+  border-top: 1px solid var(--color-border);
+  border-left: 1px solid var(--color-border);
+}
+
+.slot:hover {
+  background: var(--color-surface-raised);
+}
+
+.overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: calc(24 * var(--hour-height));
+  pointer-events: none;
+}
+
+.column {
+  position: relative;
+}
+
+.block {
+  position: absolute;
+  pointer-events: auto;
+}
+
+.nowLine {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: var(--z-nowline);
+  height: 2px;
+  background: var(--color-now);
+}
+
+.nowLine::before {
+  content: "";
+  position: absolute;
+  left: -4px;
+  top: -3px;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--radius-full);
+  background: var(--color-now);
+}

@@ -1,0 +1,35 @@
+import { format } from "date-fns";
+import { type JSX, useMemo } from "react";
+import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
+import { type KindsStore, useKinds } from "../sync/kindsStore";
+import { TimeGrid } from "./TimeGrid";
+
+// CAL-010 AC-3 (the day half), Contract Block 5. One column at every
+// breakpoint; the range is [day 00:00, next midnight).
+
+export function DayView(props: {
+  /** Any instant on the selected day. */
+  selected: Date;
+  now: Date;
+  kinds?: KindsStore;
+  events?: EventsStore;
+}): JSX.Element {
+  const { selected, now } = props;
+  const y = selected.getFullYear();
+  const m = selected.getMonth();
+  const d = selected.getDate();
+  const days = useMemo(() => [new Date(y, m, d)], [y, m, d]);
+  const day = days[0] as Date;
+  const events = useEventsInRange(day, new Date(y, m, d + 1), props.events);
+  const kinds = useKinds(props.kinds);
+  return (
+    <TimeGrid
+      days={days}
+      label={format(day, "EEEE d MMMM yyyy")}
+      events={events.events}
+      kinds={kinds}
+      now={now}
+      loading={events.status !== "ready"}
+    />
+  );
+}
