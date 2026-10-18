@@ -3,6 +3,7 @@ import { Outlet, type RouteObject, useLocation } from "react-router";
 import { RequireOwner } from "../auth/RequireOwner";
 import { SignInPage } from "../auth/SignInPage";
 import { CalendarPage } from "../calendar/CalendarPage";
+import { CalendarToolbar } from "../calendar/CalendarToolbar";
 import { CapturePage } from "../capture/CapturePage";
 import { ConfirmPage } from "../capture/ConfirmPage";
 import { KindsPage } from "../kinds/KindsPage";
@@ -18,11 +19,16 @@ import { NotFoundPage } from "./NotFoundPage";
  * On first load the session is still loading when this runs, so the gate
  * and the sign-in page also focus the <h1> once the session settles
  * (useFocusHeadingWhenSettled, CAL-003).
+ * CAL-011 Block 9: a navigation with `state: { focus: "grid" }` - the month
+ * grid following a key across a month - leaves focus where the grid put it.
  */
 export function RouteFocus(): null {
-  const { pathname } = useLocation();
+  const { pathname, state } = useLocation();
+  const keepFocus =
+    (state as { focus?: unknown } | null | undefined)?.focus === "grid";
   // biome-ignore lint/correctness/useExhaustiveDependencies: the pathname is the trigger, not an input
   useEffect(() => {
+    if (keepFocus) return;
     document.querySelector<HTMLElement>("h1")?.focus();
   }, [pathname]);
   return null;
@@ -47,7 +53,7 @@ export const routes: RouteObject[] = [
         element: <RequireOwner />,
         children: [
           {
-            element: <AppShell />,
+            element: <AppShell toolbar={<CalendarToolbar />} />,
             children: [
               { path: "/", element: <CalendarPage /> },
               { path: "/month/:ym", element: <CalendarPage /> },

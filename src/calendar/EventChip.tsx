@@ -35,8 +35,10 @@ export function EventChip(props: {
   variant?: "chip" | "block";
   /** Block only: px, decides whether the time gets a second line. */
   height?: number;
+  /** CAL-011 Block 7: -1 inside the month grid (one tab stop); absent → no attribute. */
+  tabIndex?: -1 | 0;
 }): JSX.Element {
-  const { event, kind } = props;
+  const { event, kind, tabIndex } = props;
   const dark = useColorScheme() === "dark";
   const live = kind.status === "live" ? kind.kind : null;
   const colour = live === null ? null : dark ? live.colorDark : live.colorLight;
@@ -57,6 +59,7 @@ export function EventChip(props: {
         data-neutral={kind.status === "removed" ? "true" : undefined}
         data-variant="block"
         style={filled}
+        tabIndex={tabIndex}
       >
         <span aria-hidden="true" className={styles.initial}>
           {kind.status === "live" ? kind.initial : "?"}
@@ -81,6 +84,7 @@ export function EventChip(props: {
       data-allday={event.allDay ? "true" : "false"}
       data-neutral={kind.status === "removed" ? "true" : undefined}
       style={fill}
+      tabIndex={tabIndex}
     >
       <span aria-hidden="true" className={styles.initial}>
         {kind.status === "live" ? kind.initial : "?"}
