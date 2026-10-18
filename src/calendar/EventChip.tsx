@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import type { CSSProperties, JSX } from "react";
 import type { Event, Kind } from "../data/rows";
 import { chipText } from "../domain/colour";
+import { MIN_BLOCK_HEIGHT } from "../domain/timeGrid";
 import styles from "./EventChip.module.css";
 import { useColorScheme } from "./media";
 
@@ -30,15 +31,48 @@ export function chipName(event: Event, kind: ChipKind): string {
 export function EventChip(props: {
   event: Event;
   kind: ChipKind;
+  /** "chip" (default) is CAL-009's month chip; "block" is the week/day filled block. */
+  variant?: "chip" | "block";
+  /** Block only: px, decides whether the time gets a second line. */
+  height?: number;
 }): JSX.Element {
   const { event, kind } = props;
   const dark = useColorScheme() === "dark";
   const live = kind.status === "live" ? kind.kind : null;
   const colour = live === null ? null : dark ? live.colorDark : live.colorLight;
-  const fill: CSSProperties | undefined =
-    event.allDay && colour !== null
+  const filled: CSSProperties | undefined =
+    colour !== null
       ? { background: colour, color: chipText(colour).text }
       : undefined;
+  if (props.variant === "block") {
+    // CAL-010 Block 2: filled like the all-day chip, no dot; the time gets a
+    // second line only when the block is at least two text rows tall
+    // (2 x MIN_BLOCK_HEIGHT = 40px, PO decision 3).
+    return (
+      <button
+        type="button"
+        aria-label={chipName(event, kind)}
+        className={`${styles.chip} ${styles.block}`}
+        data-allday={event.allDay ? "true" : "false"}
+        data-neutral={kind.status === "removed" ? "true" : undefined}
+        data-variant="block"
+        style={filled}
+      >
+        <span aria-hidden="true" className={styles.initial}>
+          {kind.status === "live" ? kind.initial : "?"}
+        </span>
+        <span aria-hidden="true" className={styles.title}>
+          {event.title}
+        </span>
+        {(props.height ?? 0) >= 2 * MIN_BLOCK_HEIGHT && (
+          <span aria-hidden="true" className={styles.time}>
+            {`${hhmm(event.startsAt)} – ${hhmm(event.endsAt)}`}
+          </span>
+        )}
+      </button>
+    );
+  }
+  const fill = event.allDay ? filled : undefined;
   return (
     <button
       type="button"

@@ -249,3 +249,111 @@ describe("an event whose kind is removed (AC-4, Block 5)", () => {
     expect(propertyValue(body, "border")).toMatch(/^1px dashed currentcolor$/i);
   });
 });
+
+// CAL-010 Contract, Block 2 (PO decisions 2 and 3): the week/day block is a
+// variant of the one chip. Same button, same chipName, data-variant="block",
+// FILLED like the all-day chip, title then a time line only when the block
+// is at least 2 x MIN_BLOCK_HEIGHT = 40px tall. No dot. CAL-009's cases above
+// are unchanged.
+
+function renderBlock(
+  event: Event,
+  kind: ChipKind,
+  height: number,
+  colorScheme: "light" | "dark" = "light",
+) {
+  media = installMatchMedia({ colorScheme, width: 1280 });
+  render(
+    <MemoryRouter>
+      <EventChip event={event} kind={kind} variant="block" height={height} />
+    </MemoryRouter>,
+  );
+  const buttons = screen.getAllByRole("button");
+  expect(buttons).toHaveLength(1);
+  return buttons[0] as HTMLElement;
+}
+
+describe('a timed event as variant="block" (CAL-010 Block 2)', () => {
+  it('is the same one button, type=button, named by chipName, marked data-variant="block"', () => {
+    const chip = renderBlock(TIMED, LIVE, 72);
+    expect(chip.tagName).toBe("BUTTON");
+    expect(chip).toHaveAttribute("type", "button");
+    expect(chip).toHaveAccessibleName("Dentist, Gym, 09:00 to 10:30");
+    expect(chip).toHaveAttribute("data-variant", "block");
+    expect(chip).not.toHaveAttribute("data-neutral");
+  });
+
+  it("is filled with the kind's light colour in the text colour domain/colour chooses, under the light scheme", () => {
+    const chip = renderBlock(TIMED, LIVE, 72, "light");
+    expect(chip).toHaveStyle({ background: GYM.colorLight, color: WHITE });
+  });
+
+  it("is filled with the kind's dark colour in the text colour domain/colour chooses, under the dark scheme", () => {
+    const chip = renderBlock(TIMED, LIVE, 72, "dark");
+    expect(chip).toHaveStyle({ background: GYM.colorDark, color: DARK_TEXT });
+    expect(chip).not.toHaveStyle({ background: GYM.colorLight });
+  });
+
+  it("has no dot: the button is the only element carrying an inline background", () => {
+    const chip = renderBlock(TIMED, LIVE, 72);
+    expect(coloured(chip)).toStrictEqual([]);
+  });
+
+  it("shows the kind's initial, then the title, not the month chip's '{HH:mm} {title}'", () => {
+    const chip = renderBlock(TIMED, LIVE, 72);
+    const initial = within(chip).getByText("Gy");
+    const title = within(chip).getByText("Dentist");
+    expect(
+      initial.compareDocumentPosition(title) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(within(chip).queryByText("09:00 Dentist")).toBeNull();
+  });
+
+  it('at 40px tall (2 x MIN_BLOCK_HEIGHT) shows the time line "09:00 – 10:30" after the title', () => {
+    const chip = renderBlock(TIMED, LIVE, 40);
+    const title = within(chip).getByText("Dentist");
+    const time = within(chip).getByText("09:00 – 10:30");
+    expect(
+      title.compareDocumentPosition(time) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("at 39px tall shows the title on one line and no time", () => {
+    const chip = renderBlock(TIMED, LIVE, 39);
+    within(chip).getByText("Dentist");
+    expect(within(chip).queryByText("09:00 – 10:30")).toBeNull();
+    expect(chip.textContent).not.toMatch(/\d\d:\d\d/);
+  });
+
+  it('with a removed kind is neutral: data-neutral="true", "?", still data-variant="block", no inline colour', () => {
+    const chip = renderBlock(TIMED, REMOVED, 72, "dark");
+    expect(chip).toHaveAccessibleName("Dentist, 09:00 to 10:30, kind removed");
+    expect(chip).toHaveAttribute("data-neutral", "true");
+    expect(chip).toHaveAttribute("data-variant", "block");
+    within(chip).getByText("?");
+    expect(within(chip).queryByText("Gy")).toBeNull();
+    expect(chip.getAttribute("style") ?? "").toBe("");
+    expect(coloured(chip)).toStrictEqual([]);
+  });
+});
+
+describe("the default variant is CAL-009's chip (CAL-010 Block 2)", () => {
+  it("with no variant prop renders no data-variant attribute", () => {
+    const chip = renderChip(TIMED, LIVE);
+    expect(chip).not.toHaveAttribute("data-variant");
+  });
+
+  it('with an explicit variant="chip" renders the month chip: no data-variant, the dot, "{HH:mm} {title}"', () => {
+    media = installMatchMedia({ colorScheme: "light", width: 1280 });
+    render(
+      <MemoryRouter>
+        <EventChip event={TIMED} kind={LIVE} variant="chip" height={72} />
+      </MemoryRouter>,
+    );
+    const chip = screen.getByRole("button");
+    expect(chip).not.toHaveAttribute("data-variant");
+    expect(chip.style.background).toBe("");
+    expect(coloured(chip)).toHaveLength(1);
+    hiddenText(chip, "09:00 Dentist");
+  });
+});
