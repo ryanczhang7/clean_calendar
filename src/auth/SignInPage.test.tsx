@@ -29,6 +29,13 @@ installServer();
 
 const LINE = "Your calendar, with every event coloured by what it is.";
 const FOOTNOTE = "One account, yours only.";
+// CAL-011 PO decision 1: the calendar's <h1> is the period title in the top
+// bar, not "Calendar". The clock is not pinned in this suite, so presence is
+// asserted by the month title's shape ("October 2026") - "/" shows the month
+// with no stored view - and absence by any period title (each ends in a
+// year, as "Clean Calendar", "Your event kinds" and "Event kinds" do not).
+const MONTH_TITLE = /^[A-Z][a-z]+ \d{4}$/;
+const PERIOD_TITLE = /\d{4}$/;
 const REFUSAL =
   "This calendar belongs to another account. Sign out and try the right one.";
 const OFFLINE = "Sign-in needs a connection";
@@ -149,7 +156,7 @@ describe("arriving signed in as the owner (AC-3)", () => {
     fake.setSession(sessionFor(OWNER_EMAIL));
     const router = renderAt("/signin");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+      await screen.findByRole("heading", { level: 1, name: MONTH_TITLE }),
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
   });
@@ -157,7 +164,7 @@ describe("arriving signed in as the owner (AC-3)", () => {
   it("admits the owner's address in another case with surrounding whitespace", async () => {
     fake.setSession(sessionFor("  OWNER@Example.com "));
     const router = renderAt("/signin");
-    await screen.findByRole("heading", { level: 1, name: "Calendar" });
+    await screen.findByRole("heading", { level: 1, name: MONTH_TITLE });
     expect(router.state.location.pathname).toBe("/");
   });
 
@@ -193,7 +200,7 @@ describe("arriving at /signin signed in as someone else (AC-4)", () => {
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(REFUSAL);
     expect(router.state.location.pathname).toBe("/signin");
-    expect(screen.queryByRole("heading", { name: "Calendar" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: PERIOD_TITLE })).toBeNull();
   });
 
   it("signs out and shows the sign-in card when Sign out is pressed", async () => {

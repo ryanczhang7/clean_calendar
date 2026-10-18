@@ -37,11 +37,16 @@ beforeEach(() => {
 // createMemoryRouter in routes.test.tsx, never through App. jsdom's URL is
 // "/", so App must show the calendar placeholder inside the shell - signed
 // in as the owner since CAL-003, whose session answers asynchronously.
+/** A month view's title, "October 2026" (CAL-011 Block 1). */
+const MONTH_TITLE = /^[A-Z][a-z]+ \d{4}$/;
+
 describe("App", () => {
-  it("renders the routed shell at / with a main landmark and the Calendar heading", async () => {
+  it("renders the routed shell at / with a main landmark and the month's title as its heading", async () => {
     render(<App />);
     const h1 = await screen.findByRole("heading", { level: 1 });
-    expect(h1).toHaveAccessibleName("Calendar");
+    // CAL-011 PO decision 1: the <h1> is the period title, e.g. "October
+    // 2026". The clock is not pinned here, so the shape is asserted.
+    expect(h1).toHaveAccessibleName(MONTH_TITLE);
     expect(screen.getByRole("main")).toBeInTheDocument();
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);

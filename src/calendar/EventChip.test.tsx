@@ -357,3 +357,39 @@ describe("the default variant is CAL-009's chip (CAL-010 Block 2)", () => {
     hiddenText(chip, "09:00 Dentist");
   });
 });
+
+// CAL-011 Contract, Block 7 (PO decision 9): an optional tabIndex, forwarded
+// to the button so the month grid can make its chips -1 (one tab stop);
+// absent means no attribute at all, the markup CAL-009 shipped.
+describe("the tabIndex prop (CAL-011 Block 7)", () => {
+  function renderWith(tabIndex: -1 | 0, variant?: "chip" | "block") {
+    media = installMatchMedia({ colorScheme: "light", width: 1280 });
+    render(
+      <MemoryRouter>
+        <EventChip
+          event={TIMED}
+          kind={LIVE}
+          tabIndex={tabIndex}
+          {...(variant === undefined ? {} : { variant, height: 72 })}
+        />
+      </MemoryRouter>,
+    );
+    return screen.getByRole("button");
+  }
+
+  it('tabIndex={-1} puts tabindex="-1" on the chip button', () => {
+    expect(renderWith(-1)).toHaveAttribute("tabindex", "-1");
+  });
+
+  it('tabIndex={0} puts tabindex="0" on the chip button', () => {
+    expect(renderWith(0)).toHaveAttribute("tabindex", "0");
+  });
+
+  it("with no tabIndex the button carries no tabindex attribute", () => {
+    expect(renderChip(TIMED, LIVE)).not.toHaveAttribute("tabindex");
+  });
+
+  it("tabIndex={-1} reaches the block variant's button too", () => {
+    expect(renderWith(-1, "block")).toHaveAttribute("tabindex", "-1");
+  });
+});

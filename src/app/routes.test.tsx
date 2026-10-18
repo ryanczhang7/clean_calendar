@@ -56,10 +56,10 @@ afterEach(() => {
 });
 
 const PAGES: Array<[path: string, heading: string]> = [
-  ["/", "Calendar"],
-  ["/month/2026-10", "Calendar"],
-  ["/week/2026-10-12", "Calendar"],
-  ["/day/2026-10-14", "Calendar"],
+  ["/", "October 2026"],
+  ["/month/2026-10", "October 2026"],
+  ["/week/2026-10-12", "12 – 18 Oct 2026"],
+  ["/day/2026-10-14", "Wednesday 14 October 2026"],
   ["/welcome", "Your event kinds"],
   ["/kinds", "Event kinds"],
   ["/capture", "Capture"],
@@ -91,9 +91,12 @@ describe("routes (AC-2)", () => {
   it.each(PAGES)("%s renders inside the app shell", async (path) => {
     await renderAt(path);
     expect(screen.getByRole("banner")).toBeInTheDocument();
-    expect(screen.getByRole("main")).toContainElement(
-      screen.getByRole("heading", { level: 1 }),
-    );
+    // CAL-011 PO decision 1: on a calendar route the <h1> is the period
+    // title in the top bar (the toolbar slot); every other page keeps its
+    // own <h1> in main.
+    const calendar = PAGES.slice(0, 4).some(([p]) => p === path);
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(screen.getByRole(calendar ? "banner" : "main")).toContainElement(h1);
   });
 
   it("renders /signin outside the app shell, with no top bar or bottom navigation", async () => {
@@ -121,7 +124,7 @@ describe("routes (AC-2)", () => {
     await renderAt("/unknown/x");
     await user.click(screen.getByRole("link", { name: "Go to today" }));
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+      await screen.findByRole("heading", { level: 1, name: "October 2026" }),
     ).toBeInTheDocument();
   });
 });
@@ -129,7 +132,7 @@ describe("routes (AC-2)", () => {
 describe("focus on route change (AC-4)", () => {
   it("focuses the page's <h1> on first render", async () => {
     await renderAt("/");
-    const h1 = screen.getByRole("heading", { level: 1, name: "Calendar" });
+    const h1 = screen.getByRole("heading", { level: 1, name: "October 2026" });
     await waitFor(() => expect(h1).toHaveFocus());
   });
 
@@ -160,7 +163,10 @@ describe("focus on route change (AC-4)", () => {
 
   it("moves focus to the <h1> again when only the calendar date changes", async () => {
     const router = await renderAt("/month/2026-10");
-    const before = screen.getByRole("heading", { level: 1, name: "Calendar" });
+    const before = screen.getByRole("heading", {
+      level: 1,
+      name: "October 2026",
+    });
     await waitFor(() => expect(before).toHaveFocus());
     before.blur();
     expect(before).not.toHaveFocus();
@@ -169,7 +175,7 @@ describe("focus on route change (AC-4)", () => {
     });
     await waitFor(() =>
       expect(
-        screen.getByRole("heading", { level: 1, name: "Calendar" }),
+        screen.getByRole("heading", { level: 1, name: "November 2026" }),
       ).toHaveFocus(),
     );
   });
