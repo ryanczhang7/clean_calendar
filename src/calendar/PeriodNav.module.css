@@ -1,0 +1,53 @@
+/* CAL-011 Block 3 (components.md, "App shell and top bar"): Today, the two
+   icon buttons (40x40, 44 on phone), then the period title at
+   --font-size-lg. */
+.nav {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+}
+
+.today,
+.icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 44px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.today {
+  padding: 0 var(--space-3);
+}
+
+.icon {
+  width: 44px;
+  border-color: transparent;
+  font-size: var(--font-size-lg);
+}
+
+.title {
+  margin: 0 0 0 var(--space-2);
+  overflow: hidden;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+@media (min-width: 600px) {
+  .today,
+  .icon {
+    height: 40px;
+  }
+
+  .icon {
+    width: 40px;
+  }
+}

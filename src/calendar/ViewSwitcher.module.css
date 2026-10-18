@@ -1,0 +1,35 @@
+/* CAL-011 Block 4 (components.md, "View switcher"): a segmented control.
+   Hidden below 600px, where the bottom nav carries Month / Week / Day. */
+.group {
+  display: none;
+}
+
+.option {
+  min-width: 64px;
+  height: var(--size-control);
+  padding: 0 var(--space-3);
+  border: none;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.option + .option {
+  border-inline-start: 1px solid var(--color-border);
+}
+
+.option[aria-checked="true"] {
+  background: var(--color-primary-subtle);
+  color: var(--color-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+@media (min-width: 600px) {
+  .group {
+    display: inline-flex;
+    overflow: hidden;
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+  }
+}

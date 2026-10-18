@@ -2,6 +2,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installMatchMedia } from "../test/media";
 import { installServer } from "../test/msw";
 import {
   answerEvents,
@@ -36,7 +37,13 @@ async function renderAt(path: string) {
   return router;
 }
 
+// CAL-011 Return 1: a desktop viewport. jsdom has no matchMedia, which
+// CAL-009 Block 3 reads as a phone, and a phone week is titled by its 3-day
+// window; the PAGES rows pin AC-1's desktop titles.
+let media: ReturnType<typeof installMatchMedia> | null = null;
+
 beforeEach(() => {
+  media = installMatchMedia({ width: 1280, colorScheme: "light" });
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date(2026, 9, 14, 12, 0, 0));
   fake.reset();
@@ -53,6 +60,8 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  media?.restore();
+  media = null;
 });
 
 const PAGES: Array<[path: string, heading: string]> = [

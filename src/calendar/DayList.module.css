@@ -1,0 +1,47 @@
+/* CAL-011 Block 8 (layout.md, "Phone specifics"): the tapped day's events
+   below the month grid, one 56px row each. */
+.list {
+  padding: var(--space-2) var(--space-4);
+}
+
+.rows {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  min-height: 56px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.row > button {
+  width: 100%;
+}
+
+.empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-height: 56px;
+  margin: 0;
+  color: var(--color-text-muted);
+}
+
+.add {
+  height: var(--size-control);
+  padding: 0 var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-primary);
+  font: inherit;
+  cursor: pointer;
+}
+
+.empty p {
+  margin: 0;
+}
