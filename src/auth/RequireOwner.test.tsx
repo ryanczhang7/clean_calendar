@@ -74,6 +74,13 @@ installServer();
 // admitted), AC-4 (anyone else is refused). Contract, Gate: RequireOwner is
 // the layout route around AppShell in routes.tsx.
 
+// CAL-011 PO decision 1: the calendar's <h1> is the period title in the top
+// bar, not "Calendar". The clock is not pinned in this suite, so presence is
+// asserted by the month title's shape ("October 2026") - "/" shows the month
+// with no stored view - and absence by any period title (each ends in a
+// year, as "Clean Calendar", "Your event kinds" and "Event kinds" do not).
+const MONTH_TITLE = /^[A-Z][a-z]+ \d{4}$/;
+const PERIOD_TITLE = /\d{4}$/;
 const REFUSAL =
   "This calendar belongs to another account. Sign out and try the right one.";
 
@@ -252,7 +259,7 @@ describe("anyone else (AC-4)", () => {
     renderAt("/");
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toBe(REFUSAL);
-    expect(screen.queryByRole("heading", { name: "Calendar" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: PERIOD_TITLE })).toBeNull();
     expect(screen.queryByRole("banner")).toBeNull();
   });
 
@@ -437,7 +444,7 @@ describe("the kinds walkthrough before the calendar (CAL-007 AC-1, AC-7; Block 7
       ).toBeInTheDocument();
       expect(router.state.location.pathname).toBe("/welcome");
       expect(router.state.historyAction).toBe("REPLACE");
-      expect(screen.queryByRole("heading", { name: "Calendar" })).toBeNull();
+      expect(screen.queryByRole("heading", { name: PERIOD_TITLE })).toBeNull();
     },
   );
 
@@ -478,7 +485,7 @@ describe("the kinds walkthrough before the calendar (CAL-007 AC-1, AC-7; Block 7
     localStorage.setItem("cc.onboarded", "1");
     const router = renderAt("/");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+      await screen.findByRole("heading", { level: 1, name: MONTH_TITLE }),
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
     expect(
@@ -494,7 +501,7 @@ describe("the kinds walkthrough before the calendar (CAL-007 AC-1, AC-7; Block 7
       screen.getByRole("button", { name: "Done, show my calendar" }),
     );
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+      await screen.findByRole("heading", { level: 1, name: MONTH_TITLE }),
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/");
     expect(localStorage.getItem("cc.onboarded")).toBe("1");
@@ -502,7 +509,7 @@ describe("the kinds walkthrough before the calendar (CAL-007 AC-1, AC-7; Block 7
     cleanup();
     const again = renderAt("/");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Calendar" }),
+      await screen.findByRole("heading", { level: 1, name: MONTH_TITLE }),
     ).toBeInTheDocument();
     expect(again.state.location.pathname).toBe("/");
     expect(

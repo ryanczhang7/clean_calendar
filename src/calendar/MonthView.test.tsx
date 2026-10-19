@@ -1,13 +1,18 @@
 import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import type { JSX } from "react";
+import { type JSX, useState } from "react";
 import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Event, Kind } from "../data/rows";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import { installMatchMedia } from "../test/media";
 import { EmptyMonth } from "./EmptyMonth";
-import { CHIPS_PER_CELL, DOTS_PER_CELL, MonthView } from "./MonthView";
+import {
+  CHIPS_PER_CELL,
+  DOTS_PER_CELL,
+  eventsOnDay,
+  MonthView,
+} from "./MonthView";
 
 vi.mock(
   "../lib/supabase",
@@ -148,6 +153,9 @@ function renderMonth(
     colorScheme?: "light" | "dark";
     year?: number;
     month?: number;
+    /** CAL-011 Block 6: today's date unless a case says otherwise. */
+    selected?: Date;
+    onSelect?: (date: Date) => void;
   } = {},
 ) {
   media = installMatchMedia({
@@ -164,6 +172,8 @@ function renderMonth(
         kinds={options.kinds ?? KINDS}
         today={options.today ?? TODAY}
         loading={options.loading ?? false}
+        selected={options.selected ?? new Date(2026, 9, 14)}
+        onSelect={options.onSelect ?? (() => {})}
       />
       <Where />
     </MemoryRouter>,
@@ -708,5 +718,270 @@ describe("EmptyMonth on its own (Block 7)", () => {
     expect(
       screen.getByRole("heading", { name: "Nothing this month" }),
     ).toBeInTheDocument();
+  });
+});
+
+// CAL-011 AC-5, Contract Block 6 (accessibility.md, "Keyboard paths"). The
+// grid is one tab stop: the selected cell carries tabIndex 0 and
+// aria-selected="true"; every other cell, chip and "+N more" button carries
+// tabIndex -1. Keys go through moveDay and come out as onSelect(date); the
+// harness below holds `selected` in state, as CalendarPage does, so focus
+// can be seen following the selection. The month stays October here: the
+// page following the selection into another month is CalendarPage's.
+
+/** Every element in the grid (the grid included) that Tab could reach. */
+function tabStops(): HTMLElement[] {
+  const g = grid();
+  return [g, ...g.querySelectorAll<HTMLElement>("*")].filter(
+    (el) => el.tabIndex >= 0,
+  );
+}
+
+function SelectingMonth(props: {
+  initial: Date;
+  onSelect: (date: Date) => void;
+  events: Event[];
+}): JSX.Element {
+  const [selected, setSelected] = useState(props.initial);
+  return (
+    <MonthView
+      year={2026}
+      month={10}
+      events={props.events}
+      kinds={KINDS}
+      today={TODAY}
+      loading={false}
+      selected={selected}
+      onSelect={(date) => {
+        props.onSelect(date);
+        setSelected(date);
+      }}
+    />
+  );
+}
+
+function renderSelecting(
+  initial: Date,
+  options: { width?: number; events?: Event[] } = {},
+) {
+  media = installMatchMedia({
+    width: options.width ?? 1280,
+    colorScheme: "light",
+  });
+  const user = userEvent.setup();
+  const onSelect = vi.fn<(date: Date) => void>();
+  render(
+    <MemoryRouter initialEntries={["/month/2026-10"]}>
+      <SelectingMonth
+        initial={initial}
+        onSelect={onSelect}
+        events={options.events ?? []}
+      />
+    </MemoryRouter>,
+  );
+  return { user, onSelect };
+}
+
+describe("the grid is a single tab stop (AC-5, Block 6)", () => {
+  // The deferred one-tab-stop target: with every cell given tabIndex={0}
+  // this must fail.
+  it("has exactly one element with tabIndex >= 0 - the selected cell - even with six events (chips and +2 more) on a day", () => {
+    renderMonth({ width: 1280, events: sixOn14th() });
+    expect(
+      within(cell("Wednesday 14 October")).getAllByRole("button"),
+    ).toHaveLength(5);
+    const stops = tabStops();
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBe(cell("Wednesday 14 October"));
+  });
+
+  it("every chip and the more-button in the grid carry tabindex -1", () => {
+    renderMonth({ width: 768, events: sixOn14th() });
+    const buttons = within(grid()).getAllByRole("button");
+    expect(buttons).toHaveLength(4);
+    for (const b of buttons) expect(b).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("the tab stop is the selected cell, not today's: selected 20 October", () => {
+    renderMonth({ selected: new Date(2026, 9, 20) });
+    expect(cell("Tuesday 20 October")).toHaveAttribute("tabindex", "0");
+    expect(cell("Wednesday 14 October")).toHaveAttribute("tabindex", "-1");
+    expect(tabStops()).toStrictEqual([cell("Tuesday 20 October")]);
+  });
+
+  it("a selected trailing day (3 November) is the tab stop", () => {
+    renderMonth({ selected: new Date(2026, 10, 3) });
+    expect(tabStops()).toStrictEqual([cell("Tuesday 3 November")]);
+  });
+
+  it("every cell but the selected one carries tabindex -1", () => {
+    renderMonth();
+    const others = cells().filter((c) => c !== cell("Wednesday 14 October"));
+    expect(others).toHaveLength(41);
+    for (const c of others) expect(c).toHaveAttribute("tabindex", "-1");
+  });
+});
+
+describe("aria-selected follows the selection (AC-5, Block 6)", () => {
+  it('marks the selected cell - and no other - aria-selected="true"', () => {
+    renderMonth({ selected: new Date(2026, 9, 14) });
+    const marked = cells().filter((c) => c.hasAttribute("aria-selected"));
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(cell("Wednesday 14 October"));
+    expect(marked[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("matches the selected day by date, whatever its time of day", () => {
+    renderMonth({ selected: new Date(2026, 9, 22, 23, 59) });
+    const marked = cells().filter((c) => c.hasAttribute("aria-selected"));
+    expect(marked).toStrictEqual([cell("Thursday 22 October")]);
+  });
+
+  it("marks no cell while the selection is outside the visible grid, and the one cell once it is back inside", async () => {
+    const { user } = renderSelecting(new Date(2026, 11, 3));
+    expect(cells().filter((c) => c.hasAttribute("aria-selected"))).toHaveLength(
+      0,
+    );
+    // The positive half, so this case cannot pass on a grid that never
+    // marks anything.
+    await user.click(cell("Monday 19 October"));
+    const marked = cells().filter((c) => c.hasAttribute("aria-selected"));
+    expect(marked).toStrictEqual([cell("Monday 19 October")]);
+  });
+});
+
+describe("keys and clicks select (AC-5, Block 6)", () => {
+  it.each([
+    ["ArrowLeft", "13 October", new Date(2026, 9, 13)],
+    ["ArrowRight", "15 October", new Date(2026, 9, 15)],
+    ["ArrowUp", "7 October", new Date(2026, 9, 7)],
+    ["ArrowDown", "21 October", new Date(2026, 9, 21)],
+    ["Home", "Monday 12 October", new Date(2026, 9, 12)],
+    ["End", "Sunday 18 October", new Date(2026, 9, 18)],
+    ["PageUp", "14 September", new Date(2026, 8, 14)],
+    ["PageDown", "14 November", new Date(2026, 10, 14)],
+  ])(
+    "%s from the focused 14 October calls onSelect(%s) once",
+    async (key, _label, date) => {
+      const { user, onSelect } = renderSelecting(new Date(2026, 9, 14));
+      cell("Wednesday 14 October").focus();
+      await user.keyboard(`{${key}}`);
+      expect(onSelect).toHaveBeenCalledTimes(1);
+      expect(onSelect).toHaveBeenCalledWith(date);
+    },
+  );
+
+  it("ArrowRight moves focus and aria-selected to 15 October once the re-render lands", async () => {
+    const { user } = renderSelecting(new Date(2026, 9, 14));
+    cell("Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}");
+    const fifteenth = cell("Thursday 15 October");
+    expect(fifteenth).toHaveFocus();
+    expect(fifteenth).toHaveAttribute("aria-selected", "true");
+    expect(fifteenth).toHaveAttribute("tabindex", "0");
+    expect(cell("Wednesday 14 October")).not.toHaveAttribute("aria-selected");
+    expect(cell("Wednesday 14 October")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("two ArrowRights land on 16 October: each step starts from the new selection", async () => {
+    const { user, onSelect } = renderSelecting(new Date(2026, 9, 14));
+    cell("Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}{ArrowRight}");
+    expect(onSelect).toHaveBeenLastCalledWith(new Date(2026, 9, 16));
+    expect(cell("Friday 16 October")).toHaveFocus();
+  });
+
+  it("ArrowDown from 31 October selects and focuses Saturday 7 November, in the trailing row", async () => {
+    const { user, onSelect } = renderSelecting(new Date(2026, 9, 31));
+    cell("Saturday 31 October").focus();
+    await user.keyboard("{ArrowDown}");
+    expect(onSelect).toHaveBeenCalledWith(new Date(2026, 10, 7));
+    expect(cell("Saturday 7 November")).toHaveFocus();
+  });
+
+  it("PageDown from 31 October calls onSelect(30 November)", async () => {
+    const { user, onSelect } = renderSelecting(new Date(2026, 9, 31));
+    cell("Saturday 31 October").focus();
+    await user.keyboard("{PageDown}");
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(new Date(2026, 10, 30));
+  });
+
+  it("a handled key is preventDefault-ed (PageDown does not scroll the page); an unhandled one is not", async () => {
+    const seen: Array<[string, boolean]> = [];
+    const spy = (e: KeyboardEvent) => seen.push([e.key, e.defaultPrevented]);
+    document.addEventListener("keydown", spy);
+    try {
+      const { user } = renderSelecting(new Date(2026, 9, 14));
+      cell("Wednesday 14 October").focus();
+      await user.keyboard("{PageDown}");
+      cell("Wednesday 14 October").focus();
+      await user.keyboard("a");
+      expect(seen).toStrictEqual([
+        ["PageDown", true],
+        ["a", false],
+      ]);
+    } finally {
+      document.removeEventListener("keydown", spy);
+    }
+  });
+
+  it.each(["{Enter}", " ", "a", "{Escape}"])(
+    "%j on a cell selects nothing (Enter and Space are CAL-012's, PO decision 6)",
+    async (key) => {
+      const { user, onSelect } = renderSelecting(new Date(2026, 9, 14));
+      cell("Wednesday 14 October").focus();
+      await user.keyboard(key);
+      expect(onSelect).not.toHaveBeenCalled();
+      expect(cell("Wednesday 14 October")).toHaveAttribute(
+        "aria-selected",
+        "true",
+      );
+    },
+  );
+
+  it.each([
+    ["Friday 16 October", new Date(2026, 9, 16), 1280],
+    ["Tuesday 3 November", new Date(2026, 10, 3), 1280],
+    ["Thursday 15 October", new Date(2026, 9, 15), 375],
+  ])(
+    "clicking %s calls onSelect with its local midnight and selects it (at %ipx)",
+    async (name, date, width) => {
+      const { user, onSelect } = renderSelecting(new Date(2026, 9, 14), {
+        width,
+      });
+      await user.click(cell(name));
+      expect(onSelect).toHaveBeenCalledWith(date);
+      expect(cell(name)).toHaveAttribute("aria-selected", "true");
+      expect(tabStops()).toStrictEqual([cell(name)]);
+    },
+  );
+});
+
+describe("eventsOnDay: a day's events in cell order (Block 6, for DayList)", () => {
+  it("returns the day's events all-day first, then by start, then by title", () => {
+    const titles = eventsOnDay(sixOn14th(), new Date(2026, 9, 14)).map(
+      (e) => e.title,
+    );
+    expect(titles).toStrictEqual([
+      "Conference",
+      "Eight",
+      "Nine",
+      "Ten",
+      "Eleven",
+      "Twelve",
+    ]);
+  });
+
+  it("returns [] for a day with none, and leaves out an event ending at that day's midnight", () => {
+    expect(eventsOnDay(sixOn14th(), new Date(2026, 9, 15))).toStrictEqual([]);
+    const late = timed("Late", GYM, [10, 14, 22, 0], [10, 15, 0, 0]);
+    expect(eventsOnDay([late], new Date(2026, 9, 15))).toStrictEqual([]);
+    expect(eventsOnDay([late], new Date(2026, 9, 14))).toStrictEqual([late]);
+  });
+
+  it("includes an event crossing into the day", () => {
+    const train = timed("Night train", TRAVEL, [10, 14, 23, 0], [10, 15, 1, 0]);
+    expect(eventsOnDay([train], new Date(2026, 9, 15))).toStrictEqual([train]);
   });
 });
