@@ -200,3 +200,50 @@ describe("a day without events (AC-7, Block 8, voice.md)", () => {
     expect(screen.getByText(`No events on ${label}`)).toBeInTheDocument();
   });
 });
+
+// CAL-012 Contract, Block 6 (AC-5): an optional onOpenEvent for the list's
+// chips - the phone's path to the edit sheet.
+describe("opening an event from the list (CAL-012 Block 6)", () => {
+  it("a chip click calls onOpenEvent(event, that chip) once", async () => {
+    media = installMatchMedia({ width: 375, colorScheme: "light" });
+    const user = userEvent.setup();
+    const swim = event("Swim", GYM, oct(15, 7, 0), oct(15, 8, 0));
+    const film = event("Film", MOVIES, oct(15, 20, 0), oct(15, 22, 0));
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    render(
+      <DayList
+        date={THU_15}
+        events={[swim, film]}
+        kinds={KINDS}
+        onOpenEvent={onOpenEvent}
+      />,
+    );
+    const chip = screen.getByRole("button", {
+      name: "Film, Movies, 20:00 to 22:00",
+    });
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledTimes(1);
+    expect(onOpenEvent).toHaveBeenCalledWith(film, chip);
+  });
+
+  it("Enter on a focused chip opens it too", async () => {
+    media = installMatchMedia({ width: 375, colorScheme: "light" });
+    const user = userEvent.setup();
+    const swim = event("Swim", GYM, oct(15, 7, 0), oct(15, 8, 0));
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    render(
+      <DayList
+        date={THU_15}
+        events={[swim]}
+        kinds={KINDS}
+        onOpenEvent={onOpenEvent}
+      />,
+    );
+    const chip = screen.getByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    chip.focus();
+    await user.keyboard("{Enter}");
+    expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
+  });
+});

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Event, Kind } from "../data/rows";
@@ -393,3 +394,87 @@ describe("the tabIndex prop (CAL-011 Block 7)", () => {
     expect(renderWith(-1, "block")).toHaveAttribute("tabindex", "-1");
   });
 });
+
+// CAL-012 Contract, Block 6 (AC-5): an optional onActivate on the button's
+// click - Enter and Space come with the button - that stops the click there,
+// so a chip inside a month cell does not also activate the cell. Absent, no
+// handler: the click still reaches the cell (CAL-011's select-on-click), and
+// the markup is the markup shipped.
+describe("onActivate (CAL-012 Block 6)", () => {
+  function renderInCell(
+    variant: "chip" | "block" | undefined,
+    onActivate?: (event: Event) => void,
+  ) {
+    media = installMatchMedia({ colorScheme: "light", width: 1280 });
+    const user = userEvent.setup();
+    const onCell = vi.fn();
+    render(
+      <MemoryRouter>
+        {/* biome-ignore lint/a11y/useKeyWithClickEvents lint/a11y/noStaticElementInteractions: a stand-in for the month cell, observed for clicks only */}
+        <div data-testid="cell" onClick={onCell}>
+          <EventChip
+            event={TIMED}
+            kind={LIVE}
+            {...(variant === undefined ? {} : { variant, height: 72 })}
+            {...(onActivate === undefined ? {} : { onActivate })}
+          />
+        </div>
+      </MemoryRouter>,
+    );
+    return { user, onCell, chip: screen.getByRole("button") };
+  }
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "a click on the %s calls onActivate once with the event, and does not reach the cell",
+    async (_label, variant) => {
+      const onActivate = vi.fn<(event: Event) => void>();
+      const { user, onCell, chip } = renderInCell(variant, onActivate);
+      await user.click(chip);
+      expect(onActivate).toHaveBeenCalledTimes(1);
+      expect(onActivate).toHaveBeenCalledWith(TIMED);
+      expect(onCell).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["{Enter}", " "])(
+    "%j on the focused chip calls onActivate",
+    async (key) => {
+      const onActivate = vi.fn<(event: Event) => void>();
+      const { user, chip } = renderInCell(undefined, onActivate);
+      chip.focus();
+      await user.keyboard(key);
+      expect(onActivate).toHaveBeenCalledTimes(1);
+      expect(onActivate).toHaveBeenCalledWith(TIMED);
+    },
+  );
+
+  it("without onActivate a click still reaches the cell", async () => {
+    const { user, onCell, chip } = renderInCell(undefined);
+    await user.click(chip);
+    expect(onCell).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "the %s's markup is the same with and without onActivate",
+    (_label, variant) => {
+      const { chip: plain } = renderInCell(variant);
+      const without = plain.outerHTML;
+      cleanupChip();
+      const { chip: active } = renderInCell(variant, vi.fn());
+      expect(active.outerHTML).toBe(without);
+    },
+  );
+});
+
+/** Unmount and drop the media stub between two renders in one case. */
+function cleanupChip(): void {
+  cleanup();
+  media?.restore();
+  media = null;
+}
