@@ -3,7 +3,9 @@ import { type JSX, useMemo } from "react";
 import type { Event } from "../data/rows";
 import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
+import type { ChipCommand } from "./EventChip";
 import { TimeGrid } from "./TimeGrid";
+import type { DropTarget } from "./useChipDrag";
 
 // CAL-010 AC-3 (the day half), Contract Block 5. One column at every
 // breakpoint; the range is [day 00:00, next midnight).
@@ -18,6 +20,14 @@ export function DayView(props: {
   onSlotActivate?: (start: Date, cell: HTMLElement) => void;
   /** CAL-012 Block 6: passed through to the grid. */
   onOpenEvent?: (event: Event, chip: HTMLElement) => void;
+  /** CAL-013 Block 5: passed through to the grid. */
+  onChipCommand?: (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  /** CAL-013 Block 5: passed through to the grid. */
+  onDropEvent?: (event: Event, target: DropTarget) => void;
 }): JSX.Element {
   const { selected, now } = props;
   const y = selected.getFullYear();
@@ -37,6 +47,8 @@ export function DayView(props: {
       loading={events.status !== "ready"}
       onSlotActivate={props.onSlotActivate}
       onOpenEvent={props.onOpenEvent}
+      onChipCommand={props.onChipCommand}
+      onDropEvent={props.onDropEvent}
       tabStop={{ day: new Date(y, m, d), hour: 9 }}
     />
   );

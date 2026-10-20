@@ -59,8 +59,10 @@ export function EventSheet(props: {
   kinds: KindsSnapshot;
   actions?: EventActions;
   onClose: () => void;
+  /** CAL-013 Block 7: edit mode's Delete button; absent → no button. */
+  onDelete?: (event: Event) => void;
 }): JSX.Element | null {
-  const { request, kinds, actions = eventActions, onClose } = props;
+  const { request, kinds, actions = eventActions, onClose, onDelete } = props;
   if (request === null) return null;
   return (
     <OpenSheet
@@ -69,6 +71,7 @@ export function EventSheet(props: {
       kinds={kinds}
       actions={actions}
       onClose={onClose}
+      onDelete={onDelete}
     />
   );
 }
@@ -100,8 +103,9 @@ function OpenSheet(props: {
   kinds: KindsSnapshot;
   actions: EventActions;
   onClose: () => void;
+  onDelete: ((event: Event) => void) | undefined;
 }): JSX.Element {
-  const { kinds, actions, onClose } = props;
+  const { kinds, actions, onClose, onDelete } = props;
   // The request this sheet was opened for; a different one remounts it.
   const [request] = useState(props.request);
   const ids = useId();
@@ -231,6 +235,32 @@ function OpenSheet(props: {
               <p className={styles.captured}>{captured}</p>
             )}
           </div>
+          {request.mode === "edit" && onDelete !== undefined ? (
+            <button
+              type="button"
+              aria-label={`Delete ${request.event.title}`}
+              className={styles.delete}
+              onClick={() => {
+                // Deleting discards any edit, so nothing is asked (Block 7).
+                onDelete(request.event);
+                onClose();
+              }}
+            >
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 24 24"
+                width="20"
+                height="20"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3" />
+              </svg>
+            </button>
+          ) : null}
         </header>
         <form
           noValidate

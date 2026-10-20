@@ -12,10 +12,16 @@ import { kindInitials } from "../domain/kindInitials";
 import { dayKey, monthGrid } from "../domain/monthGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import { EmptyMonth } from "./EmptyMonth";
-import { type ChipKind, EventChip, useChipOpener } from "./EventChip";
+import {
+  type ChipCommand,
+  type ChipKind,
+  EventChip,
+  useChipOpener,
+} from "./EventChip";
 import { useBreakpoint, useColorScheme } from "./media";
 import styles from "./MonthView.module.css";
 import { moveDay } from "./period";
+import { type DropTarget, useChipDrag } from "./useChipDrag";
 
 // CAL-009 AC-2, AC-5, AC-6, AC-7, Contract Block 6. Local time throughout:
 // a day is [D 00:00, D+1 00:00), and an event occupies it iff
@@ -97,6 +103,14 @@ export function MonthView(props: {
   onOpenEvent?: (event: Event, chip: HTMLElement) => void;
   /** CAL-012 Block 6 (as amended): the empty card's "or add an event". */
   onAddEvent?: () => void;
+  /** CAL-013 Block 5: a chip's mapped key (Delete, Alt+arrows). */
+  onChipCommand?: (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  /** CAL-013 Block 5: a chip dragged onto a cell; with it every cell carries data-drop-day. */
+  onDropEvent?: (event: Event, target: DropTarget) => void;
 }): JSX.Element {
   const {
     year,
@@ -110,6 +124,8 @@ export function MonthView(props: {
     onActivateDay,
     onOpenEvent,
     onAddEvent,
+    onChipCommand,
+    onDropEvent,
   } = props;
   const breakpoint = useBreakpoint();
   const dark = useColorScheme() === "dark";
@@ -131,6 +147,7 @@ export function MonthView(props: {
 
   const chipKind = useChipKind(kinds);
   const chips = useChipOpener(onOpenEvent);
+  const drag = useChipDrag(onDropEvent);
 
   const todayKey = dayKey(today);
   const selectedKey = dayKey(selected);
@@ -237,6 +254,7 @@ export function MonthView(props: {
                   tabIndex={isSelected ? 0 : -1}
                   data-day={key}
                   data-outside={inMonth ? undefined : "true"}
+                  data-drop-day={onDropEvent === undefined ? undefined : key}
                   className={styles.cell}
                   onClick={(e) => activate(date, e.currentTarget)}
                   onClickCapture={chips.onClickCapture}
@@ -260,6 +278,8 @@ export function MonthView(props: {
                           kind={chipKind(e)}
                           tabIndex={-1}
                           onActivate={chips.onActivate}
+                          onCommand={onChipCommand}
+                          dragProps={drag.chipProps(e)}
                         />
                       ))}
                       {rest > 0 && (

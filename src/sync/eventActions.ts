@@ -17,11 +17,15 @@ export type EventActions = {
     patch: EventPatch,
     expectedUpdatedAt: string,
   ): Promise<Result<Event>>;
+  /** CAL-013 AC-4. Hides the event at once, then repo.remove(id, event.updatedAt). */
+  removeEvent(event: Event): Promise<Result<Event>>;
+  /** CAL-013 AC-5. repo.restore(deleted.id, deleted.updatedAt) - `deleted` is the row removeEvent returned. */
+  restoreEvent(deleted: Event): Promise<Result<Event>>;
 };
 
 export function createEventActions(
-  repo: Pick<EventsRepo, "insert" | "update">,
-  store: Pick<EventsStore, "refresh">,
+  repo: Pick<EventsRepo, "insert" | "update" | "remove" | "restore">,
+  store: Pick<EventsStore, "refresh" | "hide">,
 ): EventActions {
   const settle = async (pending: Promise<Result<Event>>) => {
     const result = await pending;
@@ -32,6 +36,16 @@ export function createEventActions(
     createEvent: (input) => settle(repo.insert(input)),
     updateEvent: (id, patch, expectedUpdatedAt) =>
       settle(repo.update(id, patch, expectedUpdatedAt)),
+    removeEvent: async (event) => {
+      // Hidden before the write is sent, so the view loses it at once.
+      const reveal = store.hide(event.id);
+      const result = await repo.remove(event.id, event.updatedAt);
+      if (result.status === "ok") await store.refresh();
+      reveal();
+      return result;
+    },
+    restoreEvent: (deleted) =>
+      settle(repo.restore(deleted.id, deleted.updatedAt)),
   };
 }
 

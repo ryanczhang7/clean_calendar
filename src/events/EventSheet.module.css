@@ -37,8 +37,24 @@
 }
 
 .heading {
+  flex: 1;
   min-width: 0;
   padding-top: var(--space-2);
+}
+
+/* CAL-013: icon-only "Delete {title}" (accessibility.md, icon-only buttons). */
+.delete {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--size-touch);
+  height: var(--size-touch);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-danger);
+  cursor: pointer;
 }
 
 .title {

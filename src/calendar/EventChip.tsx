@@ -2,7 +2,10 @@ import { format } from "date-fns";
 import {
   type CSSProperties,
   type JSX,
+  type KeyboardEvent,
   type MouseEvent,
+  type MouseEventHandler,
+  type PointerEventHandler,
   type SyntheticEvent,
   useRef,
 } from "react";
@@ -23,6 +26,42 @@ export type ChipKind =
   | { status: "removed" };
 
 const hhmm = (d: Date) => format(d, "HH:mm");
+
+/** CAL-013 Block 5: what a chip's key asks the page to do. */
+export type ChipCommand =
+  | "left"
+  | "right"
+  | "up"
+  | "down"
+  | "lengthen"
+  | "shorten"
+  | "delete";
+
+/** The command a keydown maps to, or null when the key is left alone. */
+function commandFor(e: KeyboardEvent<HTMLElement>): ChipCommand | null {
+  if (e.ctrlKey || e.metaKey) return null;
+  if (e.key === "Delete" || e.key === "Backspace") {
+    return e.altKey ? null : "delete";
+  }
+  if (!e.altKey) return null;
+  if (e.shiftKey) {
+    if (e.key === "ArrowDown") return "lengthen";
+    if (e.key === "ArrowUp") return "shorten";
+    return null;
+  }
+  switch (e.key) {
+    case "ArrowLeft":
+      return "left";
+    case "ArrowRight":
+      return "right";
+    case "ArrowUp":
+      return "up";
+    case "ArrowDown":
+      return "down";
+    default:
+      return null;
+  }
+}
 
 /** The accessible name, exactly as Block 5's table. */
 export function chipName(event: Event, kind: ChipKind): string {
@@ -45,8 +84,25 @@ export function EventChip(props: {
   tabIndex?: -1 | 0;
   /** CAL-012 Block 6: the chip was activated (click, Enter or Space). The click stops here, so a chip in a month cell does not also activate the cell. Absent → no handler. */
   onActivate?: (event: Event) => void;
+  /** CAL-013 Block 5: a mapped key (Delete, Alt+arrows, Alt+Shift+Down/Up) - prevented and stopped here. Absent → no handler. */
+  onCommand?: (event: Event, command: ChipCommand, chip: HTMLElement) => void;
+  /** CAL-013 Block 4: useChipDrag's chipProps(event), spread onto the button. */
+  dragProps?: {
+    onPointerDown?: PointerEventHandler<HTMLElement>;
+    onClickCapture?: MouseEventHandler<HTMLElement>;
+  };
 }): JSX.Element {
-  const { event, kind, tabIndex, onActivate } = props;
+  const { event, kind, tabIndex, onActivate, onCommand, dragProps } = props;
+  const onKeyDown =
+    onCommand === undefined
+      ? undefined
+      : (e: KeyboardEvent<HTMLButtonElement>) => {
+          const command = commandFor(e);
+          if (command === null) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onCommand(event, command, e.currentTarget);
+        };
   const onClick =
     onActivate === undefined
       ? undefined
@@ -73,9 +129,13 @@ export function EventChip(props: {
         data-allday={event.allDay ? "true" : "false"}
         data-neutral={kind.status === "removed" ? "true" : undefined}
         data-variant="block"
+        data-event-id={event.id}
         style={filled}
         tabIndex={tabIndex}
         onClick={onClick}
+        onKeyDown={onKeyDown}
+        onPointerDown={dragProps?.onPointerDown}
+        onClickCapture={dragProps?.onClickCapture}
       >
         <span aria-hidden="true" className={styles.initial}>
           {kind.status === "live" ? kind.initial : "?"}
@@ -99,9 +159,13 @@ export function EventChip(props: {
       className={styles.chip}
       data-allday={event.allDay ? "true" : "false"}
       data-neutral={kind.status === "removed" ? "true" : undefined}
+      data-event-id={event.id}
       style={fill}
       tabIndex={tabIndex}
       onClick={onClick}
+      onKeyDown={onKeyDown}
+      onPointerDown={dragProps?.onPointerDown}
+      onClickCapture={dragProps?.onClickCapture}
     >
       <span aria-hidden="true" className={styles.initial}>
         {kind.status === "live" ? kind.initial : "?"}

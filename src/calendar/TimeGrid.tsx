@@ -22,16 +22,23 @@ import {
   overlapColumns,
 } from "../domain/timeGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
-import { type ChipKind, EventChip, useChipOpener } from "./EventChip";
+import {
+  type ChipCommand,
+  type ChipKind,
+  EventChip,
+  useChipOpener,
+} from "./EventChip";
 import { useBreakpoint } from "./media";
 import styles from "./TimeGrid.module.css";
+import { type DropTarget, useChipDrag } from "./useChipDrag";
 
 // CAL-010 AC-1 to AC-5, Contract Block 3. The week / day time grid: a header
 // row, an all-day row, then 24 hour rows under a scroll container with the
 // timed blocks laid over them, one overlay column per day. Local time
 // throughout. CAL-012 adds slot activation (click, Enter, Space on an hour
-// cell, with one hour cell as the tab stop) and opening a chip; no drag
-// (CAL-013), no arrow navigation between slots (PO decision 2).
+// cell, with one hour cell as the tab stop) and opening a chip; no arrow
+// navigation between slots (PO decision 2). CAL-013 adds chip commands and
+// dragging onto an hour cell (data-drop-slot); the all-day row is no target.
 
 const HOURS = Array.from(
   { length: 24 },
@@ -70,6 +77,14 @@ export function TimeGrid(props: {
   onOpenEvent?: (event: Event, chip: HTMLElement) => void;
   /** CAL-012 Block 6: the ONE hour cell with tabIndex 0; default days[0] at 9. */
   tabStop?: { day: Date; hour: number };
+  /** CAL-013 Block 5: a block's or all-day chip's mapped key. */
+  onChipCommand?: (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  /** CAL-013 Block 5: a chip dropped on an hour cell; with it every hour cell carries data-drop-slot. */
+  onDropEvent?: (event: Event, target: DropTarget) => void;
 }): JSX.Element {
   const {
     days,
@@ -80,6 +95,8 @@ export function TimeGrid(props: {
     loading,
     onSlotActivate,
     onOpenEvent,
+    onChipCommand,
+    onDropEvent,
   } = props;
   const breakpoint = useBreakpoint();
   const hourHeight = HOUR_HEIGHT[breakpoint];
@@ -141,6 +158,7 @@ export function TimeGrid(props: {
   const nowTop = (minuteOfDay(now) / 60) * hourHeight;
   const maxAllDay = Math.max(0, ...columns.map((c) => c.allDay.length));
   const chips = useChipOpener(onOpenEvent);
+  const drag = useChipDrag(onDropEvent);
   // PO decision 2: one keyboard-reachable slot, no arrow navigation between
   // slots. A tab stop on a day not shown falls back to the first column.
   const stopDay = props.tabStop?.day ?? (days[0] as Date);
@@ -178,6 +196,7 @@ export function TimeGrid(props: {
     <div
       className={styles.timeGrid}
       data-breakpoint={breakpoint}
+      data-dragging={drag.dragging ? "true" : undefined}
       style={{ "--hour-height": `${hourHeight}px` } as CSSProperties}
     >
       {/* biome-ignore lint/a11y/useSemanticElements: Contract Block 3 pins this ARIA grid as divs with explicit roles (accessibility.md, Roles and names) */}
@@ -231,6 +250,8 @@ export function TimeGrid(props: {
                     event={e}
                     kind={chipKind(e)}
                     onActivate={chips.onActivate}
+                    onCommand={onChipCommand}
+                    dragProps={drag.chipProps(e)}
                   />
                 ))}
                 {rest > 0 && (
@@ -262,6 +283,9 @@ export function TimeGrid(props: {
                   aria-label={`${name}, ${hour}`}
                   className={styles.slot}
                   tabIndex={key === stopKey && h === stopHour ? 0 : -1}
+                  data-drop-slot={
+                    onDropEvent === undefined ? undefined : `${key}T${hour}`
+                  }
                   onClick={
                     onSlotActivate === undefined
                       ? undefined
@@ -285,6 +309,8 @@ export function TimeGrid(props: {
                       variant="block"
                       height={height}
                       onActivate={chips.onActivate}
+                      onCommand={onChipCommand}
+                      dragProps={drag.chipProps(event)}
                     />
                   </div>
                 ))}

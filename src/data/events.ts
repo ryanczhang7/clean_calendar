@@ -27,6 +27,8 @@ export type EventsRepo = {
     expectedUpdatedAt: string,
   ): Promise<Result<Event>>;
   remove(id: string, expectedUpdatedAt: string): Promise<Result<Event>>;
+  /** CAL-013: the mirror of remove - clears deleted_at. */
+  restore(id: string, expectedUpdatedAt: string): Promise<Result<Event>>;
 };
 
 export function eventsRepo(client: SupabaseClient<Database>): EventsRepo {
@@ -76,5 +78,7 @@ export function eventsRepo(client: SupabaseClient<Database>): EventsRepo {
         { deleted_at: new Date().toISOString() },
         expectedUpdatedAt,
       ),
+    restore: (id, expectedUpdatedAt) =>
+      patchIfUnchanged(id, { deleted_at: null }, expectedUpdatedAt),
   };
 }
