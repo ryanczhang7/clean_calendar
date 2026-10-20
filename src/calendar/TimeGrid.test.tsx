@@ -601,3 +601,187 @@ describe("today: the now line, the header and the initial scroll (AC-5, Block 3)
     expect(el?.scrollTop).toBe(384);
   });
 });
+
+// CAL-012 Contract, Block 6 (AC-1, AC-5; PO decision 2). Three optional
+// props: onSlotActivate(start, cell) for a click, Enter or Space on an hour
+// cell - `start` that day at that hour, :00; onOpenEvent(event, chip) for
+// block and all-day chips; tabStop, the ONE hour cell with tabIndex 0
+// (default days[0] at 9), every other hour cell -1. No arrow navigation
+// between slots is built.
+describe("activating a slot and a chip (CAL-012 Block 6)", () => {
+  const SLOT = /, \d\d:00$/;
+
+  function renderActive(
+    options: {
+      events?: Event[];
+      tabStop?: { day: Date; hour: number };
+      days?: Date[];
+    } = {},
+  ) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    const user = userEvent.setup();
+    const onSlotActivate = vi.fn<(start: Date, cell: HTMLElement) => void>();
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    render(
+      <MemoryRouter initialEntries={["/week/2026-10-14"]}>
+        <TimeGrid
+          days={options.days ?? WEEK}
+          label={WEEK_LABEL}
+          events={options.events ?? []}
+          kinds={KINDS}
+          now={NOW}
+          loading={false}
+          onSlotActivate={onSlotActivate}
+          onOpenEvent={onOpenEvent}
+          {...(options.tabStop === undefined
+            ? {}
+            : { tabStop: options.tabStop })}
+        />
+      </MemoryRouter>,
+    );
+    return { user, onSlotActivate, onOpenEvent };
+  }
+
+  const slot = (name: string) => screen.getByRole("gridcell", { name });
+  const slots = () =>
+    screen
+      .getAllByRole("gridcell")
+      .filter((c) => SLOT.test(c.getAttribute("aria-label") ?? ""));
+
+  it("with no tabStop, the one hour cell with tabindex 0 is Monday 12 October, 09:00; the other 167 are -1", () => {
+    renderGrid();
+    const all = slots();
+    expect(all).toHaveLength(168);
+    const stops = all.filter((c) => c.getAttribute("tabindex") === "0");
+    expect(stops).toStrictEqual([slot("Monday 12 October, 09:00")]);
+    expect(all.filter((c) => c.getAttribute("tabindex") === "-1")).toHaveLength(
+      167,
+    );
+  });
+
+  it("tabStop { 14 Oct, 9 } makes Wednesday 14 October, 09:00 the one tab stop", () => {
+    renderActive({ tabStop: { day: oct(14), hour: 9 } });
+    const stops = slots().filter((c) => c.getAttribute("tabindex") === "0");
+    expect(stops).toStrictEqual([slot("Wednesday 14 October, 09:00")]);
+    expect(slot("Monday 12 October, 09:00")).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("tabStop { 16 Oct, 14 } makes Friday 16 October, 14:00 the one tab stop", () => {
+    renderActive({ tabStop: { day: oct(16), hour: 14 } });
+    const stops = slots().filter((c) => c.getAttribute("tabindex") === "0");
+    expect(stops).toStrictEqual([slot("Friday 16 October, 14:00")]);
+  });
+
+  it("a click on Thursday 15 October, 14:00 calls onSlotActivate(15 Oct 14:00, that cell) once", async () => {
+    const { user, onSlotActivate } = renderActive();
+    await user.click(slot("Thursday 15 October, 14:00"));
+    expect(onSlotActivate).toHaveBeenCalledTimes(1);
+    expect(onSlotActivate).toHaveBeenCalledWith(
+      oct(15, 14, 0),
+      slot("Thursday 15 October, 14:00"),
+    );
+  });
+
+  it("a click on the 00:00 and the 23:00 cells starts at those hours", async () => {
+    const { user, onSlotActivate } = renderActive();
+    await user.click(slot("Sunday 18 October, 00:00"));
+    await user.click(slot("Monday 12 October, 23:00"));
+    expect(onSlotActivate.mock.calls.map(([start]) => start)).toStrictEqual([
+      oct(18, 0, 0),
+      oct(12, 23, 0),
+    ]);
+  });
+
+  it.each(["{Enter}", " "])(
+    "%j on the tab-stop cell (14 Oct 09:00) calls onSlotActivate with its start and the cell",
+    async (key) => {
+      const { user, onSlotActivate } = renderActive({
+        tabStop: { day: oct(14), hour: 9 },
+      });
+      slot("Wednesday 14 October, 09:00").focus();
+      await user.keyboard(key);
+      expect(onSlotActivate).toHaveBeenCalledTimes(1);
+      expect(onSlotActivate).toHaveBeenCalledWith(
+        oct(14, 9, 0),
+        slot("Wednesday 14 October, 09:00"),
+      );
+    },
+  );
+
+  it("Space on a slot is preventDefault-ed", async () => {
+    const seen: Array<[string, boolean]> = [];
+    const spy = (e: KeyboardEvent) => seen.push([e.key, e.defaultPrevented]);
+    document.addEventListener("keydown", spy);
+    try {
+      const { user } = renderActive();
+      slot("Monday 12 October, 09:00").focus();
+      await user.keyboard(" ");
+      expect(seen).toStrictEqual([[" ", true]]);
+    } finally {
+      document.removeEventListener("keydown", spy);
+    }
+  });
+
+  it("Enter on another focused hour cell starts at that cell's hour", async () => {
+    const { user, onSlotActivate } = renderActive();
+    slot("Thursday 15 October, 17:00").focus();
+    await user.keyboard("{Enter}");
+    expect(onSlotActivate).toHaveBeenCalledWith(
+      oct(15, 17, 0),
+      slot("Thursday 15 October, 17:00"),
+    );
+  });
+
+  it("other keys on a slot activate nothing - no arrow navigation (PO decision 2) - and Enter then does", async () => {
+    const { user, onSlotActivate } = renderActive();
+    const stop = slot("Monday 12 October, 09:00");
+    stop.focus();
+    await user.keyboard("a{ArrowDown}{ArrowRight}");
+    expect(onSlotActivate).not.toHaveBeenCalled();
+    expect(stop).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(onSlotActivate).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click on a block calls onOpenEvent(event, that chip), and no slot is activated", async () => {
+    const dentist = timed("Dentist", 14, [9, 0], [10, 30]);
+    const { user, onOpenEvent, onSlotActivate } = renderActive({
+      events: [dentist],
+    });
+    const chip = screen.getByRole("button", {
+      name: "Dentist, Gym, 09:00 to 10:30",
+    });
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledTimes(1);
+    expect(onOpenEvent).toHaveBeenCalledWith(dentist, chip);
+    expect(onSlotActivate).not.toHaveBeenCalled();
+  });
+
+  it("a block clipped to its second day opens the whole event, not the clipped piece", async () => {
+    const late = event("Late show", oct(14, 22, 0), oct(15, 2, 0));
+    const { user, onOpenEvent } = renderActive({ events: [late] });
+    const chips = screen.getAllByRole("button", { name: /^Late show, / });
+    expect(chips).toHaveLength(2);
+    const second = within(column("2026-10-15")).getByRole("button", {
+      name: /^Late show, /,
+    });
+    await user.click(second);
+    expect(onOpenEvent).toHaveBeenCalledWith(late, second);
+    expect(onOpenEvent.mock.calls[0]?.[0].startsAt).toStrictEqual(
+      oct(14, 22, 0),
+    );
+  });
+
+  it("a click on an all-day chip calls onOpenEvent(event, that chip)", async () => {
+    const holiday = allDay("Holiday", 16);
+    const { user, onOpenEvent, onSlotActivate } = renderActive({
+      events: [holiday],
+    });
+    const chip = within(allDayCell("Friday 16 October")).getByRole("button", {
+      name: "Holiday, Gym, all day",
+    });
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledWith(holiday, chip);
+    expect(onSlotActivate).not.toHaveBeenCalled();
+  });
+});

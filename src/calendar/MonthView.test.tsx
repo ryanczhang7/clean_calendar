@@ -985,3 +985,137 @@ describe("eventsOnDay: a day's events in cell order (Block 6, for DayList)", () 
     expect(eventsOnDay([train], new Date(2026, 9, 15))).toStrictEqual([train]);
   });
 });
+
+// CAL-012 Contract, Block 6 (AC-1, AC-5; accessibility.md "Enter or Space"
+// on a month cell). Three optional props: onActivateDay for a click, Enter
+// or Space on a cell - after onSelect; onOpenEvent for a chip, which stops
+// there; onAddEvent for the empty card's "or add an event" (Block 6 as
+// amended by RED). Without onActivateDay, Enter and Space still select
+// nothing: the CAL-011 case above ("Enter and Space are CAL-012's") is
+// unchanged. Whether a cell with events opens the day view or the sheet is
+// CalendarPage's decision, not the grid's.
+describe("activating a cell, a chip and the empty card (CAL-012 Block 6)", () => {
+  type Log = Array<[string, string, HTMLElement | null]>;
+
+  function renderActivating(
+    options: { events?: Event[]; width?: number; selected?: Date } = {},
+  ) {
+    media = installMatchMedia({
+      width: options.width ?? 1280,
+      colorScheme: "light",
+    });
+    const user = userEvent.setup();
+    const log: Log = [];
+    const onSelect = vi.fn((date: Date) => {
+      log.push(["select", date.toString(), null]);
+    });
+    const onActivateDay = vi.fn((date: Date, el: HTMLElement) => {
+      log.push(["activate", date.toString(), el]);
+    });
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    const onAddEvent = vi.fn<() => void>();
+    render(
+      <MemoryRouter initialEntries={["/month/2026-10"]}>
+        <MonthView
+          year={2026}
+          month={10}
+          events={options.events ?? []}
+          kinds={KINDS}
+          today={TODAY}
+          loading={false}
+          selected={options.selected ?? new Date(2026, 9, 14)}
+          onSelect={onSelect}
+          onActivateDay={onActivateDay}
+          onOpenEvent={onOpenEvent}
+          onAddEvent={onAddEvent}
+        />
+        <Where />
+      </MemoryRouter>,
+    );
+    return { user, log, onSelect, onActivateDay, onOpenEvent, onAddEvent };
+  }
+
+  it("a click on 15 October calls onSelect(15 Oct), then onActivateDay(15 Oct, that cell)", async () => {
+    const { user, log, onActivateDay } = renderActivating();
+    await user.click(cell("Thursday 15 October"));
+    const day = new Date(2026, 9, 15).toString();
+    expect(log).toStrictEqual([
+      ["select", day, null],
+      ["activate", day, cell("Thursday 15 October")],
+    ]);
+    expect(onActivateDay).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["{Enter}", " "])(
+    "%j on the focused 14 October calls onSelect then onActivateDay with that cell",
+    async (key) => {
+      const { user, log } = renderActivating();
+      cell("Wednesday 14 October").focus();
+      await user.keyboard(key);
+      const day = new Date(2026, 9, 14).toString();
+      expect(log).toStrictEqual([
+        ["select", day, null],
+        ["activate", day, cell("Wednesday 14 October")],
+      ]);
+    },
+  );
+
+  it("Space on a cell is preventDefault-ed (the page does not scroll)", async () => {
+    const seen: Array<[string, boolean]> = [];
+    const spy = (e: KeyboardEvent) => seen.push([e.key, e.defaultPrevented]);
+    document.addEventListener("keydown", spy);
+    try {
+      const { user } = renderActivating();
+      cell("Wednesday 14 October").focus();
+      await user.keyboard(" ");
+      expect(seen).toStrictEqual([[" ", true]]);
+    } finally {
+      document.removeEventListener("keydown", spy);
+    }
+  });
+
+  it("a cell with events is activated just the same: the grid does not decide", async () => {
+    const { user, onActivateDay } = renderActivating({
+      events: [timed("Swim", GYM, [10, 15, 7, 0], [10, 15, 8, 0])],
+    });
+    await user.click(cell("Thursday 15 October"));
+    expect(onActivateDay).toHaveBeenCalledWith(
+      new Date(2026, 9, 15),
+      cell("Thursday 15 October"),
+    );
+  });
+
+  it("an arrow key selects but does not activate; Enter afterwards does", async () => {
+    const { user, onSelect, onActivateDay } = renderActivating();
+    cell("Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}");
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onActivateDay).not.toHaveBeenCalled();
+    // Not vacuous: the same grid does activate on Enter.
+    cell("Wednesday 14 October").focus();
+    await user.keyboard("{Enter}");
+    expect(onActivateDay).toHaveBeenCalledTimes(1);
+  });
+
+  it("a click on a chip calls onOpenEvent(event, that chip) - and neither selects nor activates the cell", async () => {
+    const swim = timed("Swim", GYM, [10, 15, 7, 0], [10, 15, 8, 0]);
+    const { user, onOpenEvent, onSelect, onActivateDay } = renderActivating({
+      events: [swim],
+    });
+    const chip = within(cell("Thursday 15 October")).getByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    expect(chip).toHaveAttribute("tabindex", "-1");
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledTimes(1);
+    expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onActivateDay).not.toHaveBeenCalled();
+  });
+
+  it('the empty card\'s "or add an event" calls onAddEvent once', async () => {
+    const { user, onAddEvent } = renderActivating();
+    await user.click(screen.getByRole("button", { name: "or add an event" }));
+    expect(onAddEvent).toHaveBeenCalledTimes(1);
+  });
+});

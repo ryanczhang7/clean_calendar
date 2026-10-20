@@ -18,8 +18,10 @@ import {
   type Mock,
   vi,
 } from "vitest";
-import type { ListResult } from "../data/result";
-import type { Event, Kind } from "../data/rows";
+import type { EventsRepo } from "../data/events";
+import type { ListResult, Result } from "../data/result";
+import type { Event, Kind, NewEvent } from "../data/rows";
+import type { EventActions } from "../sync/eventActions";
 import type { SeedRepo } from "../kinds/seedKinds";
 import {
   createEventsStore,
@@ -673,5 +675,479 @@ describe("the empty month through the stores (AC-7)", () => {
     expect(
       await screen.findByRole("heading", { name: "Nothing this month" }),
     ).toBeInTheDocument();
+  });
+});
+
+// CAL-012 Contract, Block 7 (AC-1, AC-4, AC-5, AC-6; PO decisions 3 and 4).
+// The same stand-in shell over the same fake stores, plus write members on
+// the events fake and an `actions` prop. The actions are written out here
+// with createEventActions's discipline (Block 2: an ok result is handed back
+// only after the store refreshed; nothing else refreshes) rather than
+// imported, because importing src/sync/eventActions.ts would fail this whole
+// file at load while that module is missing, and take every CAL-009/CAL-011
+// case above dark with it; eventActions.test.ts pins the real module.
+// The fake's listLive answers with the rows inserted so far, so a saved
+// event's chip appearing proves the refresh happened.
+
+type Writes = {
+  insert: Mock<EventsRepo["insert"]>;
+  update: Mock<EventsRepo["update"]>;
+};
+
+let rows: Event[];
+let writes: Writes;
+
+function actionsOver(store: EventsStore): EventActions {
+  const settle = async (pending: Promise<Result<Event>>) => {
+    const result = await pending;
+    if (result.status === "ok") await store.refresh();
+    return result;
+  };
+  return {
+    createEvent: (input) => settle(writes.insert(input)),
+    updateEvent: (id, patch, at) => settle(writes.update(id, patch, at)),
+  };
+}
+
+function useWrites(initial: Event[] = []): void {
+  rows = [...initial];
+  eventsRepo.listLive.mockImplementation(async () => ({
+    status: "ok",
+    rows: [...rows],
+  }));
+  writes = {
+    insert: vi.fn<EventsRepo["insert"]>(async (input: NewEvent) => {
+      serial += 1;
+      const row: Event = {
+        ...input,
+        id: `20000000-0000-4000-8000-${String(serial).padStart(12, "0")}`,
+        deletedAt: null,
+        createdAt: STAMP,
+        updatedAt: STAMP,
+      };
+      rows.push(row);
+      return { status: "ok", row };
+    }),
+    update: vi.fn<EventsRepo["update"]>(async (id, patch) => {
+      const index = rows.findIndex((r) => r.id === id);
+      const row = { ...(rows[index] as Event), ...patch };
+      rows[index] = row;
+      return { status: "ok", row };
+    }),
+  };
+}
+
+function renderSheetPage(path: string, now: Date = NOW) {
+  const user = userEvent.setup();
+  const kinds: KindsStore = createKindsStore(kindsRepo);
+  const events: EventsStore = createEventsStore(eventsRepo);
+  const page = (
+    <CalendarPage
+      kinds={kinds}
+      events={events}
+      now={() => now}
+      actions={actionsOver(events)}
+    />
+  );
+  render(
+    <MemoryRouter initialEntries={[path]}>
+      <header>
+        <CalendarToolbar now={() => now} />
+      </header>
+      <main>
+        <Routes>
+          <Route path="/" element={page} />
+          <Route path="/month/:ym" element={page} />
+          <Route path="/week/:date" element={page} />
+          <Route path="/day/:date" element={page} />
+        </Routes>
+      </main>
+      <RouteFocus />
+      <Where />
+    </MemoryRouter>,
+  );
+  return { user, events };
+}
+
+const titleInput = () => screen.getByRole("textbox", { name: "Title" });
+const dateField = (label: string) => screen.getByLabelText(label);
+
+async function expectNewAllDay(date: string): Promise<void> {
+  const dialog = await screen.findByRole("dialog", { name: "New event" });
+  await waitFor(() => expect(titleInput()).toHaveFocus());
+  expect(
+    within(dialog).getByRole("switch", { name: "All day" }),
+  ).toHaveAttribute("aria-checked", "true");
+  expect(dateField("Start date")).toHaveValue(date);
+  expect(dateField("End date")).toHaveValue(date);
+  expect(screen.queryByLabelText("Start time")).toBeNull();
+}
+
+async function expectNewTimed(
+  date: string,
+  start: string,
+  end: string,
+): Promise<void> {
+  const dialog = await screen.findByRole("dialog", { name: "New event" });
+  await waitFor(() => expect(titleInput()).toHaveFocus());
+  expect(
+    within(dialog).getByRole("switch", { name: "All day" }),
+  ).toHaveAttribute("aria-checked", "false");
+  expect(dateField("Start date")).toHaveValue(date);
+  expect(dateField("Start time")).toHaveValue(start);
+  expect(dateField("End date")).toHaveValue(date);
+  expect(dateField("End time")).toHaveValue(end);
+}
+
+const swim15 = () =>
+  timed("Swim", new Date(2026, 9, 15, 7, 0), new Date(2026, 9, 15, 8, 0));
+
+describe("opening a new event from the month (CAL-012 AC-1, Block 7, PO decision 4)", () => {
+  it.each([1280, 768])(
+    'at %ipx a click on an empty 15 October opens "New event", all day on the 15th, Title focused, and stays on the month',
+    async (width) => {
+      media.set({ width });
+      useWrites();
+      const { user } = renderSheetPage("/month/2026-10");
+      const grid = await settledGrid("October 2026");
+      await user.click(monthCell(grid, "Thursday 15 October"));
+      await expectNewAllDay("2026-10-15");
+      expect(at()).toBe("at /month/2026-10");
+    },
+  );
+
+  it.each(["{Enter}", " "])(
+    '%j on the focused, empty 14 October opens "New event" all day on the 14th',
+    async (key) => {
+      useWrites();
+      const { user } = renderSheetPage("/month/2026-10");
+      const grid = await settledGrid("October 2026");
+      monthCell(grid, "Wednesday 14 October").focus();
+      await user.keyboard(key);
+      await expectNewAllDay("2026-10-14");
+    },
+  );
+
+  it("a click on 15 October WITH events opens /day/2026-10-15 instead, and no sheet", async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await screen.findByRole("button", { name: "Swim, Gym, 07:00 to 08:00" });
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    await waitFor(() => expect(at()).toBe("at /day/2026-10-15"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("ArrowRight to 15 October (with events), then Enter, opens its day view", async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await screen.findByRole("button", { name: "Swim, Gym, 07:00 to 08:00" });
+    monthCell(grid, "Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() =>
+      expect(monthCell(grid, "Thursday 15 October")).toHaveFocus(),
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.keyboard("{Enter}");
+    await waitFor(() => expect(at()).toBe("at /day/2026-10-15"));
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it('the empty month\'s "or add an event" opens "New event" all day on the selected day', async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    await settledGrid("October 2026");
+    await user.click(
+      await screen.findByRole("button", { name: "or add an event" }),
+    );
+    await expectNewAllDay("2026-10-14");
+  });
+
+  it("on the phone a tap on an empty day only selects it; the day list's Add opens the sheet for it", async () => {
+    media.set({ width: 375 });
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    expect(monthCell(grid, "Thursday 15 October")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    expect(screen.queryByRole("dialog")).toBeNull();
+    const list = await screen.findByRole("region", {
+      name: "Events on Thu 15 Oct",
+    });
+    await user.click(within(list).getByRole("button", { name: "Add" }));
+    await expectNewAllDay("2026-10-15");
+  });
+
+  it("on the phone a tap on a day with events selects it and stays on the month", async () => {
+    media.set({ width: 375 });
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    await screen.findByRole("region", { name: "Events on Thu 15 Oct" });
+    expect(at()).toBe("at /month/2026-10");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // Not vacuous: the day list's chip does open the sheet on the phone.
+    await user.click(screen.getByRole("button", { name: /^Swim, / }));
+    await screen.findByRole("dialog", { name: "Edit event: Swim" });
+  });
+});
+
+describe("opening a new event from a time grid (CAL-012 AC-1, Block 7)", () => {
+  it('a click on Thursday 15 October, 14:00 in the week opens a 1-hour "New event" 14:00 - 15:00', async () => {
+    useWrites();
+    const { user } = renderSheetPage("/week/2026-10-14");
+    const grid = await settledGrid("Week of 12 October 2026");
+    await user.click(
+      within(grid).getByRole("gridcell", {
+        name: "Thursday 15 October, 14:00",
+      }),
+    );
+    await expectNewTimed("2026-10-15", "14:00", "15:00");
+    expect(at()).toBe("at /week/2026-10-14");
+  });
+
+  it("Enter on the week's tab stop - the selected day's 09:00 - opens 09:00 - 10:00 on that day", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/week/2026-10-14");
+    const grid = await settledGrid("Week of 12 October 2026");
+    const stop = within(grid).getByRole("gridcell", {
+      name: "Wednesday 14 October, 09:00",
+    });
+    expect(stop).toHaveAttribute("tabindex", "0");
+    stop.focus();
+    await user.keyboard("{Enter}");
+    await expectNewTimed("2026-10-14", "09:00", "10:00");
+  });
+
+  it("a click on 23:00 in the day view ends at midnight the next day", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/day/2026-10-14");
+    const grid = await settledGrid("Wednesday 14 October 2026");
+    await user.click(
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 14 October, 23:00",
+      }),
+    );
+    await screen.findByRole("dialog", { name: "New event" });
+    expect(dateField("Start date")).toHaveValue("2026-10-14");
+    expect(dateField("Start time")).toHaveValue("23:00");
+    expect(dateField("End date")).toHaveValue("2026-10-15");
+    expect(dateField("End time")).toHaveValue("00:00");
+  });
+});
+
+describe("N opens a new all-day event on the selected day (CAL-012 AC-1, PO decision 3)", () => {
+  it.each(["n", "N"])(
+    '%s on the month opens "New event" all day on today, the selection',
+    async (key) => {
+      useWrites();
+      const { user } = renderSheetPage("/month/2026-10");
+      await settledGrid("October 2026");
+      await user.keyboard(key);
+      await expectNewAllDay("2026-10-14");
+    },
+  );
+
+  it("after ArrowRight to 15 October, n opens it on the 15th", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    monthCell(grid, "Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}");
+    await waitFor(() =>
+      expect(monthCell(grid, "Thursday 15 October")).toHaveFocus(),
+    );
+    await user.keyboard("n");
+    await expectNewAllDay("2026-10-15");
+  });
+
+  it("n in the week of a selected 16 October opens it all day on the 16th", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/week/2026-10-16");
+    await settledGrid("Week of 12 October 2026");
+    await user.keyboard("n");
+    await expectNewAllDay("2026-10-16");
+  });
+
+  it("n typed into the sheet's Title is a letter: one sheet, the title reads it", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    await settledGrid("October 2026");
+    await user.keyboard("n");
+    await expectNewAllDay("2026-10-14");
+    await user.keyboard("Run n");
+    expect(titleInput()).toHaveValue("Run n");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+  });
+
+  it("Ctrl+N is not N: no sheet; the bare key then opens one", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    await settledGrid("October 2026");
+    await user.keyboard("{Control>}n{/Control}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.keyboard("n");
+    await screen.findByRole("dialog", { name: "New event" });
+  });
+});
+
+describe("opening an existing event (CAL-012 AC-5, Block 7)", () => {
+  it('a click on a month chip opens "Edit event: Swim" with Close focused - and does not open the day view', async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/month/2026-10");
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    await user.click(chip);
+    await screen.findByRole("dialog", { name: "Edit event: Swim" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Close" })).toHaveFocus(),
+    );
+    expect(titleInput()).toHaveValue("Swim");
+    expect(at()).toBe("at /month/2026-10");
+  });
+
+  it('a click on a week block opens "Edit event: Swim"', async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/week/2026-10-14");
+    await user.click(
+      await screen.findByRole("button", { name: "Swim, Gym, 07:00 to 08:00" }),
+    );
+    expect(
+      await screen.findByRole("dialog", { name: "Edit event: Swim" }),
+    ).toBeInTheDocument();
+  });
+
+  it("a view key pressed on the sheet's focused Close does not switch view", async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/week/2026-10-14");
+    await user.click(
+      await screen.findByRole("button", { name: "Swim, Gym, 07:00 to 08:00" }),
+    );
+    const close = await screen.findByRole("button", { name: "Close" });
+    await waitFor(() => expect(close).toHaveFocus());
+    await user.keyboard("m");
+    expect(at()).toBe("at /week/2026-10-14");
+    expect(
+      screen.getByRole("dialog", { name: "Edit event: Swim" }),
+    ).toBeInTheDocument();
+  });
+
+  it("saving a title change sends updateEvent with just the title, and the chip follows", async () => {
+    const swim = swim15();
+    useWrites([swim]);
+    const { user } = renderSheetPage("/month/2026-10");
+    await user.click(
+      await screen.findByRole("button", { name: "Swim, Gym, 07:00 to 08:00" }),
+    );
+    await screen.findByRole("dialog", { name: "Edit event: Swim" });
+    await user.type(titleInput(), " laps");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(writes.update).toHaveBeenCalledTimes(1);
+    expect(writes.update.mock.calls[0]).toStrictEqual([
+      swim.id,
+      { title: "Swim laps" },
+      STAMP,
+    ]);
+    expect(
+      await screen.findByRole("button", {
+        name: "Swim laps, Gym, 07:00 to 08:00",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+describe("saving and closing through the page (CAL-012 AC-4, AC-6, Block 7)", () => {
+  it("a new event saved from an empty 15 October appears as its chip, and the sheet closes", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.type(titleInput(), "Hotel");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(writes.insert).toHaveBeenCalledTimes(1);
+    expect(writes.insert.mock.calls[0]?.[0]).toStrictEqual({
+      title: "Hotel",
+      kindId: GYM.id,
+      startsAt: new Date(2026, 9, 15),
+      endsAt: new Date(2026, 9, 16),
+      allDay: true,
+      location: null,
+      notes: null,
+      origin: "manual",
+      recurrence: null,
+      captureJobId: null,
+    });
+    expect(
+      await within(monthCell(grid, "Thursday 15 October")).findByRole(
+        "button",
+        { name: "Hotel, Gym, all day" },
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(localStorage.getItem("cc.lastKind")).toBe(GYM.id);
+  });
+
+  it("a slot event saved in the week appears as its block", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/week/2026-10-14");
+    const grid = await settledGrid("Week of 12 October 2026");
+    await user.click(
+      within(grid).getByRole("gridcell", { name: "Friday 16 October, 18:00" }),
+    );
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.type(titleInput(), "Lift");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByRole("button", { name: "Lift, Gym, 18:00 to 19:00" }),
+    ).toBeInTheDocument();
+  });
+
+  it("Close on a clean sheet returns focus to the month cell that opened it", async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(monthCell(grid, "Thursday 15 October")).toHaveFocus(),
+    );
+  });
+
+  it("Close on a clean edit returns focus to the chip that opened it", async () => {
+    useWrites([swim15()]);
+    const { user } = renderSheetPage("/week/2026-10-14");
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    await user.click(chip);
+    await screen.findByRole("dialog", { name: "Edit event: Swim" });
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(chip).toHaveFocus());
+  });
+
+  it('a dirty sheet asks "Discard changes?" before closing; Discard closes it and saves nothing', async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.type(titleInput(), "Hotel");
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    const confirm = await screen.findByRole("dialog", {
+      name: "Discard changes?",
+    });
+    await user.click(within(confirm).getByRole("button", { name: "Discard" }));
+    expect(screen.queryByRole("dialog", { name: "New event" })).toBeNull();
+    expect(writes.insert).not.toHaveBeenCalled();
   });
 });

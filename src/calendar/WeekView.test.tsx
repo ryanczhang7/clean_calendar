@@ -1,4 +1,5 @@
 import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import {
   afterEach,
@@ -296,5 +297,72 @@ describe("the week's events come from the store (Block 4, PO decision 1)", () =>
       await Promise.resolve();
     });
     expect(grid).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+// CAL-012 Contract, Block 6 (AC-1, AC-5): the view passes onSlotActivate
+// and onOpenEvent through to its TimeGrid, and sets the grid's one tab stop
+// to the selected day's 09:00 (PO decision 2).
+describe("the week passes activation through (CAL-012 Block 6)", () => {
+  function renderActiveWeek(selected: Date, rows: Event[] = []) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows });
+    const user = userEvent.setup();
+    const onSlotActivate = vi.fn<(start: Date, cell: HTMLElement) => void>();
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    render(
+      <MemoryRouter initialEntries={["/week/2026-10-14"]}>
+        <WeekView
+          selected={selected}
+          now={NOW}
+          kinds={createKindsStore(kindsRepo)}
+          events={createEventsStore(eventsRepo)}
+          onSlotActivate={onSlotActivate}
+          onOpenEvent={onOpenEvent}
+        />
+      </MemoryRouter>,
+    );
+    return { user, onSlotActivate, onOpenEvent };
+  }
+
+  const tabStops = (grid: HTMLElement) =>
+    within(grid)
+      .getAllByRole("gridcell")
+      .filter((c) => c.getAttribute("tabindex") === "0");
+
+  it.each([
+    ["14 Oct 16:45", oct(14, 16, 45), "Wednesday 14 October, 09:00"],
+    ["17 Oct 00:00", oct(17), "Saturday 17 October, 09:00"],
+  ])(
+    "selected %s: the one tab stop is that day's 09:00",
+    async (_label, selected, name) => {
+      renderActiveWeek(selected);
+      const grid = await settledGrid("Week of 12 October 2026");
+      expect(tabStops(grid)).toStrictEqual([
+        within(grid).getByRole("gridcell", { name }),
+      ]);
+    },
+  );
+
+  it("a slot click reaches onSlotActivate with that hour's start and the cell", async () => {
+    const { user, onSlotActivate } = renderActiveWeek(oct(14));
+    const grid = await settledGrid("Week of 12 October 2026");
+    const cell = within(grid).getByRole("gridcell", {
+      name: "Thursday 15 October, 14:00",
+    });
+    await user.click(cell);
+    expect(onSlotActivate).toHaveBeenCalledTimes(1);
+    expect(onSlotActivate).toHaveBeenCalledWith(oct(15, 14), cell);
+  });
+
+  it("a block click reaches onOpenEvent with the event and the chip", async () => {
+    const swim = timed("Swim", oct(15, 7, 0), oct(15, 8, 0));
+    const { user, onOpenEvent } = renderActiveWeek(oct(14), [swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledTimes(1);
+    expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
   });
 });

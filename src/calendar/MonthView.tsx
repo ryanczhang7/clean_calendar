@@ -12,7 +12,7 @@ import { kindInitials } from "../domain/kindInitials";
 import { dayKey, monthGrid } from "../domain/monthGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import { EmptyMonth } from "./EmptyMonth";
-import { type ChipKind, EventChip } from "./EventChip";
+import { type ChipKind, EventChip, useChipOpener } from "./EventChip";
 import { useBreakpoint, useColorScheme } from "./media";
 import styles from "./MonthView.module.css";
 import { moveDay } from "./period";
@@ -91,9 +91,26 @@ export function MonthView(props: {
   selected: Date;
   /** A click on a cell, or a key that moved the selection (possibly out of the visible grid). */
   onSelect: (date: Date) => void;
+  /** CAL-012 Block 6: a click, Enter or Space on a cell, after onSelect. Without it Enter and Space do nothing. */
+  onActivateDay?: (date: Date, cell: HTMLElement) => void;
+  /** CAL-012 Block 6: a chip inside a cell; neither selects nor activates the cell. */
+  onOpenEvent?: (event: Event, chip: HTMLElement) => void;
+  /** CAL-012 Block 6 (as amended): the empty card's "or add an event". */
+  onAddEvent?: () => void;
 }): JSX.Element {
-  const { year, month, events, kinds, today, loading, selected, onSelect } =
-    props;
+  const {
+    year,
+    month,
+    events,
+    kinds,
+    today,
+    loading,
+    selected,
+    onSelect,
+    onActivateDay,
+    onOpenEvent,
+    onAddEvent,
+  } = props;
   const breakpoint = useBreakpoint();
   const dark = useColorScheme() === "dark";
   const navigate = useNavigate();
@@ -113,6 +130,7 @@ export function MonthView(props: {
   );
 
   const chipKind = useChipKind(kinds);
+  const chips = useChipOpener(onOpenEvent);
 
   const todayKey = dayKey(today);
   const selectedKey = dayKey(selected);
@@ -129,7 +147,24 @@ export function MonthView(props: {
     cell.focus();
   }, [selectedKey, year, month]);
 
+  const activate = (date: Date, cell: HTMLElement) => {
+    onSelect(date);
+    onActivateDay?.(date, cell);
+  };
+
   const onKeyDown = (event: KeyboardEvent) => {
+    if (event.key === "Enter" || event.key === " ") {
+      // Only on a cell itself: a key on a chip or "+N more" is theirs.
+      const cell = event.target;
+      if (onActivateDay === undefined) return;
+      if (!(cell instanceof HTMLElement)) return;
+      if (cell.getAttribute("role") !== "gridcell") return;
+      const date = days.find((d) => dayKey(d.date) === cell.dataset.day)?.date;
+      if (date === undefined) return;
+      event.preventDefault();
+      activate(date, cell);
+      return;
+    }
     const next = moveDay(selected, event.key);
     if (next === null) return;
     event.preventDefault();
@@ -203,7 +238,8 @@ export function MonthView(props: {
                   data-day={key}
                   data-outside={inMonth ? undefined : "true"}
                   className={styles.cell}
-                  onClick={() => onSelect(date)}
+                  onClick={(e) => activate(date, e.currentTarget)}
+                  onClickCapture={chips.onClickCapture}
                 >
                   <span aria-hidden="true" className={styles.day}>
                     {date.getDate()}
@@ -223,6 +259,7 @@ export function MonthView(props: {
                           event={e}
                           kind={chipKind(e)}
                           tabIndex={-1}
+                          onActivate={chips.onActivate}
                         />
                       ))}
                       {rest > 0 && (
@@ -248,7 +285,7 @@ export function MonthView(props: {
           </div>
         ))}
       </div>
-      {empty && <EmptyMonth />}
+      {empty && <EmptyMonth onAddEvent={onAddEvent} />}
     </div>
   );
 }

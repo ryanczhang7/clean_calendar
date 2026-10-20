@@ -1,4 +1,5 @@
 import { act, render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import {
   afterEach,
@@ -205,5 +206,62 @@ describe("the day's events come from the store (Block 5)", () => {
       await Promise.resolve();
     });
     expect(grid).toHaveAttribute("aria-busy", "true");
+  });
+});
+
+// CAL-012 Contract, Block 6 (AC-1, AC-5): as WeekView - pass-through, and
+// the one tab stop is the day's 09:00.
+describe("the day passes activation through (CAL-012 Block 6)", () => {
+  function renderActiveDay(selected: Date, rows: Event[] = []) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows });
+    const user = userEvent.setup();
+    const onSlotActivate = vi.fn<(start: Date, cell: HTMLElement) => void>();
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    render(
+      <MemoryRouter initialEntries={["/day/2026-10-14"]}>
+        <DayView
+          selected={selected}
+          now={NOW}
+          kinds={createKindsStore(kindsRepo)}
+          events={createEventsStore(eventsRepo)}
+          onSlotActivate={onSlotActivate}
+          onOpenEvent={onOpenEvent}
+        />
+      </MemoryRouter>,
+    );
+    return { user, onSlotActivate, onOpenEvent };
+  }
+
+  it("the one tab stop is Wednesday 14 October, 09:00", async () => {
+    renderActiveDay(oct(14, 18, 0));
+    const grid = await screen.findByRole("grid", { name: DAY_LABEL });
+    const stops = within(grid)
+      .getAllByRole("gridcell")
+      .filter((c) => c.getAttribute("tabindex") === "0");
+    expect(stops).toStrictEqual([
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 14 October, 09:00",
+      }),
+    ]);
+  });
+
+  it("a slot click reaches onSlotActivate with 14 Oct 06:00 and the cell", async () => {
+    const { user, onSlotActivate } = renderActiveDay(oct(14));
+    const cell = await screen.findByRole("gridcell", {
+      name: "Wednesday 14 October, 06:00",
+    });
+    await user.click(cell);
+    expect(onSlotActivate).toHaveBeenCalledWith(oct(14, 6), cell);
+  });
+
+  it("a block click reaches onOpenEvent with the event and the chip", async () => {
+    const swim = timed("Swim", oct(14, 7, 0), oct(14, 8, 0));
+    const { user, onOpenEvent } = renderActiveDay(oct(14), [swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    await user.click(chip);
+    expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
   });
 });

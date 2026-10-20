@@ -1,0 +1,147 @@
+/* components.md, "Event sheet": a bottom sheet on the phone, a panel over a
+   scrim on the tablet (600-1023px), and a 400px panel docked right on the
+   desktop (from 1024px). jsdom sees none of this. */
+.sheet {
+  position: fixed;
+  z-index: 20;
+  inset: auto 0 0;
+  display: flex;
+  flex-direction: column;
+  height: 92dvh;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  box-shadow: var(--shadow-3);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+}
+
+.header {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.close {
+  flex: none;
+  width: var(--size-touch);
+  height: var(--size-touch);
+  border: 0;
+  border-radius: var(--radius-full);
+  background: none;
+  color: var(--color-text);
+  font-size: var(--font-size-lg);
+  cursor: pointer;
+}
+
+.heading {
+  min-width: 0;
+  padding-top: var(--space-2);
+}
+
+.title {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--font-size-lg);
+  line-height: var(--line-height-lg);
+  font-weight: var(--font-weight-semibold);
+}
+
+.captured {
+  margin: var(--space-1) 0 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.form {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.alert {
+  margin: 0;
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--space-4);
+}
+
+.footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  border-top: 1px solid var(--color-border);
+}
+
+.button,
+.primary,
+.danger {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.button {
+  border-color: var(--color-border-strong);
+  background: none;
+  color: var(--color-text);
+}
+
+.primary {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.danger {
+  background: var(--color-danger);
+  color: var(--color-danger-contrast);
+}
+
+.close:focus-visible,
+.button:focus-visible,
+.primary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+@media (min-width: 600px) {
+  .sheet {
+    inset: 0 0 0 auto;
+    width: 400px;
+    height: auto;
+    border-radius: 0;
+    box-shadow:
+      0 0 0 100vmax var(--color-scrim),
+      var(--shadow-3);
+  }
+}
+
+@media (min-width: 1024px) {
+  .sheet {
+    position: sticky;
+    inset: auto;
+    top: 0;
+    flex: none;
+    height: 100dvh;
+    border-left: 1px solid var(--color-border);
+    box-shadow: var(--shadow-3);
+  }
+}

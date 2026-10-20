@@ -4,12 +4,23 @@ import type { View } from "./period";
 // CAL-011 AC-4, Contract Block 5 (PO decision 5): T goes to today and M / W
 // / D switch view, from anywhere on a calendar route. The exclusions are the
 // legend's L (KindLegend.tsx): a modifier, an event already handled, an
-// editable target, or a key pressed inside an open dialog.
+// editable target, or a key pressed inside an open dialog - and, from CAL-012
+// (Block 6), anywhere inside the event sheet, which is not a native dialog.
 
 const NOT_A_SHORTCUT =
-  'input, textarea, select, [contenteditable="true"], dialog[open]';
+  'input, textarea, select, [contenteditable="true"], dialog[open], [data-sheet]';
 
 const VIEW_KEYS: Record<string, View> = { m: "month", w: "week", d: "day" };
+
+/** True when a keydown must not be read as a shortcut: a modifier, defaultPrevented, an editable target, or inside dialog[open] / [data-sheet]. Shift alone does not block. */
+export function shortcutBlocked(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return true;
+  if (event.defaultPrevented) return true;
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest(NOT_A_SHORTCUT)) return true;
+  // `=== true`: jsdom leaves isContentEditable undefined.
+  return target instanceof HTMLElement && target.isContentEditable === true;
+}
 
 export function useCalendarKeys(handlers: {
   enabled: boolean;
@@ -26,11 +37,7 @@ export function useCalendarKeys(handlers: {
   useEffect(() => {
     if (!enabled) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey || event.metaKey || event.altKey) return;
-      if (event.defaultPrevented) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest(NOT_A_SHORTCUT)) return;
-      if (target instanceof HTMLElement && target.isContentEditable) return;
+      if (shortcutBlocked(event)) return;
       const key = event.key.toLowerCase();
       if (key === "t") {
         latest.current.onToday();

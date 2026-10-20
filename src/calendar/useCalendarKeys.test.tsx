@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
 import { afterEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { View } from "./period";
-import { useCalendarKeys } from "./useCalendarKeys";
+import { shortcutBlocked, useCalendarKeys } from "./useCalendarKeys";
 
 // CAL-011 AC-4, Contract Block 5 (PO decision 5). One keydown listener on
 // document while enabled: t/T -> onToday, m/w/d (either case) -> onView.
@@ -50,6 +50,9 @@ function Page(props: {
         tabIndex={0}
       >
         text
+      </div>
+      <div data-sheet="" role="dialog" aria-modal="false" aria-label="A sheet">
+        <button type="button">Inside the sheet</button>
       </div>
       <dialog open aria-label="A dialog">
         <button type="button">Inside the dialog</button>
@@ -267,5 +270,115 @@ describe("enabled, and the listener's lifetime (Block 5)", () => {
     ).toBe(true);
     await user.keyboard("t");
     expect(onToday).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-012 Contract, Block 6: the exclusions as one exported predicate,
+// `shortcutBlocked(event)`, which the hook uses - and `[data-sheet]` joins
+// them, so a key pressed anywhere in the event sheet (a non-native,
+// non-modal dialog) never switches view. Each case dispatches a real
+// keydown on a real element and reads the predicate where the hook would:
+// on document, as the event bubbles.
+describe("shortcutBlocked (CAL-012 Block 6)", () => {
+  function blockedOn(
+    target: EventTarget,
+    init: KeyboardEventInit = {},
+    prevent = false,
+  ): boolean {
+    let seen: boolean | null = null;
+    const read = (e: KeyboardEvent) => {
+      seen = shortcutBlocked(e);
+    };
+    const swallow = (e: Event) => e.preventDefault();
+    if (prevent) target.addEventListener("keydown", swallow);
+    document.addEventListener("keydown", read);
+    try {
+      target.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "t",
+          bubbles: true,
+          cancelable: true,
+          ...init,
+        }),
+      );
+    } finally {
+      document.removeEventListener("keydown", read);
+      if (prevent) target.removeEventListener("keydown", swallow);
+    }
+    expect(seen, "the keydown reached document").not.toBeNull();
+    return seen as unknown as boolean;
+  }
+
+  const render0 = () =>
+    render(<Page enabled={false} onToday={() => {}} onView={() => {}} />);
+
+  it("a bare key on a button is not blocked", () => {
+    render0();
+    expect(blockedOn(somewhere())).toBe(false);
+  });
+
+  it("a bare key on the page body is not blocked", () => {
+    render0();
+    expect(blockedOn(document.body)).toBe(false);
+  });
+
+  it("Shift alone does not block (N and T arrive with Shift held)", () => {
+    render0();
+    expect(blockedOn(somewhere(), { key: "N", shiftKey: true })).toBe(false);
+  });
+
+  it.each([
+    ["Control", { ctrlKey: true }],
+    ["Meta", { metaKey: true }],
+    ["Alt", { altKey: true }],
+  ] as const)("%s held blocks", (_name, init) => {
+    render0();
+    expect(blockedOn(somewhere(), init)).toBe(true);
+  });
+
+  it("an event already defaultPrevented is blocked", () => {
+    render0();
+    expect(blockedOn(somewhere(), {}, true)).toBe(true);
+  });
+
+  it.each([
+    ["an input", () => screen.getByLabelText("Notes")],
+    ["a textarea", () => screen.getByLabelText("Comment")],
+    ["a select", () => screen.getByLabelText("Pick")],
+    [
+      "a contenteditable",
+      () => screen.getByRole("textbox", { name: "Editor" }),
+    ],
+    [
+      "a button inside an open dialog",
+      () => screen.getByRole("button", { name: "Inside the dialog" }),
+    ],
+    [
+      "a button inside [data-sheet]",
+      () => screen.getByRole("button", { name: "Inside the sheet" }),
+    ],
+  ])("a key on %s is blocked", (_label, target) => {
+    render0();
+    expect(blockedOn(target())).toBe(true);
+  });
+
+  it("the [data-sheet] element itself is blocked", () => {
+    render0();
+    expect(blockedOn(screen.getByRole("dialog", { name: "A sheet" }))).toBe(
+      true,
+    );
+  });
+});
+
+describe("the hook ignores keys inside the event sheet (CAL-012 Block 6)", () => {
+  it("a key pressed on a button inside [data-sheet] calls nothing", async () => {
+    const { user, onToday, onView } = renderKeys();
+    screen.getByRole("button", { name: "Inside the sheet" }).focus();
+    await user.keyboard("tmwd");
+    expect(onToday).not.toHaveBeenCalled();
+    expect(onView).not.toHaveBeenCalled();
+    somewhere().focus();
+    await user.keyboard("t");
+    expect(onToday).toHaveBeenCalledTimes(1);
   });
 });
