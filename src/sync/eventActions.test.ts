@@ -45,23 +45,31 @@ const SWIM: Event = {
   updatedAt: UPDATED_AT,
 };
 
-type Repo = Pick<EventsRepo, "insert" | "update">;
+type Repo = Pick<EventsRepo, "insert" | "update" | "remove" | "restore">;
 type FakeRepo = {
   insert: Mock<Repo["insert"]>;
   update: Mock<Repo["update"]>;
+  remove: Mock<Repo["remove"]>;
+  restore: Mock<Repo["restore"]>;
 };
 
 let repo: FakeRepo;
 let refresh: Mock<() => Promise<void>>;
+let reveal: Mock<() => void>;
+let hide: Mock<(id: string) => () => void>;
 let actions: EventActions;
 
 beforeEach(() => {
   repo = {
     insert: vi.fn<Repo["insert"]>(),
     update: vi.fn<Repo["update"]>(),
+    remove: vi.fn<Repo["remove"]>(),
+    restore: vi.fn<Repo["restore"]>(),
   };
   refresh = vi.fn<() => Promise<void>>(async () => {});
-  actions = createEventActions(repo, { refresh });
+  reveal = vi.fn<() => void>();
+  hide = vi.fn<(id: string) => () => void>(() => reveal);
+  actions = createEventActions(repo, { refresh, hide });
 });
 
 const ok = (row: Event): Result<Event> => ({ status: "ok", row });
@@ -173,5 +181,140 @@ describe("the app's actions (Block 2)", () => {
   it("export createEvent and updateEvent", () => {
     expect(typeof eventActions.createEvent).toBe("function");
     expect(typeof eventActions.updateEvent).toBe("function");
+  });
+});
+
+// CAL-013 Contract, Block 3 (AC-4, AC-5). removeEvent hides the event BEFORE
+// the write is sent; on ok it refreshes, then reveals (the refresh has
+// already dropped the deleted row), then resolves; on anything else it
+// reveals - the event comes back - and does not refresh. restoreEvent sends
+// the token the delete returned, not the original one.
+
+/** A repository answer the test releases by hand. */
+function heldResult(): {
+  promise: Promise<Result<Event>>;
+  release: (r: Result<Event>) => void;
+} {
+  let release: (r: Result<Event>) => void = () => {};
+  const promise = new Promise<Result<Event>>((done) => {
+    release = done;
+  });
+  return { promise, release };
+}
+
+const DELETED_AT = "2026-10-20T10:00:00.000001+00:00";
+const DELETED_TOKEN = "2026-10-20T10:00:00.000002+00:00";
+const SWIM_DELETED: Event = {
+  ...SWIM,
+  deletedAt: DELETED_AT,
+  updatedAt: DELETED_TOKEN,
+};
+
+describe("removeEvent hides at once, then deletes (CAL-013 AC-4, Block 3)", () => {
+  it("hides the event's id before repo.remove has resolved, and sends the id with the event's token", async () => {
+    const answer = heldResult();
+    repo.remove.mockReturnValue(answer.promise);
+    const pending = actions.removeEvent(SWIM);
+    expect(hide).toHaveBeenCalledTimes(1);
+    expect(hide).toHaveBeenCalledWith(SWIM.id);
+    expect(repo.remove).toHaveBeenCalledTimes(1);
+    expect(repo.remove).toHaveBeenCalledWith(SWIM.id, UPDATED_AT);
+    expect(hide.mock.invocationCallOrder[0]).toBeLessThan(
+      repo.remove.mock.invocationCallOrder[0] as number,
+    );
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    expect(reveal).not.toHaveBeenCalled();
+    expect(refresh).not.toHaveBeenCalled();
+    answer.release(ok(SWIM_DELETED));
+    await pending;
+  });
+
+  it("on ok: refreshes, then reveals, then resolves with the repository's result", async () => {
+    const result = ok(SWIM_DELETED);
+    repo.remove.mockResolvedValue(result);
+    await expect(actions.removeEvent(SWIM)).resolves.toBe(result);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(refresh.mock.invocationCallOrder[0]).toBeLessThan(
+      reveal.mock.invocationCallOrder[0] as number,
+    );
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.insert).not.toHaveBeenCalled();
+  });
+
+  it("on ok: does not reveal, nor resolve, until the refresh has settled", async () => {
+    repo.remove.mockResolvedValue(ok(SWIM_DELETED));
+    let release: () => void = () => {};
+    refresh.mockImplementation(
+      () =>
+        new Promise<void>((done) => {
+          release = done;
+        }),
+    );
+    let resolved = false;
+    const pending = actions.removeEvent(SWIM).then((r) => {
+      resolved = true;
+      return r;
+    });
+    await vi.waitFor(() => expect(refresh).toHaveBeenCalledTimes(1));
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    expect(reveal).not.toHaveBeenCalled();
+    expect(resolved).toBe(false);
+    release();
+    await pending;
+    expect(reveal).toHaveBeenCalledTimes(1);
+    expect(resolved).toBe(true);
+  });
+
+  it.each([
+    ["conflict", { status: "conflict" }],
+    ["offline", { status: "offline" }],
+    ["error", { status: "error", code: "42501", message: "denied" }],
+  ] as Array<[string, Result<Event>]>)(
+    "on %s: reveals the event once, does not refresh, and returns the result as is",
+    async (_label, result) => {
+      repo.remove.mockResolvedValue(result);
+      await expect(actions.removeEvent(SWIM)).resolves.toBe(result);
+      expect(hide).toHaveBeenCalledWith(SWIM.id);
+      expect(reveal).toHaveBeenCalledTimes(1);
+      expect(refresh).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("restoreEvent undoes a delete with the deleted row's token (CAL-013 AC-5, Block 3)", () => {
+  it("calls repo.restore(deleted.id, deleted.updatedAt) - the token the delete returned, not the original", async () => {
+    repo.restore.mockResolvedValue(ok(SWIM));
+    await actions.restoreEvent(SWIM_DELETED);
+    expect(repo.restore).toHaveBeenCalledTimes(1);
+    expect(repo.restore.mock.calls[0]).toStrictEqual([SWIM.id, DELETED_TOKEN]);
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(hide).not.toHaveBeenCalled();
+  });
+
+  it("on ok: refreshes the store once and resolves with the result", async () => {
+    const result = ok({ ...SWIM, updatedAt: "2026-10-20T10:00:05+00:00" });
+    repo.restore.mockResolvedValue(result);
+    await expect(actions.restoreEvent(SWIM_DELETED)).resolves.toBe(result);
+    expect(refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["conflict", { status: "conflict" }],
+    ["offline", { status: "offline" }],
+  ] as Array<[string, Result<Event>]>)(
+    "on %s: returns the result as is and refreshes nothing",
+    async (_label, result) => {
+      repo.restore.mockResolvedValue(result);
+      await expect(actions.restoreEvent(SWIM_DELETED)).resolves.toBe(result);
+      expect(refresh).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("the app's actions (CAL-013 Block 3)", () => {
+  it("export removeEvent and restoreEvent", () => {
+    expect(typeof eventActions.removeEvent).toBe("function");
+    expect(typeof eventActions.restoreEvent).toBe("function");
   });
 });

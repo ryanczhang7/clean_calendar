@@ -1,4 +1,5 @@
 import {
+  cleanup,
   fireEvent,
   render,
   screen,
@@ -108,6 +109,8 @@ const TRIP = event({
 type FakeActions = {
   createEvent: Mock<EventActions["createEvent"]>;
   updateEvent: Mock<EventActions["updateEvent"]>;
+  removeEvent: Mock<EventActions["removeEvent"]>;
+  restoreEvent: Mock<EventActions["restoreEvent"]>;
 };
 
 function fakeActions(): FakeActions {
@@ -125,6 +128,15 @@ function fakeActions(): FakeActions {
     updateEvent: vi.fn<EventActions["updateEvent"]>(async (id, patch) => ({
       status: "ok",
       row: { ...DENTIST, id, ...patch },
+    })),
+    // CAL-013: EventActions gained these two; the sheet never calls them.
+    removeEvent: vi.fn<EventActions["removeEvent"]>(async (e) => ({
+      status: "ok",
+      row: { ...e, deletedAt: STAMP },
+    })),
+    restoreEvent: vi.fn<EventActions["restoreEvent"]>(async (e) => ({
+      status: "ok",
+      row: { ...e, deletedAt: null },
     })),
   };
 }
@@ -835,5 +847,140 @@ describe("an event whose kind is gone (AC-7, Block 5)", () => {
       { kindId: GYM.id },
       UPDATED_AT,
     ]);
+  });
+});
+
+// CAL-013 Contract, Block 7 (AC-4 at the sheet; accessibility.md icon-only
+// buttons "Delete Flight to Tokyo"). In edit mode, and only when onDelete is
+// given, the header carries after the heading a <button type="button">
+// named "Delete " + the SAVED title. Pressing it asks nothing even when the
+// form is dirty, and calls onDelete(the event) then onClose(). The sheet
+// does not write: the page's onDelete does (actions.removeEvent).
+describe("the Delete button (CAL-013 AC-4, Block 7)", () => {
+  function DeletingHost(props: {
+    make: Make;
+    actions: FakeActions;
+    onDelete?: (event: Event) => void;
+    onClose: () => void;
+  }): JSX.Element {
+    const [request, setRequest] = useState<SheetRequest | null>(null);
+    return (
+      <>
+        <button
+          type="button"
+          onClick={(e) => setRequest(props.make(e.currentTarget))}
+        >
+          Open
+        </button>
+        <EventSheet
+          request={request}
+          kinds={KINDS}
+          actions={props.actions}
+          {...(props.onDelete === undefined
+            ? {}
+            : { onDelete: props.onDelete })}
+          onClose={() => {
+            props.onClose();
+            setRequest(null);
+          }}
+        />
+      </>
+    );
+  }
+
+  async function openDeleting(make: Make, withDelete = true) {
+    const user = userEvent.setup();
+    const actions = fakeActions();
+    const log: string[] = [];
+    const onDelete = vi.fn((e: Event) => {
+      log.push(`delete ${e.id}`);
+    });
+    const onClose = vi.fn(() => {
+      log.push("close");
+    });
+    render(
+      <MemoryRouter>
+        <DeletingHost
+          make={make}
+          actions={actions}
+          {...(withDelete ? { onDelete } : {})}
+          onClose={onClose}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    return { user, actions, log, onDelete, onClose };
+  }
+
+  const deleteButton = (name = "Delete Dentist") =>
+    screen.getByRole("button", { name });
+
+  it('editing "Dentist" with onDelete: a type="button" named "Delete Dentist" in the header, after the heading', async () => {
+    await openDeleting(edit(DENTIST));
+    const dialog = sheet("Edit event: Dentist");
+    const button = within(dialog).getByRole("button", {
+      name: "Delete Dentist",
+    });
+    expect(button).toHaveAttribute("type", "button");
+    expect(button.closest("header")).not.toBeNull();
+    const heading = within(dialog).getByRole("heading", { level: 2 });
+    expect(
+      heading.compareDocumentPosition(button) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(button.closest("form")).toBeNull();
+  });
+
+  it("its name keeps the saved title while the Title field is edited", async () => {
+    const { user } = await openDeleting(edit(DENTIST));
+    await user.type(title(), " at noon");
+    expect(title()).toHaveValue("Dentist at noon");
+    expect(deleteButton("Delete Dentist")).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Delete Dentist at noon" }),
+    ).toBeNull();
+  });
+
+  it("pressing it calls onDelete(the event), then onClose - once each - and writes nothing itself", async () => {
+    const { user, actions, log, onDelete } = await openDeleting(edit(DENTIST));
+    await user.click(deleteButton());
+    expect(log).toStrictEqual([`delete ${DENTIST.id}`, "close"]);
+    expect(onDelete).toHaveBeenCalledWith(DENTIST);
+    expect(actions.removeEvent).not.toHaveBeenCalled();
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it('a dirty sheet deletes without asking "Discard changes?"', async () => {
+    const { user, log } = await openDeleting(edit(DENTIST));
+    await user.type(title(), " at noon");
+    await user.click(deleteButton());
+    expect(
+      screen.queryByRole("dialog", { name: "Discard changes?" }),
+    ).toBeNull();
+    expect(log).toStrictEqual([`delete ${DENTIST.id}`, "close"]);
+  });
+
+  it('an all-day event gets its own name: "Delete Trip"', async () => {
+    await openDeleting(edit(TRIP));
+    expect(deleteButton("Delete Trip")).toBeInTheDocument();
+  });
+
+  it("a new event has no Delete button even with onDelete; an existing one then does", async () => {
+    await openDeleting(createAllDay(oct(15)));
+    sheet("New event");
+    expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+    cleanup();
+    await openDeleting(edit(DENTIST));
+    expect(deleteButton()).toBeInTheDocument();
+  });
+
+  it("without onDelete an existing event has no Delete button; with it, it does", async () => {
+    await openDeleting(edit(DENTIST), false);
+    sheet("Edit event: Dentist");
+    expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+    cleanup();
+    await openDeleting(edit(DENTIST));
+    expect(deleteButton()).toBeInTheDocument();
   });
 });

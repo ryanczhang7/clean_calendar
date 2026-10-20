@@ -1,4 +1,11 @@
-import { act, render, screen, within } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type JSX, useState } from "react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -7,12 +14,14 @@ import type { Event, Kind } from "../data/rows";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import { installMatchMedia } from "../test/media";
 import { EmptyMonth } from "./EmptyMonth";
+import type { ChipCommand } from "./EventChip";
 import {
   CHIPS_PER_CELL,
   DOTS_PER_CELL,
   eventsOnDay,
   MonthView,
 } from "./MonthView";
+import type { DropTarget } from "./useChipDrag";
 
 vi.mock(
   "../lib/supabase",
@@ -1117,5 +1126,144 @@ describe("activating a cell, a chip and the empty card (CAL-012 Block 6)", () =>
     const { user, onAddEvent } = renderActivating();
     await user.click(screen.getByRole("button", { name: "or add an event" }));
     expect(onAddEvent).toHaveBeenCalledTimes(1);
+  });
+});
+
+// CAL-013 Contract, Block 5 (AC-2, AC-3, AC-4 at the month). With
+// onDropEvent every gridcell - in the month or outside it - is a drop target
+// carrying data-drop-day={its yyyy-MM-dd}, and a chip dragged onto a cell
+// reaches onDropEvent(event, { kind: "day", day }); without onDropEvent no
+// cell carries the attribute. With onChipCommand a chip's keys reach it, and
+// the grid's own arrow handling never sees them. Pointer events go through
+// fireEvent (jsdom has no elementFromPoint: the pointerup is dispatched on
+// the target cell, story Notes).
+describe("moving and deleting from the month (CAL-013 Block 5)", () => {
+  type OnChipCommand = (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  type OnDropEvent = (event: Event, target: DropTarget) => void;
+
+  function renderMoving(
+    options: { events?: Event[]; drop?: boolean; command?: boolean } = {},
+  ) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    const onSelect = vi.fn<(date: Date) => void>();
+    const onActivateDay = vi.fn<(date: Date, cell: HTMLElement) => void>();
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    const onChipCommand = vi.fn<OnChipCommand>();
+    const onDropEvent = vi.fn<OnDropEvent>();
+    render(
+      <MemoryRouter initialEntries={["/month/2026-10"]}>
+        <MonthView
+          year={2026}
+          month={10}
+          events={options.events ?? []}
+          kinds={KINDS}
+          today={TODAY}
+          loading={false}
+          selected={new Date(2026, 9, 14)}
+          onSelect={onSelect}
+          onActivateDay={onActivateDay}
+          onOpenEvent={onOpenEvent}
+          {...(options.command === false ? {} : { onChipCommand })}
+          {...(options.drop === false ? {} : { onDropEvent })}
+        />
+        <Where />
+      </MemoryRouter>,
+    );
+    return { onSelect, onActivateDay, onOpenEvent, onChipCommand, onDropEvent };
+  }
+
+  const swim = () => timed("Swim", GYM, [10, 15, 7, 0], [10, 15, 8, 0]);
+  const swimChip = () =>
+    within(cell("Thursday 15 October")).getByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+
+  /** Drag `chip` 40 px and release over `target`. */
+  function drag(chip: HTMLElement, target: Element) {
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 140, clientY: 100 });
+    fireEvent.pointerUp(target, { clientX: 140, clientY: 100 });
+  }
+
+  it("with onDropEvent every one of the 42 cells carries data-drop-day = its data-day; without it, none does", () => {
+    renderMoving({ drop: false });
+    expect(document.querySelectorAll("[data-drop-day]")).toHaveLength(0);
+    cleanup();
+    media?.restore();
+    renderMoving();
+    const all = cells();
+    expect(all).toHaveLength(42);
+    for (const c of all) {
+      expect(c).toHaveAttribute("data-drop-day", c.getAttribute("data-day"));
+    }
+    expect(cell("Wednesday 14 October")).toHaveAttribute(
+      "data-drop-day",
+      "2026-10-14",
+    );
+    expect(cell("Monday 28 September")).toHaveAttribute(
+      "data-drop-day",
+      "2026-09-28",
+    );
+  });
+
+  it("a chip dragged from 15 to 20 October reaches onDropEvent(event, { day: 20 Oct }) - and neither selects, activates nor opens", () => {
+    const event = swim();
+    const { onDropEvent, onSelect, onActivateDay, onOpenEvent } = renderMoving({
+      events: [event],
+    });
+    const chip = swimChip();
+    drag(chip, cell("Tuesday 20 October"));
+    expect(onDropEvent).toHaveBeenCalledTimes(1);
+    expect(onDropEvent).toHaveBeenCalledWith(event, {
+      kind: "day",
+      day: new Date(2026, 9, 20),
+    });
+    // The click a browser may fire on the chip after the drag is swallowed.
+    fireEvent.click(chip);
+    expect(onOpenEvent).not.toHaveBeenCalled();
+    expect(onSelect).not.toHaveBeenCalled();
+    expect(onActivateDay).not.toHaveBeenCalled();
+  });
+
+  it("a chip dropped on an outside-month cell (Sunday 1 November) reaches onDropEvent with that day", () => {
+    const event = swim();
+    const { onDropEvent } = renderMoving({ events: [event] });
+    drag(swimChip(), cell("Sunday 1 November"));
+    expect(onDropEvent).toHaveBeenCalledWith(event, {
+      kind: "day",
+      day: new Date(2026, 10, 1),
+    });
+  });
+
+  it("Alt+ArrowRight on a chip reaches onChipCommand(event, right, chip) and does not move the selection", async () => {
+    const event = swim();
+    const { onChipCommand, onSelect } = renderMoving({ events: [event] });
+    const chip = swimChip();
+    chip.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    expect(onChipCommand).toHaveBeenCalledTimes(1);
+    expect(onChipCommand).toHaveBeenCalledWith(event, "right", chip);
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("Delete on a chip reaches onChipCommand(event, delete, chip)", async () => {
+    const event = swim();
+    const { onChipCommand } = renderMoving({ events: [event] });
+    const chip = swimChip();
+    chip.focus();
+    const user = userEvent.setup();
+    await user.keyboard("{Delete}");
+    expect(onChipCommand).toHaveBeenCalledWith(event, "delete", chip);
+  });
+
+  it("chips carry data-event-id", () => {
+    const event = swim();
+    renderMoving({ events: [event] });
+    expect(swimChip()).toHaveAttribute("data-event-id", event.id);
   });
 });
