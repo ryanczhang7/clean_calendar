@@ -3,7 +3,7 @@ import { type JSX, useMemo } from "react";
 import type { Event } from "../data/rows";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import styles from "./DayList.module.css";
-import { EventChip } from "./EventChip";
+import { EventChip, useChipOpener } from "./EventChip";
 import { eventsOnDay, useChipKind } from "./MonthView";
 
 // CAL-011 AC-7, Contract Block 8 (layout.md "Phone specifics", voice.md
@@ -16,18 +16,25 @@ export function DayList(props: {
   events: Event[];
   kinds: KindsSnapshot;
   onAdd?: () => void;
+  /** CAL-012 Block 6: a chip in the list; the phone's path to the edit sheet. */
+  onOpenEvent?: (event: Event, chip: HTMLElement) => void;
 }): JSX.Element {
   const { date, events, kinds } = props;
+  const chips = useChipOpener(props.onOpenEvent);
   const label = format(date, "EEE d MMM");
   const day = useMemo(() => eventsOnDay(events, date), [events, date]);
   const chipKind = useChipKind(kinds);
   return (
     <section aria-label={`Events on ${label}`} className={styles.list}>
       {day.length > 0 ? (
-        <ul className={styles.rows}>
+        <ul className={styles.rows} onClickCapture={chips.onClickCapture}>
           {day.map((e) => (
             <li key={e.id} className={styles.row}>
-              <EventChip event={e} kind={chipKind(e)} />
+              <EventChip
+                event={e}
+                kind={chipKind(e)}
+                onActivate={chips.onActivate}
+              />
             </li>
           ))}
         </ul>

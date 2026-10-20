@@ -1,28 +1,50 @@
 import { format } from "date-fns";
-import { type JSX, useEffect } from "react";
+import { type JSX, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router";
+import type { Event } from "../data/rows";
 import { dayKey, monthGrid } from "../domain/monthGrid";
+import { EventSheet, type SheetRequest } from "../events/EventSheet";
+import type { EventActions } from "../sync/eventActions";
 import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
 import { useBreakpoint } from "./media";
-import { MonthView } from "./MonthView";
+import { eventsOnDay, MonthView } from "./MonthView";
 import { type Period, parsePath, periodOf, readView } from "./period";
 import { setSelected, useSelected } from "./selection";
+import { shortcutBlocked } from "./useCalendarKeys";
 import { WeekView } from "./WeekView";
 
 // CAL-011 Contract, Block 10. The URL names the view and the period (read
 // from the pathname, as the toolbar does); an unparseable calendar URL shows
 // today's month. No <h1>: the period title is the toolbar's (PO decision 1).
+//
+// CAL-012 Contract, Block 7: the page owns the event sheet's request. A month
+// cell, a time-grid slot, the empty card, the day list's Add and `N` open a
+// new event; a chip opens its event. On close the sheet returns focus to
+// whatever opened it.
 
 type Stores = { kinds?: KindsStore; events?: EventsStore };
+
+/** How the month asks the page for the sheet. */
+type Opens = {
+  /** A new all-day event on `day`. */
+  onCreateDay: (day: Date, opener: HTMLElement | null) => void;
+  onOpenEvent: (event: Event, chip: HTMLElement) => void;
+};
 
 const nextMidnight = (d: Date) =>
   new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1);
 
+const HOUR_MS = 60 * 60 * 1000;
+
 const sameMonth = (a: Date, b: Date) =>
   a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+
+/** The element that has focus: a button just clicked, or the cell `N` was pressed on. */
+const focused = (): HTMLElement | null =>
+  document.activeElement instanceof HTMLElement ? document.activeElement : null;
 
 /**
  * The selection of a period: in a month, the current selection when it lies
@@ -39,9 +61,9 @@ function selectionFor(period: Period, current: Date | null, today: Date): Date {
 }
 
 function MonthPage(
-  props: Stores & { first: Date; today: Date; selected: Date },
+  props: Stores & Opens & { first: Date; today: Date; selected: Date },
 ): JSX.Element {
-  const { first, today, selected } = props;
+  const { first, today, selected, onCreateDay, onOpenEvent } = props;
   const navigate = useNavigate();
   const phone = useBreakpoint() === "phone";
   const year = first.getFullYear();
@@ -63,6 +85,18 @@ function MonthPage(
     }
   };
 
+  // CAL-012 PO decision 4: on the phone the tap already selected and the day
+  // list is the path; elsewhere a day with events opens its day view, an
+  // empty one the sheet.
+  const onActivateDay = (date: Date, cell: HTMLElement) => {
+    if (phone) return;
+    if (eventsOnDay(events.events, date).length > 0) {
+      navigate(`/day/${dayKey(date)}`);
+      return;
+    }
+    onCreateDay(date, cell);
+  };
+
   return (
     <>
       <MonthView
@@ -74,9 +108,18 @@ function MonthPage(
         loading={events.status !== "ready"}
         selected={selected}
         onSelect={onSelect}
+        onActivateDay={onActivateDay}
+        onOpenEvent={onOpenEvent}
+        onAddEvent={() => onCreateDay(selected, focused())}
       />
       {phone && (
-        <DayList date={selected} events={events.events} kinds={kinds} />
+        <DayList
+          date={selected}
+          events={events.events}
+          kinds={kinds}
+          onAdd={() => onCreateDay(selected, focused())}
+          onOpenEvent={onOpenEvent}
+        />
       )}
     </>
   );
@@ -86,6 +129,8 @@ export function CalendarPage(
   props: Stores & {
     /** Injected clock; default `() => new Date()`. */
     now?: () => Date;
+    /** The sheet's writes; default the app's eventActions (tests inject). */
+    actions?: EventActions;
   } = {},
 ): JSX.Element {
   const { pathname } = useLocation();
@@ -95,25 +140,92 @@ export function CalendarPage(
     parsePath(pathname, readView(), today) ?? periodOf("month", today, phone);
   const selected = selectionFor(period, useSelected(), today);
   const periodKey = `${period.view}:${dayKey(period.date)}`;
+  const kinds = useKinds(props.kinds);
+  const [sheet, setSheet] = useState<SheetRequest | null>(null);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new period is the trigger; `selected` is that render's answer
   useEffect(() => {
     setSelected(selected);
   }, [periodKey]);
 
+  const onCreateDay = (day: Date, opener: HTMLElement | null) => {
+    const start = new Date(day.getFullYear(), day.getMonth(), day.getDate());
+    setSheet({
+      mode: "create",
+      start,
+      end: nextMidnight(start),
+      allDay: true,
+      opener,
+    });
+  };
+  const onSlotActivate = (start: Date, cell: HTMLElement) => {
+    setSheet({
+      mode: "create",
+      start,
+      end: new Date(start.getTime() + HOUR_MS),
+      allDay: false,
+      opener: cell,
+    });
+  };
+  const onOpenEvent = (event: Event, chip: HTMLElement) => {
+    setSheet({ mode: "edit", event, opener: chip });
+  };
+
+  // PO decision 3: N creates an all-day event on the selected day, in every
+  // view. The listener outlives a render; it reads the latest selection.
+  const latestSelected = useRef(selected);
+  useLayoutEffect(() => {
+    latestSelected.current = selected;
+  });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== "n" || shortcutBlocked(event)) return;
+      event.preventDefault();
+      const day = latestSelected.current;
+      setSheet({
+        mode: "create",
+        start: day,
+        end: nextMidnight(day),
+        allDay: true,
+        opener: focused(),
+      });
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const stores = { kinds: props.kinds, events: props.events };
+  const opens = { onSlotActivate, onOpenEvent };
+  let view: JSX.Element;
   if (period.view === "week") {
-    return <WeekView selected={period.date} now={today} {...stores} />;
-  }
-  if (period.view === "day") {
-    return <DayView selected={period.date} now={today} {...stores} />;
+    view = (
+      <WeekView selected={period.date} now={today} {...stores} {...opens} />
+    );
+  } else if (period.view === "day") {
+    view = (
+      <DayView selected={period.date} now={today} {...stores} {...opens} />
+    );
+  } else {
+    view = (
+      <MonthPage
+        {...stores}
+        first={period.date}
+        today={today}
+        selected={selected}
+        onCreateDay={onCreateDay}
+        onOpenEvent={onOpenEvent}
+      />
+    );
   }
   return (
-    <MonthPage
-      {...stores}
-      first={period.date}
-      today={today}
-      selected={selected}
-    />
+    <>
+      {view}
+      <EventSheet
+        request={sheet}
+        kinds={kinds}
+        actions={props.actions}
+        onClose={() => setSheet(null)}
+      />
+    </>
   );
 }

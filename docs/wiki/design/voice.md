@@ -37,6 +37,7 @@ actionable, no codes. Examples:
 
 - "Give the event a title."
 - "End must be after start."
+- "Couldn't save. Try again." (the event sheet, when a write is refused; CAL-012)
 - "You already have a kind called Gym."
 - "Text would be hard to read. Try a darker shade."
 - "Couldn't read that. Try pasting the text instead."

@@ -1,5 +1,6 @@
 import { format } from "date-fns";
 import { type JSX, useMemo } from "react";
+import type { Event } from "../data/rows";
 import { daysFrom, weekStart } from "../domain/timeGrid";
 import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
@@ -20,6 +21,10 @@ export function WeekView(props: {
   now: Date;
   kinds?: KindsStore;
   events?: EventsStore;
+  /** CAL-012 Block 6: passed through to the grid. */
+  onSlotActivate?: (start: Date, cell: HTMLElement) => void;
+  /** CAL-012 Block 6: passed through to the grid. */
+  onOpenEvent?: (event: Event, chip: HTMLElement) => void;
 }): JSX.Element {
   const { selected, now } = props;
   const phone = useBreakpoint() === "phone";
@@ -48,6 +53,9 @@ export function WeekView(props: {
       kinds={kinds}
       now={now}
       loading={events.status !== "ready"}
+      onSlotActivate={props.onSlotActivate}
+      onOpenEvent={props.onOpenEvent}
+      tabStop={{ day: new Date(y, m, d), hour: 9 }}
     />
   );
 }

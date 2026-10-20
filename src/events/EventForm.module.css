@@ -1,0 +1,125 @@
+/* components.md, "Event sheet": the fields, in order. Inputs are 16px so a
+   phone does not zoom on focus (layout.md); Starts and Ends sit side by side
+   from 600px. */
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.label {
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+  font-weight: var(--font-weight-medium);
+}
+
+.input,
+.textarea {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-md);
+}
+
+.textarea {
+  padding: var(--space-2) var(--space-3);
+  resize: vertical;
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--color-danger);
+}
+
+.error {
+  margin: 0;
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: var(--size-touch);
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-md);
+}
+
+.track {
+  position: relative;
+  width: 40px;
+  height: 24px;
+  border-radius: var(--radius-full);
+  background: var(--color-border-strong);
+}
+
+.thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: var(--radius-full);
+  background: var(--color-surface);
+}
+
+.switch[aria-checked="true"] .track {
+  background: var(--color-primary);
+}
+
+.switch[aria-checked="true"] .thumb {
+  left: 18px;
+}
+
+.when {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.group {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.pair {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.pair > .input {
+  flex: 1;
+  min-width: 0;
+}
+
+@media (min-width: 600px) {
+  .when {
+    flex-direction: row;
+  }
+
+  .group {
+    flex: 1;
+  }
+}
