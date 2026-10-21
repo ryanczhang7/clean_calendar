@@ -9,11 +9,17 @@ import {
   eventsStore,
   useEventsInRange,
 } from "./eventsStore";
+import { HttpResponse } from "msw";
+import { installServer, onTable } from "../test/msw";
 
 vi.mock(
   "../lib/supabase",
   async () => (await import("../test/supabase-mock")).supabaseModule,
 );
+
+// CAL-014: the app's eventsStore reaches the server through MSW (see the
+// last describe); the cases using hand-written fakes make no request.
+installServer();
 
 // CAL-009 Contract, Block 4. The events read model, the same shape and
 // discipline as kindsStore.ts, over a hand-written EventsReader fake (vi.fn
@@ -485,5 +491,73 @@ describe("hide(id) and its reveal() (CAL-013 Block 2)", () => {
       reveal();
     });
     expect(result.current.events).toStrictEqual([a, b]);
+  });
+});
+
+// CAL-014 Contract, Block 5 (PO decisions 1 and 2): the app's eventsStore is
+// the CACHED store, over the app's `db` and `appSync`.
+describe("eventsStore over the app's cache (CAL-014 Block 5)", () => {
+  // Imported inside each case, through a specifier Vite does not analyse,
+  // so that while ./db does not exist (CAL-014 RED) only these cases fail and
+  // every case above still runs. The type is the real module's.
+  const DB_MODULE = "./db";
+  const appDb = async () =>
+    ((await import(/* @vite-ignore */ DB_MODULE)) as typeof import("./db")).db;
+  const EPOCH = "1970-01-01T00:00:00+00:00"; // hydrate.test.ts pins the export
+
+  it("serves its snapshot from the app's db: live events sorted, a soft-deleted one left out", async () => {
+    const db = await appDb();
+    await Promise.all(db.tables.map((t) => t.clear()));
+    const later = ev(31, at(10, 15, 9), at(10, 15, 10));
+    const earlier = ev(32, at(10, 14, 9), at(10, 14, 10));
+    const gone = ev(33, at(10, 13, 9), at(10, 13, 10), { deletedAt: STAMP });
+    await db.events.bulkPut([later, gone, earlier]);
+    const stop = eventsStore.subscribe(() => {});
+    try {
+      await vi.waitFor(() =>
+        expect(eventsStore.getSnapshot()).toStrictEqual({
+          status: "ready",
+          events: [earlier, later],
+        }),
+      );
+    } finally {
+      stop();
+    }
+  });
+
+  it("refresh() runs the app's sync: each table asked for rows since its mark, and the rows land in the snapshot", async () => {
+    const db = await appDb();
+    await Promise.all(db.tables.map((t) => t.clear()));
+    const kinds = onTable("kinds", () => HttpResponse.json([]));
+    const events = onTable("events", () =>
+      HttpResponse.json([
+        {
+          id: "10000000-0000-4000-8000-000000000041",
+          title: "From the server",
+          kind_id: "00000000-0000-4000-8000-000000000001",
+          starts_at: "2026-10-14T14:00:00+00:00",
+          ends_at: "2026-10-14T15:00:00+00:00",
+          all_day: false,
+          location: null,
+          notes: null,
+          recurrence: null,
+          origin: "manual",
+          capture_job_id: null,
+          deleted_at: null,
+          created_at: STAMP,
+          updated_at: STAMP,
+        },
+      ]),
+    );
+    const overrides = onTable("event_overrides", () => HttpResponse.json([]));
+    await eventsStore.refresh();
+    const since = (r: typeof kinds) =>
+      r.map((q) => q.url.searchParams.get("updated_at"));
+    expect(since(kinds)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(events)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(overrides)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(eventsStore.getSnapshot().events.map((e) => e.title)).toStrictEqual([
+      "From the server",
+    ]);
   });
 });

@@ -3,12 +3,18 @@ import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ListResult } from "../data/result";
 import type { Kind } from "../data/rows";
 import type { SeedRepo } from "../kinds/seedKinds";
-import { createKindsStore, useKinds } from "./kindsStore";
+import { HttpResponse } from "msw";
+import { installServer, onTable } from "../test/msw";
+import { createKindsStore, kindsStore, useKinds } from "./kindsStore";
 
 vi.mock(
   "../lib/supabase",
   async () => (await import("../test/supabase-mock")).supabaseModule,
 );
+
+// CAL-014: the app's kindsStore reaches the server through MSW (see the
+// last describe); the cases using hand-written fakes make no request.
+installServer();
 
 // CAL-006 AC-6, Contract Block 5. A hand-written SeedRepo fake (Block 7):
 // the repository's HTTP shape is kinds.test.ts's business.
@@ -277,5 +283,78 @@ describe("useKinds(store) (AC-6)", () => {
     });
     expect(result.current.kinds).toStrictEqual([A, B]);
     expect(result.current).toBe(store.getSnapshot());
+  });
+});
+
+// CAL-014 Contract, Block 5 (PO decisions 1 and 2): the app's kindsStore is
+// the CACHED store, over the app's `db`, `kindsRepo(supabase)` for the seed
+// and `appSync`. Its requests are real PostgREST fetches on the mocked client
+// that MSW answers; the cases above use hand-written fakes and make none.
+
+describe("kindsStore, the app's one store (CAL-014 Block 5)", () => {
+  // Imported inside each case, through a specifier Vite does not analyse,
+  // so that while ./db does not exist (CAL-014 RED) only these cases fail and
+  // every case above still runs. The type is the real module's.
+  const DB_MODULE = "./db";
+  const appDb = async () =>
+    ((await import(/* @vite-ignore */ DB_MODULE)) as typeof import("./db")).db;
+  const EPOCH = "1970-01-01T00:00:00+00:00"; // hydrate.test.ts pins the export
+
+  it("has not loaded at import", () => {
+    expect(kindsStore.getSnapshot().status).toBe("loading");
+  });
+
+  it("ensureSeeded() seeds through the server, then syncs every table into the app's db before it resolves", async () => {
+    const db = await appDb();
+    await Promise.all(db.tables.map((t) => t.clear()));
+    // The kinds table: empty to the seed's listAll, then the inserted rows
+    // to the sync's listSince (the request carrying updated_at=gt.…).
+    let inserted: unknown[] = [];
+    const kinds = onTable("kinds", (req) => {
+      if (req.method === "POST") {
+        const inputs = Array.isArray(req.body) ? req.body : [req.body];
+        inserted = inputs.map((input, i) => ({
+          id: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+          ...(input as object),
+          deleted_at: null,
+          created_at: STAMP,
+          updated_at: STAMP,
+        }));
+        return HttpResponse.json(inserted, { status: 201 });
+      }
+      return HttpResponse.json(
+        req.url.searchParams.has("updated_at") ? inserted : [],
+      );
+    });
+    const events = onTable("events", () => HttpResponse.json([]));
+    const overrides = onTable("event_overrides", () => HttpResponse.json([]));
+
+    await expect(kindsStore.ensureSeeded()).resolves.toBe("seeded");
+
+    expect(await db.kinds.count()).toBe(11);
+    expect((await db.meta.get("mark:kinds"))?.value).toBe(STAMP);
+    const since = (r: typeof kinds) =>
+      r
+        .filter((q) => q.url.searchParams.has("updated_at"))
+        .map((q) => q.url.searchParams.get("updated_at"));
+    expect(since(kinds)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(events)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(overrides)).toStrictEqual([`gt.${EPOCH}`]);
+  });
+
+  it("serves its snapshot from the app's db", async () => {
+    const db = await appDb();
+    const extra = kind(20, { name: "From the cache", sortOrder: 99 });
+    await db.kinds.put(extra);
+    const stop = kindsStore.subscribe(() => {});
+    try {
+      await vi.waitFor(() =>
+        expect(kindsStore.getSnapshot().byId(extra.id)).toStrictEqual(extra),
+      );
+      expect(kindsStore.getSnapshot().status).toBe("ready");
+      expect(kindsStore.getSnapshot().kinds.at(-1)).toStrictEqual(extra);
+    } finally {
+      stop();
+    }
   });
 });
