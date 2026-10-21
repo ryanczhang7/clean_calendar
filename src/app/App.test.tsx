@@ -52,3 +52,46 @@ describe("App", () => {
     expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
   });
 });
+
+// CAL-014 AC-6, Contract Block 6: `App` renders the router at once and opens
+// the cache in an effect; a cache that cannot be opened replaces the router
+// with the full-page error. The `cache` is injected (default: the app's db).
+describe("App when the cache cannot be opened (CAL-014 AC-6)", () => {
+  it('renders "Can\'t open the calendar", "Reload to try again." and a Reload button instead of the calendar', async () => {
+    const open = vi.fn(() => Promise.reject(new Error("IndexedDB is blocked")));
+    render(<App cache={{ open }} />);
+    expect(
+      await screen.findByRole("heading", {
+        level: 1,
+        name: "Can't open the calendar",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Reload to try again.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    // Instead of, not beside: no shell, no month title.
+    expect(screen.queryByRole("banner")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 1 })).toHaveLength(1);
+    expect(screen.getAllByRole("main")).toHaveLength(1);
+    expect(open).toHaveBeenCalledTimes(1);
+  });
+
+  it("the first render never waits on the open: with an open still pending, the calendar shows", async () => {
+    const open = vi.fn(() => new Promise<never>(() => {}));
+    render(<App cache={{ open }} />);
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1).toHaveAccessibleName(MONTH_TITLE);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(screen.queryByText("Reload to try again.")).not.toBeInTheDocument();
+  });
+
+  it("an open that succeeds leaves the calendar in place", async () => {
+    const open = vi.fn(() => Promise.resolve(undefined));
+    render(<App cache={{ open }} />);
+    const h1 = await screen.findByRole("heading", { level: 1 });
+    expect(h1).toHaveAccessibleName(MONTH_TITLE);
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("heading", { name: "Can't open the calendar" }),
+    ).not.toBeInTheDocument();
+  });
+});

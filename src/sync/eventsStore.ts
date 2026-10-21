@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useSyncExternalStore } from "react";
-import { type EventsRepo, eventsRepo } from "../data/events";
+import type { EventsRepo } from "../data/events";
 import type { Event } from "../data/rows";
-import { supabase } from "../lib/supabase";
+import { createCachedEventsStore } from "./cachedStores";
+import { db } from "./db";
+import { liveSorted } from "./snapshots";
+import { appSync } from "./startSync";
 
 // The events read model (CAL-009, Contract Block 4): the same shape and
-// discipline as kindsStore.ts. It reads through the repository online, and
-// filters by range on the client (PO decision 8), until CAL-014 moves it onto
-// the local cache behind the same signature.
+// discipline as kindsStore.ts, filtering by range on the client (PO decision
+// 8). The app's singleton reads the local cache (CAL-014 Block 5);
+// `createEventsStore`, the in-memory store over the repository, stays for
+// suites without IndexedDB.
 
 export type EventsStatus = "loading" | "ready" | "unavailable";
 export type EventsSnapshot = {
@@ -24,16 +28,6 @@ export type EventsStore = {
   hide(id: string): () => void;
 };
 export type EventsReader = Pick<EventsRepo, "listLive">;
-
-function liveSorted(rows: Event[]): Event[] {
-  return rows
-    .filter((e) => e.deletedAt === null)
-    .sort(
-      (a, b) =>
-        a.startsAt.getTime() - b.startsAt.getTime() ||
-        a.createdAt.localeCompare(b.createdAt),
-    );
-}
 
 export function createEventsStore(repo: EventsReader): EventsStore {
   // Replaced only on a change, so getSnapshot() is stable in between
@@ -92,10 +86,10 @@ export function createEventsStore(repo: EventsReader): EventsStore {
 }
 
 /**
- * The app's one store, over `eventsRepo(supabase)` from `../lib/supabase`,
- * which tests mock as they do for kindsStore.
+ * The app's one store: the cache (`db`), synced by `appSync`, which reaches
+ * `../lib/supabase` - tests mock it as they do for kindsStore.
  */
-export const eventsStore: EventsStore = createEventsStore(eventsRepo(supabase));
+export const eventsStore: EventsStore = createCachedEventsStore(db, appSync);
 
 /** Pure: the events overlapping `[start, end)` - `startsAt < end && endsAt > start`. */
 export function eventsInRange(

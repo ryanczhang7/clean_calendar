@@ -7,10 +7,14 @@ import {
   type SeedOutcome,
   type SeedRepo,
 } from "../kinds/seedKinds";
+import { createCachedKindsStore } from "./cachedStores";
+import { db } from "./db";
+import { snapshotOf } from "./snapshots";
+import { appSync } from "./startSync";
 
-// The kinds read model (CAL-006, AC-6; Contract Block 5). It reads through
-// the repository online until CAL-014 moves it onto the local cache behind
-// the same signature.
+// The kinds read model (CAL-006, AC-6; Contract Block 5). The app's
+// singleton reads the local cache (CAL-014 Block 5); `createKindsStore`, the
+// in-memory store over the repository, stays for suites without IndexedDB.
 
 export type KindsStatus = "loading" | "ready" | "unavailable";
 export type KindsSnapshot = {
@@ -26,17 +30,6 @@ export type KindsStore = {
   subscribe(listener: () => void): () => void;
   getSnapshot(): KindsSnapshot;
 };
-
-function snapshotOf(status: KindsStatus, rows: Kind[]): KindsSnapshot {
-  const index = new Map(rows.map((k) => [k.id, k]));
-  const kinds = rows
-    .filter((k) => k.deletedAt === null)
-    .sort(
-      (a, b) =>
-        a.sortOrder - b.sortOrder || a.createdAt.localeCompare(b.createdAt),
-    );
-  return { status, kinds, byId: (id) => index.get(id) };
-}
 
 export function createKindsStore(repo: SeedRepo): KindsStore {
   let rows: Kind[] = [];
@@ -95,12 +88,17 @@ export function createKindsStore(repo: SeedRepo): KindsStore {
 }
 
 /**
- * The app's one store, over `kindsRepo(supabase)` from `../lib/supabase`.
- * That module builds the client from the environment when evaluated, so
- * tests that import this module mock it, as every other suite reaching it
- * does (`vi.mock("../lib/supabase", …)`).
+ * The app's one store: the cache (`db`), seeded through
+ * `kindsRepo(supabase)` and synced by `appSync` (CAL-014 Block 5).
+ * `../lib/supabase` builds the client from the environment when evaluated,
+ * so tests that import this module mock it, as every other suite reaching it
+ * does (`vi.mock("../lib/supabase", …)`). Constructing it touches nothing.
  */
-export const kindsStore: KindsStore = createKindsStore(kindsRepo(supabase));
+export const kindsStore: KindsStore = createCachedKindsStore(
+  db,
+  kindsRepo(supabase),
+  appSync,
+);
 
 export function useKinds(store: KindsStore = kindsStore): KindsSnapshot {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);

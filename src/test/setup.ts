@@ -1,4 +1,9 @@
 import "@testing-library/jest-dom/vitest";
+// CAL-014 Block 7: every jsdom suite gets an IndexedDB, as a browser has, so
+// the shell suites that render the real cached stores (App, AppShell, routes)
+// can open the app's database. Suites about the cache build their own
+// `new CalendarDb(name, { indexedDB: new IDBFactory(), IDBKeyRange })`.
+import "fake-indexeddb/auto";
 import { cleanup } from "@testing-library/react";
 import { afterEach, vi } from "vitest";
 
