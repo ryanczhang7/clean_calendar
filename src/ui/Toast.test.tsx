@@ -1,7 +1,13 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { type Toast, ToastHost, ToastProvider, useToast } from "./Toast";
+import {
+  type Toast,
+  ToastHost,
+  ToastProvider,
+  useMaybeToast,
+  useToast,
+} from "./Toast";
 
 // AC-5. Timing semantics (CAL-002 Contract, Toast): the timer starts at
 // showToast; without an action the toast is gone at 6 000 ms, with an action
@@ -153,5 +159,214 @@ describe("Toast (AC-5)", () => {
   it("throws when useToast is called outside a ToastProvider", () => {
     vi.spyOn(console, "error").mockImplementation(() => {});
     expect(() => render(<Trigger toast={{ text: "Orphan" }} />)).toThrow();
+  });
+});
+
+// CAL-013 Contract, Block 6 (AC-5; accessibility.md "Ctrl+Z: Undo, while an
+// undo toast is showing"). While a toast whose action has undo: true is
+// shown, Ctrl+Z or Cmd+Z on a non-editable target runs the action once,
+// dismisses the toast and preventDefaults. Each "does nothing" case is
+// paired, in the same case, with the key that then does - so none of them
+// can pass against a Toast that ignores the keyboard altogether.
+describe("Ctrl+Z runs an undo action while it shows (CAL-013 AC-5, Block 6)", () => {
+  const MOVED = "Moved to Wed 14 Oct, 10:00";
+
+  function setupUndo(undo: boolean | undefined = true) {
+    const onClick = vi.fn();
+    const user = setup({
+      text: MOVED,
+      action:
+        undo === undefined
+          ? { label: "Undo", onClick }
+          : { label: "Undo", onClick, undo },
+    });
+    return { user, onClick };
+  }
+
+  type Keys = { key: string } & Partial<
+    Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">
+  >;
+
+  /** keydown on `target`; true when the event was preventDefault-ed. */
+  function press(target: Element, init: Keys): boolean {
+    return !fireEvent.keyDown(target, init);
+  }
+
+  const CTRL_Z: Keys = { key: "z", ctrlKey: true };
+
+  it.each<[string, Keys]>([
+    ["Ctrl+Z", { key: "z", ctrlKey: true }],
+    ["Cmd+Z", { key: "z", metaKey: true }],
+    ["Ctrl+Z with Caps Lock (key Z)", { key: "Z", ctrlKey: true }],
+  ])(
+    "%s runs the action once, dismisses the toast and is preventDefault-ed",
+    async (_label, init) => {
+      const { user, onClick } = setupUndo();
+      await user.click(screen.getByRole("button", { name: "Show 1" }));
+      expect(press(document.body, init)).toBe(true);
+      expect(onClick).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole("status")).not.toHaveTextContent(MOVED);
+      expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();
+    },
+  );
+
+  it("a second Ctrl+Z after the first does nothing more", async () => {
+    const { user, onClick } = setupUndo();
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    press(document.body, CTRL_Z);
+    expect(press(document.body, CTRL_Z)).toBe(false);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("Ctrl+Z works from a focused non-editable element - the user-event path", async () => {
+    const { user, onClick } = setupUndo();
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    await user.keyboard("{Control>}z{/Control}");
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it.each<[string, Keys]>([
+    ["Ctrl+Shift+Z (redo)", { key: "Z", ctrlKey: true, shiftKey: true }],
+    ["Ctrl+Alt+Z", { key: "z", ctrlKey: true, altKey: true }],
+    ["z alone", { key: "z" }],
+    ["Ctrl+Y", { key: "y", ctrlKey: true }],
+  ])(
+    "%s does nothing and is not preventDefault-ed; Ctrl+Z then does",
+    async (_label, init) => {
+      const { user, onClick } = setupUndo();
+      await user.click(screen.getByRole("button", { name: "Show 1" }));
+      expect(press(document.body, init)).toBe(false);
+      expect(onClick).not.toHaveBeenCalled();
+      expect(screen.getByRole("status")).toHaveTextContent(MOVED);
+      press(document.body, CTRL_Z);
+      expect(onClick).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each<[string, () => HTMLElement]>([
+    ["an input", () => document.createElement("input")],
+    ["a textarea", () => document.createElement("textarea")],
+    ["a select", () => document.createElement("select")],
+    [
+      "a contenteditable element",
+      () => {
+        const el = document.createElement("div");
+        el.setAttribute("contenteditable", "true");
+        return el;
+      },
+    ],
+  ])(
+    "Ctrl+Z inside %s is that field's own undo: the action does not run; outside it, it does",
+    async (_label, make) => {
+      const { user, onClick } = setupUndo();
+      const field = document.body.appendChild(make());
+      try {
+        await user.click(screen.getByRole("button", { name: "Show 1" }));
+        expect(press(field, CTRL_Z)).toBe(false);
+        expect(onClick).not.toHaveBeenCalled();
+        expect(screen.getByRole("status")).toHaveTextContent(MOVED);
+        press(document.body, CTRL_Z);
+        expect(onClick).toHaveBeenCalledTimes(1);
+      } finally {
+        field.remove();
+      }
+    },
+  );
+
+  it.each<[string, boolean | undefined]>([
+    ["without undo", undefined],
+    ["with undo: false", false],
+  ])(
+    "an action %s is not run by Ctrl+Z; an undo toast replacing it then is",
+    async (_label, undo) => {
+      const plain = vi.fn();
+      const undoable = vi.fn();
+      const user = setup(
+        {
+          text: "Kind saved",
+          action:
+            undo === undefined
+              ? { label: "View", onClick: plain }
+              : { label: "View", onClick: plain, undo },
+        },
+        {
+          text: MOVED,
+          action: { label: "Undo", onClick: undoable, undo: true },
+        },
+      );
+      await user.click(screen.getByRole("button", { name: "Show 1" }));
+      expect(press(document.body, CTRL_Z)).toBe(false);
+      expect(plain).not.toHaveBeenCalled();
+      expect(screen.getByRole("status")).toHaveTextContent("Kind saved");
+      await user.click(screen.getByRole("button", { name: "Show 2" }));
+      press(document.body, CTRL_Z);
+      expect(undoable).toHaveBeenCalledTimes(1);
+      expect(plain).not.toHaveBeenCalled();
+    },
+  );
+
+  it("before the toast is shown and after it expired, Ctrl+Z does nothing; while it shows, it does", async () => {
+    const { user, onClick } = setupUndo();
+    expect(press(document.body, CTRL_Z)).toBe(false);
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    advance(10_000);
+    expect(press(document.body, CTRL_Z)).toBe(false);
+    expect(onClick).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    press(document.body, CTRL_Z);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("a plain toast replacing an undo toast takes Ctrl+Z away with it", async () => {
+    const onClick = vi.fn();
+    const user = setup(
+      { text: MOVED, action: { label: "Undo", onClick, undo: true } },
+      { text: "Event saved" },
+    );
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    await user.click(screen.getByRole("button", { name: "Show 2" }));
+    expect(press(document.body, CTRL_Z)).toBe(false);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).toHaveTextContent("Event saved");
+    // Not vacuous: shown again, the undo toast answers Ctrl+Z.
+    await user.click(screen.getByRole("button", { name: "Show 1" }));
+    press(document.body, CTRL_Z);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("useMaybeToast (CAL-013 Block 6)", () => {
+  function Probe(props: { onApi: (api: unknown) => void }) {
+    const api = useMaybeToast();
+    props.onApi(api);
+    return (
+      <button
+        type="button"
+        onClick={() => api?.showToast({ text: "From maybe" })}
+      >
+        Maybe
+      </button>
+    );
+  }
+
+  it("is null outside a ToastProvider, and does not throw", () => {
+    const seen: unknown[] = [];
+    render(<Probe onApi={(api) => seen.push(api)} />);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.every((api) => api === null)).toBe(true);
+  });
+
+  it("inside a provider it is the toast API: showToast shows a toast", async () => {
+    const seen: unknown[] = [];
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime });
+    render(
+      <ToastProvider>
+        <ToastHost />
+        <Probe onApi={(api) => seen.push(api)} />
+      </ToastProvider>,
+    );
+    expect(seen.at(-1)).not.toBeNull();
+    await user.click(screen.getByRole("button", { name: "Maybe" }));
+    expect(screen.getByRole("status")).toHaveTextContent("From maybe");
   });
 });

@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import {
@@ -20,6 +20,8 @@ import {
 } from "../sync/eventsStore";
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
 import { installMatchMedia } from "../test/media";
+import type { ChipCommand } from "./EventChip";
+import type { DropTarget } from "./useChipDrag";
 import { WeekView } from "./WeekView";
 
 vi.mock(
@@ -364,5 +366,59 @@ describe("the week passes activation through (CAL-012 Block 6)", () => {
     await user.click(chip);
     expect(onOpenEvent).toHaveBeenCalledTimes(1);
     expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
+  });
+});
+
+// CAL-013 Contract, Block 5: the week passes onChipCommand and onDropEvent
+// through to its TimeGrid.
+describe("the week passes moving through (CAL-013 Block 5)", () => {
+  function renderMovingWeek(rows: Event[]) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows });
+    const onChipCommand =
+      vi.fn<(event: Event, command: ChipCommand, chip: HTMLElement) => void>();
+    const onDropEvent = vi.fn<(event: Event, target: DropTarget) => void>();
+    render(
+      <MemoryRouter initialEntries={["/week/2026-10-14"]}>
+        <WeekView
+          selected={oct(14)}
+          now={NOW}
+          kinds={createKindsStore(kindsRepo)}
+          events={createEventsStore(eventsRepo)}
+          onChipCommand={onChipCommand}
+          onDropEvent={onDropEvent}
+        />
+      </MemoryRouter>,
+    );
+    return { onChipCommand, onDropEvent };
+  }
+
+  it("Alt+ArrowDown on a block reaches onChipCommand(event, down, chip)", async () => {
+    const swim = timed("Swim", oct(15, 7, 0), oct(15, 8, 0));
+    const { onChipCommand } = renderMovingWeek([swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    fireEvent.keyDown(chip, { key: "ArrowDown", altKey: true });
+    expect(onChipCommand).toHaveBeenCalledWith(swim, "down", chip);
+  });
+
+  it("a block dragged onto Friday 16 October, 14:00 reaches onDropEvent with that slot", async () => {
+    const swim = timed("Swim", oct(15, 7, 0), oct(15, 8, 0));
+    const { onDropEvent } = renderMovingWeek([swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 07:00 to 08:00",
+    });
+    const target = screen.getByRole("gridcell", {
+      name: "Friday 16 October, 14:00",
+    });
+    expect(target).toHaveAttribute("data-drop-slot", "2026-10-16T14:00");
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 160, clientY: 100 });
+    fireEvent.pointerUp(target, { clientX: 160, clientY: 100 });
+    expect(onDropEvent).toHaveBeenCalledWith(swim, {
+      kind: "slot",
+      start: oct(16, 14, 0),
+    });
   });
 });

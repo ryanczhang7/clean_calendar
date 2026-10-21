@@ -5,7 +5,9 @@ import { daysFrom, weekStart } from "../domain/timeGrid";
 import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { useBreakpoint } from "./media";
+import type { ChipCommand } from "./EventChip";
 import { TimeGrid } from "./TimeGrid";
+import type { DropTarget } from "./useChipDrag";
 
 // CAL-010 AC-3 and AC-6, Contract Block 4 (PO decisions 1 and 4). The view
 // owns its data; no heading of its own (the <h1> is CalendarPage's). On
@@ -25,6 +27,14 @@ export function WeekView(props: {
   onSlotActivate?: (start: Date, cell: HTMLElement) => void;
   /** CAL-012 Block 6: passed through to the grid. */
   onOpenEvent?: (event: Event, chip: HTMLElement) => void;
+  /** CAL-013 Block 5: passed through to the grid. */
+  onChipCommand?: (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  /** CAL-013 Block 5: passed through to the grid. */
+  onDropEvent?: (event: Event, target: DropTarget) => void;
 }): JSX.Element {
   const { selected, now } = props;
   const phone = useBreakpoint() === "phone";
@@ -55,6 +65,8 @@ export function WeekView(props: {
       loading={events.status !== "ready"}
       onSlotActivate={props.onSlotActivate}
       onOpenEvent={props.onOpenEvent}
+      onChipCommand={props.onChipCommand}
+      onDropEvent={props.onDropEvent}
       tabStop={{ day: new Date(y, m, d), hour: 9 }}
     />
   );

@@ -18,6 +18,10 @@ export type EventsStore = {
   refresh(): Promise<void>;
   subscribe(listener: () => void): () => void;
   getSnapshot(): EventsSnapshot;
+  /** CAL-013 Block 2. Hide one event from every snapshot at once; it stays
+   *  hidden across refreshes until the returned reveal() is called. A count
+   *  per id; each reveal() acts at most once. */
+  hide(id: string): () => void;
 };
 export type EventsReader = Pick<EventsRepo, "listLive">;
 
@@ -37,9 +41,16 @@ export function createEventsStore(repo: EventsReader): EventsStore {
   let snapshot: EventsSnapshot = { status: "loading", events: [] };
   const listeners = new Set<() => void>();
   let refreshing: Promise<void> | null = null;
+  // The rows the last refresh returned, before hiding; and the outstanding
+  // hides per id.
+  let rows: Event[] = [];
+  const hidden = new Map<string, number>();
 
-  const publish = (status: EventsStatus, events = snapshot.events) => {
-    snapshot = { status, events };
+  const visible = () =>
+    hidden.size === 0 ? rows : rows.filter((e) => !hidden.has(e.id));
+
+  const publish = (status: EventsStatus) => {
+    snapshot = { status, events: visible() };
     for (const listener of listeners) listener();
   };
 
@@ -47,8 +58,10 @@ export function createEventsStore(repo: EventsReader): EventsStore {
     if (refreshing !== null) return refreshing;
     refreshing = repo.listLive().then((result) => {
       refreshing = null;
-      if (result.status === "ok") publish("ready", liveSorted(result.rows));
-      else publish("unavailable");
+      if (result.status === "ok") {
+        rows = liveSorted(result.rows);
+        publish("ready");
+      } else publish("unavailable");
     });
     return refreshing;
   };
@@ -62,6 +75,19 @@ export function createEventsStore(repo: EventsReader): EventsStore {
       };
     },
     getSnapshot: () => snapshot,
+    hide(id) {
+      hidden.set(id, (hidden.get(id) ?? 0) + 1);
+      publish(snapshot.status);
+      let revealed = false;
+      return () => {
+        if (revealed) return;
+        revealed = true;
+        const count = (hidden.get(id) ?? 1) - 1;
+        if (count > 0) hidden.set(id, count);
+        else hidden.delete(id);
+        publish(snapshot.status);
+      };
+    },
   };
 }
 

@@ -1,4 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
 import { MemoryRouter, useLocation } from "react-router";
@@ -7,7 +13,9 @@ import type { Event, Kind } from "../data/rows";
 import { HOUR_HEIGHT, initialScrollTop } from "../domain/timeGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import { installMatchMedia } from "../test/media";
+import type { ChipCommand } from "./EventChip";
 import { TimeGrid } from "./TimeGrid";
+import type { DropTarget } from "./useChipDrag";
 
 vi.mock(
   "../lib/supabase",
@@ -783,5 +791,163 @@ describe("activating a slot and a chip (CAL-012 Block 6)", () => {
     await user.click(chip);
     expect(onOpenEvent).toHaveBeenCalledWith(holiday, chip);
     expect(onSlotActivate).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-013 Contract, Block 5 (AC-2, AC-3 at the time grid). With onDropEvent
+// every hour cell is a drop target carrying data-drop-slot={yyyy-MM-ddTHH:mm}
+// and a chip dropped there reaches onDropEvent(event, { kind: "slot",
+// start }); the all-day row's cells are NOT drop targets; without
+// onDropEvent no cell carries anything. Block and all-day chips take
+// onChipCommand; a clipped block passes the whole event, as onOpenEvent does.
+describe("moving from the time grid (CAL-013 Block 5)", () => {
+  type OnChipCommand = (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  type OnDropEvent = (event: Event, target: DropTarget) => void;
+  const SLOT = /, (\d\d):00$/;
+
+  function renderMoving(options: { events?: Event[]; drop?: boolean } = {}) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    const onSlotActivate = vi.fn<(start: Date, cell: HTMLElement) => void>();
+    const onChipCommand = vi.fn<OnChipCommand>();
+    const onDropEvent = vi.fn<OnDropEvent>();
+    render(
+      <MemoryRouter initialEntries={["/week/2026-10-14"]}>
+        <TimeGrid
+          days={WEEK}
+          label={WEEK_LABEL}
+          events={options.events ?? []}
+          kinds={KINDS}
+          now={NOW}
+          loading={false}
+          onOpenEvent={onOpenEvent}
+          onSlotActivate={onSlotActivate}
+          onChipCommand={onChipCommand}
+          {...(options.drop === false ? {} : { onDropEvent })}
+        />
+      </MemoryRouter>,
+    );
+    return { onOpenEvent, onSlotActivate, onChipCommand, onDropEvent };
+  }
+
+  const slot = (name: string) => screen.getByRole("gridcell", { name });
+
+  function drag(chip: HTMLElement, target: Element) {
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 100, clientY: 160 });
+    fireEvent.pointerUp(target, { clientX: 100, clientY: 160 });
+  }
+
+  it("with onDropEvent each of the 168 hour cells carries data-drop-slot = its day and hour; the all-day cells carry nothing; without it, nothing does", () => {
+    renderMoving({ drop: false });
+    expect(
+      document.querySelectorAll("[data-drop-slot], [data-drop-day]"),
+    ).toHaveLength(0);
+    cleanup();
+    media?.restore();
+    renderMoving();
+    const hourCells = screen
+      .getAllByRole("gridcell")
+      .filter((c) => SLOT.test(c.getAttribute("aria-label") ?? ""));
+    expect(hourCells).toHaveLength(168);
+    expect(document.querySelectorAll("[data-drop-slot]")).toHaveLength(168);
+    expect(document.querySelectorAll("[data-drop-day]")).toHaveLength(0);
+    expect(slot("Thursday 15 October, 14:00")).toHaveAttribute(
+      "data-drop-slot",
+      "2026-10-15T14:00",
+    );
+    expect(slot("Monday 12 October, 00:00")).toHaveAttribute(
+      "data-drop-slot",
+      "2026-10-12T00:00",
+    );
+    expect(slot("Sunday 18 October, 23:00")).toHaveAttribute(
+      "data-drop-slot",
+      "2026-10-18T23:00",
+    );
+    expect(allDayCell("Monday 12 October")).not.toHaveAttribute(
+      "data-drop-slot",
+    );
+  });
+
+  it("a block dragged onto Thursday 15 October, 14:00 reaches onDropEvent(event, { slot: 15 Oct 14:00 }), and does not open", () => {
+    const swim = timed("Swim", 14, [9, 0], [10, 30]);
+    const { onDropEvent, onOpenEvent, onSlotActivate } = renderMoving({
+      events: [swim],
+    });
+    const chip = screen.getByRole("button", {
+      name: "Swim, Gym, 09:00 to 10:30",
+    });
+    drag(chip, slot("Thursday 15 October, 14:00"));
+    expect(onDropEvent).toHaveBeenCalledTimes(1);
+    expect(onDropEvent).toHaveBeenCalledWith(swim, {
+      kind: "slot",
+      start: oct(15, 14, 0),
+    });
+    fireEvent.click(chip);
+    expect(onOpenEvent).not.toHaveBeenCalled();
+    expect(onSlotActivate).not.toHaveBeenCalled();
+  });
+
+  it("an all-day chip dragged onto a slot reaches onDropEvent with that slot (the page keeps it all-day)", () => {
+    const hotel = allDay("Hotel", 14);
+    const { onDropEvent } = renderMoving({ events: [hotel] });
+    drag(
+      screen.getByRole("button", { name: "Hotel, Gym, all day" }),
+      slot("Friday 16 October, 14:00"),
+    );
+    expect(onDropEvent).toHaveBeenCalledWith(hotel, {
+      kind: "slot",
+      start: oct(16, 14, 0),
+    });
+  });
+
+  it("a block dropped on the all-day row is no drop; dropped on a slot after that, it is", () => {
+    const swim = timed("Swim", 14, [9, 0], [10, 30]);
+    const { onDropEvent } = renderMoving({ events: [swim] });
+    const chip = () =>
+      screen.getByRole("button", { name: "Swim, Gym, 09:00 to 10:30" });
+    drag(chip(), allDayCell("Thursday 15 October"));
+    expect(onDropEvent).not.toHaveBeenCalled();
+    drag(chip(), slot("Thursday 15 October, 11:00"));
+    expect(onDropEvent).toHaveBeenCalledTimes(1);
+  });
+
+  it("Alt+ArrowDown and Alt+Shift+ArrowDown on a block reach onChipCommand as down and lengthen, with the block's button", () => {
+    const swim = timed("Swim", 14, [10, 0], [11, 15]);
+    const { onChipCommand } = renderMoving({ events: [swim] });
+    const chip = screen.getByRole("button", {
+      name: "Swim, Gym, 10:00 to 11:15",
+    });
+    expect(chip).toHaveAttribute("data-event-id", swim.id);
+    fireEvent.keyDown(chip, { key: "ArrowDown", altKey: true });
+    fireEvent.keyDown(chip, { key: "ArrowDown", altKey: true, shiftKey: true });
+    expect(onChipCommand.mock.calls).toStrictEqual([
+      [swim, "down", chip],
+      [swim, "lengthen", chip],
+    ]);
+  });
+
+  it("an all-day chip's Delete reaches onChipCommand(event, delete, chip)", () => {
+    const hotel = allDay("Hotel", 14);
+    const { onChipCommand } = renderMoving({ events: [hotel] });
+    const chip = screen.getByRole("button", { name: "Hotel, Gym, all day" });
+    fireEvent.keyDown(chip, { key: "Delete" });
+    expect(onChipCommand).toHaveBeenCalledWith(hotel, "delete", chip);
+  });
+
+  it("a clipped block - the 15 Oct half of 14 Oct 22:00 - 15 Oct 02:00 - passes the whole event", () => {
+    const late = event("Late", oct(14, 22, 0), oct(15, 2, 0));
+    const { onChipCommand } = renderMoving({ events: [late] });
+    const halves = screen.getAllByRole("button", {
+      name: "Late, Gym, 22:00 to 02:00",
+    });
+    expect(halves).toHaveLength(2);
+    const second = halves[1] as HTMLElement;
+    fireEvent.keyDown(second, { key: "ArrowDown", altKey: true });
+    expect(onChipCommand).toHaveBeenCalledWith(late, "down", second);
   });
 });

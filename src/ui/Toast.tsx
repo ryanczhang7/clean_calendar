@@ -14,7 +14,12 @@ import styles from "./Toast.module.css";
 // 6 s without an action, 10 s with one, the timer starting at showToast.
 export type Toast = {
   text: string;
-  action?: { label: string; onClick: () => void };
+  action?: {
+    label: string;
+    onClick: () => void;
+    /** Ctrl+Z / Cmd+Z runs it while shown (CAL-013 AC-5). */
+    undo?: boolean;
+  };
   tone?: "status" | "alert";
 };
 
@@ -23,7 +28,7 @@ const WITH_ACTION_MS = 10_000;
 
 type Shown = { toast: Toast; id: number };
 
-type ToastApi = { showToast(t: Toast): void; dismiss(): void };
+export type ToastApi = { showToast(t: Toast): void; dismiss(): void };
 
 type ToastState = ToastApi & { current: Shown | null };
 
@@ -49,6 +54,26 @@ export function ToastProvider({
     return () => clearTimeout(timer);
   }, [current]);
 
+  // CAL-013 Block 6: while an undo toast shows, Ctrl+Z / Cmd+Z outside an
+  // editable field runs its action once and dismisses it.
+  useEffect(() => {
+    const action = current?.toast.action;
+    if (!action?.undo) return;
+    let done = false;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (done) return;
+      if (e.key !== "z" && e.key !== "Z") return;
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (isEditable(e.target)) return;
+      done = true;
+      e.preventDefault();
+      action.onClick();
+      setCurrent(null);
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [current]);
+
   const value = useMemo(
     () => ({ current, showToast, dismiss }),
     [current, showToast, dismiss],
@@ -56,6 +81,16 @@ export function ToastProvider({
   return (
     <ToastContext.Provider value={value}>{children}</ToastContext.Provider>
   );
+}
+
+function isEditable(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target.isContentEditable) return true;
+  if (target.closest("[contenteditable]:not([contenteditable='false'])")) {
+    return true;
+  }
+  const tag = target.tagName;
+  return tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
 }
 
 function useToastState(): ToastState {
@@ -69,6 +104,17 @@ function useToastState(): ToastState {
 export function useToast(): ToastApi {
   const { showToast, dismiss } = useToastState();
   return useMemo(() => ({ showToast, dismiss }), [showToast, dismiss]);
+}
+
+/** The toast API, or null outside a ToastProvider (never throws). */
+export function useMaybeToast(): ToastApi | null {
+  const state = useContext(ToastContext);
+  const showToast = state?.showToast;
+  const dismiss = state?.dismiss;
+  return useMemo(
+    () => (showToast && dismiss ? { showToast, dismiss } : null),
+    [showToast, dismiss],
+  );
 }
 
 function ToastBody(props: { toast: Toast; dismiss: () => void }): JSX.Element {

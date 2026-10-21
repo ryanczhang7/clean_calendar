@@ -1,13 +1,24 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Event, Kind } from "../data/rows";
 import { blocksAt, parseCss, propertyValue } from "../test/css";
 import { installMatchMedia } from "../test/media";
-import { type ChipKind, chipName, EventChip } from "./EventChip";
+import {
+  type ChipCommand,
+  type ChipKind,
+  chipName,
+  EventChip,
+} from "./EventChip";
 
 vi.mock(
   "../lib/supabase",
@@ -478,3 +489,180 @@ function cleanupChip(): void {
   media?.restore();
   media = null;
 }
+
+// CAL-013 Contract, Block 5 (AC-3, AC-4 at the chip; accessibility.md
+// "Delete / Backspace", "Alt+arrows", "Alt+Shift+Down/Up"). With onCommand,
+// a mapped key calls onCommand(event, command, the chip button), is
+// preventDefault-ed and does NOT propagate (the month grid's arrows and the
+// page's shortcuts never see it); any other key, or one with Ctrl or Meta
+// held, is left alone. dragProps are spread onto the button. The button
+// carries data-event-id={event.id} always (the page's focus hook, Block 8).
+// Each "left alone" case is paired with a mapped key in the same render, so
+// it cannot pass against a chip that ignores keys altogether.
+describe("onCommand, dragProps and data-event-id (CAL-013 Block 5)", () => {
+  type OnCommand = (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+
+  function renderCommanding(
+    variant: "chip" | "block" | undefined,
+    props: {
+      onCommand?: OnCommand;
+      dragProps?: {
+        onPointerDown?: () => void;
+        onClickCapture?: () => void;
+      };
+      event?: Event;
+    } = {},
+  ) {
+    media = installMatchMedia({ colorScheme: "light", width: 1280 });
+    const onParentKey = vi.fn<(key: string) => void>();
+    render(
+      <MemoryRouter>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: a stand-in for the grid, observed for keys only */}
+        <div data-testid="parent" onKeyDown={(e) => onParentKey(e.key)}>
+          <EventChip
+            event={props.event ?? TIMED}
+            kind={LIVE}
+            {...(variant === undefined ? {} : { variant, height: 72 })}
+            {...(props.onCommand === undefined
+              ? {}
+              : { onCommand: props.onCommand })}
+            {...(props.dragProps === undefined
+              ? {}
+              : { dragProps: props.dragProps })}
+          />
+        </div>
+      </MemoryRouter>,
+    );
+    return { onParentKey, chip: screen.getByRole("button") };
+  }
+
+  type Keys = { key: string } & Partial<
+    Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">
+  >;
+
+  /** keydown on the chip; true when it was preventDefault-ed. */
+  const press = (chip: HTMLElement, init: Keys) =>
+    !fireEvent.keyDown(chip, init);
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "the %s's button carries data-event-id = the event's id",
+    (_label, variant) => {
+      const { chip } = renderCommanding(variant);
+      expect(chip).toHaveAttribute("data-event-id", TIMED.id);
+    },
+  );
+
+  it.each<[string, ChipCommand, Keys]>([
+    ["Delete", "delete", { key: "Delete" }],
+    ["Backspace", "delete", { key: "Backspace" }],
+    ["Alt+ArrowLeft", "left", { key: "ArrowLeft", altKey: true }],
+    ["Alt+ArrowRight", "right", { key: "ArrowRight", altKey: true }],
+    ["Alt+ArrowUp", "up", { key: "ArrowUp", altKey: true }],
+    ["Alt+ArrowDown", "down", { key: "ArrowDown", altKey: true }],
+    [
+      "Alt+Shift+ArrowDown",
+      "lengthen",
+      { key: "ArrowDown", altKey: true, shiftKey: true },
+    ],
+    [
+      "Alt+Shift+ArrowUp",
+      "shorten",
+      { key: "ArrowUp", altKey: true, shiftKey: true },
+    ],
+  ])(
+    "%s calls onCommand(event, %j, the button) once, preventDefaults, and stops at the chip",
+    (_label, command, init) => {
+      const onCommand = vi.fn<OnCommand>();
+      const { chip, onParentKey } = renderCommanding(undefined, { onCommand });
+      expect(press(chip, init)).toBe(true);
+      expect(onCommand).toHaveBeenCalledTimes(1);
+      expect(onCommand).toHaveBeenCalledWith(TIMED, command, chip);
+      expect(onParentKey).not.toHaveBeenCalled();
+    },
+  );
+
+  it("the block variant maps keys the same: Alt+Shift+ArrowDown is lengthen, with the block's button", () => {
+    const onCommand = vi.fn<OnCommand>();
+    const { chip } = renderCommanding("block", { onCommand });
+    expect(
+      press(chip, { key: "ArrowDown", altKey: true, shiftKey: true }),
+    ).toBe(true);
+    expect(onCommand).toHaveBeenCalledWith(TIMED, "lengthen", chip);
+  });
+
+  it.each<[string, Keys]>([
+    ["ArrowRight without Alt", { key: "ArrowRight" }],
+    ["Shift+ArrowDown without Alt", { key: "ArrowDown", shiftKey: true }],
+    ["Ctrl+Alt+ArrowRight", { key: "ArrowRight", altKey: true, ctrlKey: true }],
+    ["Meta+Alt+ArrowLeft", { key: "ArrowLeft", altKey: true, metaKey: true }],
+    ["Ctrl+Delete", { key: "Delete", ctrlKey: true }],
+    ["Meta+Backspace", { key: "Backspace", metaKey: true }],
+    ["x", { key: "x" }],
+    ["Escape", { key: "Escape" }],
+  ])(
+    "%s is left alone - no command, not prevented, it reaches the parent; Delete then is a command",
+    (_label, init) => {
+      const onCommand = vi.fn<OnCommand>();
+      const { chip, onParentKey } = renderCommanding(undefined, { onCommand });
+      expect(press(chip, init)).toBe(false);
+      expect(onCommand).not.toHaveBeenCalled();
+      expect(onParentKey).toHaveBeenCalledWith(init.key);
+      press(chip, { key: "Delete" });
+      expect(onCommand).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("without onCommand, Delete is left alone: not prevented, it reaches the parent; with onCommand it is not", () => {
+    const { chip, onParentKey } = renderCommanding(undefined);
+    expect(press(chip, { key: "Delete" })).toBe(false);
+    expect(onParentKey).toHaveBeenCalledWith("Delete");
+    cleanupChip();
+    const onCommand = vi.fn<OnCommand>();
+    const active = renderCommanding(undefined, { onCommand });
+    expect(press(active.chip, { key: "Delete" })).toBe(true);
+    expect(active.onParentKey).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "the %s spreads dragProps onto its button: pointerdown and the click's capture reach them",
+    (_label, variant) => {
+      const onPointerDown = vi.fn();
+      const onClickCapture = vi.fn();
+      const { chip } = renderCommanding(variant, {
+        dragProps: { onPointerDown, onClickCapture },
+      });
+      fireEvent.pointerDown(chip, { button: 0, clientX: 5, clientY: 5 });
+      fireEvent.click(chip);
+      expect(onPointerDown).toHaveBeenCalledTimes(1);
+      expect(onClickCapture).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "the %s's markup is the same with and without onCommand and dragProps, and carries data-event-id",
+    (_label, variant) => {
+      const { chip: plain } = renderCommanding(variant);
+      const without = plain.outerHTML;
+      cleanupChip();
+      const { chip: active } = renderCommanding(variant, {
+        onCommand: vi.fn<OnCommand>(),
+        dragProps: { onPointerDown: vi.fn(), onClickCapture: vi.fn() },
+      });
+      expect(active.outerHTML).toBe(without);
+      expect(active).toHaveAttribute("data-event-id", TIMED.id);
+    },
+  );
+});

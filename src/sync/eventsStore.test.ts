@@ -374,3 +374,116 @@ describe("useEventsInRange(start, end, store) (Block 4)", () => {
     });
   });
 });
+
+// CAL-013 Contract, Block 2 (AC-4's "disappears from the view at once"):
+// hide(id) drops one event from every snapshot synchronously, keeps it out
+// across refreshes, and the returned reveal() lets it back - only if the
+// store's rows still hold it. A count per id: two outstanding hides need two
+// reveals. Each reveal() acts once (Block 2 as amended by RED).
+describe("hide(id) and its reveal() (CAL-013 Block 2)", () => {
+  const a = ev(1, at(10, 14, 9), at(10, 14, 10));
+  const b = ev(2, at(10, 15, 9), at(10, 15, 10));
+
+  async function loaded(): Promise<ReturnType<typeof createEventsStore>> {
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [a, b] });
+    const store = createEventsStore(repo);
+    await store.refresh();
+    return store;
+  }
+
+  it("publishes, at once and without a request, a snapshot without the event - status unchanged", async () => {
+    const store = await loaded();
+    const listener = vi.fn();
+    store.subscribe(listener);
+    store.hide(a.id);
+    expect(store.getSnapshot()).toStrictEqual({ status: "ready", events: [b] });
+    expect(listener).toHaveBeenCalled();
+    expect(repo.listLive).toHaveBeenCalledTimes(1);
+  });
+
+  it("getSnapshot() is a new object after hide, and the same one until the next change", async () => {
+    const store = await loaded();
+    const before = store.getSnapshot();
+    store.hide(a.id);
+    const after = store.getSnapshot();
+    expect(after).not.toBe(before);
+    expect(store.getSnapshot()).toBe(after);
+  });
+
+  it("stays hidden across a refresh that still returns it", async () => {
+    const store = await loaded();
+    store.hide(a.id);
+    await store.refresh();
+    expect(repo.listLive).toHaveBeenCalledTimes(2);
+    expect(store.getSnapshot().events).toStrictEqual([b]);
+  });
+
+  it("reveal() brings back a row the store still holds, in its sorted place", async () => {
+    const store = await loaded();
+    const reveal = store.hide(a.id);
+    await store.refresh();
+    reveal();
+    expect(store.getSnapshot()).toStrictEqual({
+      status: "ready",
+      events: [a, b],
+    });
+  });
+
+  it("reveal() after the row was deleted brings nothing back: the refresh already dropped it", async () => {
+    const store = await loaded();
+    const reveal = store.hide(a.id);
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [b] });
+    await store.refresh();
+    reveal();
+    expect(store.getSnapshot().events).toStrictEqual([b]);
+    // Not vacuous: a row that does come back later is shown.
+    repo.listLive.mockResolvedValue({ status: "ok", rows: [a, b] });
+    await store.refresh();
+    expect(store.getSnapshot().events).toStrictEqual([a, b]);
+  });
+
+  it("two hides of one id need two reveals", async () => {
+    const store = await loaded();
+    const first = store.hide(a.id);
+    const second = store.hide(a.id);
+    first();
+    expect(store.getSnapshot().events).toStrictEqual([b]);
+    second();
+    expect(store.getSnapshot().events).toStrictEqual([a, b]);
+  });
+
+  it("one reveal() called twice counts once: the other hide still holds", async () => {
+    const store = await loaded();
+    const first = store.hide(a.id);
+    store.hide(a.id);
+    first();
+    first();
+    expect(store.getSnapshot().events).toStrictEqual([b]);
+  });
+
+  it("hiding one event leaves another hidden one hidden when it is revealed", async () => {
+    const store = await loaded();
+    const revealA = store.hide(a.id);
+    store.hide(b.id);
+    expect(store.getSnapshot().events).toStrictEqual([]);
+    revealA();
+    expect(store.getSnapshot().events).toStrictEqual([a]);
+  });
+
+  it("useEventsInRange re-renders without the hidden event", async () => {
+    const store = await loaded();
+    const { result } = renderHook(() =>
+      useEventsInRange(at(10, 12), at(10, 19), store),
+    );
+    expect(result.current.events).toStrictEqual([a, b]);
+    let reveal: () => void = () => {};
+    act(() => {
+      reveal = store.hide(a.id);
+    });
+    expect(result.current.events).toStrictEqual([b]);
+    act(() => {
+      reveal();
+    });
+    expect(result.current.events).toStrictEqual([a, b]);
+  });
+});

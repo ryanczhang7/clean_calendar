@@ -127,6 +127,12 @@
   pointer-events: auto;
 }
 
+/* CAL-013: while a chip is dragged, the hour cell under the pointer is the
+   drop target, not a block lying over it. */
+.timeGrid[data-dragging] .block {
+  pointer-events: none;
+}
+
 .nowLine {
   position: absolute;
   left: 0;

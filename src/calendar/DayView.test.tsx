@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
 import {
@@ -20,6 +20,8 @@ import {
 } from "../sync/eventsStore";
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
 import { installMatchMedia } from "../test/media";
+import type { ChipCommand } from "./EventChip";
+import type { DropTarget } from "./useChipDrag";
 import { DayView } from "./DayView";
 
 vi.mock(
@@ -263,5 +265,59 @@ describe("the day passes activation through (CAL-012 Block 6)", () => {
     });
     await user.click(chip);
     expect(onOpenEvent).toHaveBeenCalledWith(swim, chip);
+  });
+});
+
+// CAL-013 Contract, Block 5: the day passes onChipCommand and onDropEvent
+// through to its TimeGrid.
+describe("the day passes moving through (CAL-013 Block 5)", () => {
+  function renderMovingDay(rows: Event[]) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows });
+    const onChipCommand =
+      vi.fn<(event: Event, command: ChipCommand, chip: HTMLElement) => void>();
+    const onDropEvent = vi.fn<(event: Event, target: DropTarget) => void>();
+    render(
+      <MemoryRouter initialEntries={["/day/2026-10-14"]}>
+        <DayView
+          selected={oct(14)}
+          now={NOW}
+          kinds={createKindsStore(kindsRepo)}
+          events={createEventsStore(eventsRepo)}
+          onChipCommand={onChipCommand}
+          onDropEvent={onDropEvent}
+        />
+      </MemoryRouter>,
+    );
+    return { onChipCommand, onDropEvent };
+  }
+
+  it("Alt+Shift+ArrowDown on a block reaches onChipCommand(event, lengthen, chip)", async () => {
+    const swim = timed("Swim", oct(14, 10, 0), oct(14, 11, 15));
+    const { onChipCommand } = renderMovingDay([swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 10:00 to 11:15",
+    });
+    fireEvent.keyDown(chip, { key: "ArrowDown", altKey: true, shiftKey: true });
+    expect(onChipCommand).toHaveBeenCalledWith(swim, "lengthen", chip);
+  });
+
+  it("a block dragged onto Wednesday 14 October, 16:00 reaches onDropEvent with that slot", async () => {
+    const swim = timed("Swim", oct(14, 10, 0), oct(14, 11, 15));
+    const { onDropEvent } = renderMovingDay([swim]);
+    const chip = await screen.findByRole("button", {
+      name: "Swim, Gym, 10:00 to 11:15",
+    });
+    const target = screen.getByRole("gridcell", {
+      name: "Wednesday 14 October, 16:00",
+    });
+    expect(target).toHaveAttribute("data-drop-slot", "2026-10-14T16:00");
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 100, clientY: 400 });
+    fireEvent.pointerUp(target, { clientX: 100, clientY: 400 });
+    expect(onDropEvent).toHaveBeenCalledWith(swim, {
+      kind: "slot",
+      start: oct(14, 16, 0),
+    });
   });
 });

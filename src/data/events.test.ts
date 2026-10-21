@@ -262,3 +262,45 @@ describe("events failures resolve, never throw (AC-6)", () => {
     ).resolves.toStrictEqual({ status: "offline" });
   });
 });
+
+// CAL-013 Contract, Block 2: restore is the mirror of remove - the undo of a
+// delete is a patch of deleted_at = null (components.md, Undo toast for
+// delete), conditional on the token the delete returned.
+describe("events.restore clears deleted_at (CAL-013 AC-5, Block 2)", () => {
+  test("issues a PATCH whose body is exactly { deleted_at: null }, filtered on the id and the exact expected updated_at", async () => {
+    const seen = onTable("events", () => HttpResponse.json([eventRowFull]));
+    await eventsRepo(testClient()).restore(EVENT_ID, UPDATED_AT);
+
+    expect(seen.map((r) => r.method)).toStrictEqual(["PATCH"]);
+    const [req] = seen;
+    expect(req?.url.pathname).toBe("/rest/v1/events");
+    expect(req?.url.searchParams.get("id")).toBe(`eq.${EVENT_ID}`);
+    expect(req?.url.searchParams.get("updated_at")).toBe(`eq.${UPDATED_AT}`);
+    expect(req?.url.searchParams.get("select")).toBe("*");
+    expect(preferTokens(req?.prefer ?? null)).toContain(
+      "return=representation",
+    );
+    expect(req?.body).toStrictEqual({ deleted_at: null });
+  });
+
+  test("one row matched is ok with the restored row, mapped", async () => {
+    onTable("events", () => HttpResponse.json([eventRowFull]));
+    await expect(
+      eventsRepo(testClient()).restore(EVENT_ID, UPDATED_AT),
+    ).resolves.toStrictEqual({ status: "ok", row: eventFull });
+  });
+
+  test("zero rows matched - the token is stale - is a conflict, and does not throw", async () => {
+    onTable("events", () => HttpResponse.json([]));
+    await expect(
+      eventsRepo(testClient()).restore(EVENT_ID, UPDATED_AT),
+    ).resolves.toStrictEqual({ status: "conflict" });
+  });
+
+  test("a network failure is offline", async () => {
+    onTable("events", () => HttpResponse.error());
+    await expect(
+      eventsRepo(testClient()).restore(EVENT_ID, UPDATED_AT),
+    ).resolves.toStrictEqual({ status: "offline" });
+  });
+});
