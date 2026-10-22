@@ -4,6 +4,7 @@ import { vi } from "vitest";
 import type { Database } from "../data/database.types";
 import type { EventRow } from "../data/rows";
 import { onTable, type Recorded, TEST_ORIGIN } from "./msw";
+import { fakeRealtimeClient } from "./realtime-fixtures";
 
 // The fake `src/lib/supabase.ts` every CAL-003 test mocks in (CAL-003
 // Contract, Supabase client). Use it with
@@ -54,6 +55,9 @@ const auth = {
   signOut: vi.fn<() => Promise<AuthResult>>(),
 };
 
+/** The Realtime channel stub (CAL-016; see the note beside `client` below). */
+const realtime = fakeRealtimeClient();
+
 /** Every subscription's unsubscribe, counted together. */
 const unsubscribe = vi.fn<() => void>();
 
@@ -100,11 +104,14 @@ install();
 export const fake = {
   auth,
   unsubscribe,
+  /** The app client's Realtime channel stub: what `channel()` returned, and every call. */
+  realtime,
   /** Forget every session, listener and recorded call. */
   reset(): void {
     current = null;
     listeners.clear();
     install();
+    realtime.clear();
   },
   /** The session getSession() will resolve with from now on. */
   setSession(session: FakeSession): void {
@@ -154,6 +161,28 @@ const client = createClient<Database>(TEST_ORIGIN, "test-anon-key", {
 });
 Object.defineProperty(client, "auth", {
   value: auth,
+  configurable: true,
+  writable: true,
+});
+
+// CAL-016 Contract, callers list: `installOnlineSync()` starts the app's
+// Realtime stream, so every suite that renders the app's SyncStatus (the
+// shell, the routes, the calendar page) reaches `supabase.channel(...)`.
+// Measured in CAL-016 RED (2026-10-22, local): the real client's
+// `subscribe()` opens ws://supabase.test/realtime/v1/websocket, which MSW
+// refuses with "[MSW] Error: intercepted a WebSocket connection without a
+// matching event handler" on stderr, the channel reports CHANNEL_ERROR
+// ("transport failure") within ~3 ms, and the socket keeps reconnecting on
+// timers. So `channel` / `removeChannel` are the fake below, as `auth` is:
+// a channel records its bindings and reports no status until a test calls
+// `report(status)`. `fake.realtime` is the recorder; `fake.reset()` clears it.
+Object.defineProperty(client, "channel", {
+  value: realtime.channel,
+  configurable: true,
+  writable: true,
+});
+Object.defineProperty(client, "removeChannel", {
+  value: realtime.removeChannel,
   configurable: true,
   writable: true,
 });

@@ -20,10 +20,18 @@ import {
   overrideRowFull,
 } from "../test/rows-fixtures";
 import { held } from "../test/outbox-fixtures";
+import { changed } from "../test/realtime-fixtures";
+import { fake } from "../test/supabase-mock";
 import { db } from "./db";
 import type { Drain, DrainNotice } from "./drain";
 import { EPOCH, type Sync } from "./hydrate";
-import { appDrain, appSync, installOnlineSync, startSync } from "./startSync";
+import {
+  appDrain,
+  appRealtime,
+  appSync,
+  installOnlineSync,
+  startSync,
+} from "./startSync";
 
 vi.mock(
   "../lib/supabase",
@@ -230,5 +238,91 @@ describe("installOnlineSync(target) (CAL-015 Block 5)", () => {
     await goOnline();
     expect(drainRun).not.toHaveBeenCalled();
     expect(syncRun).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-016 Contract, Block 4 (PO decision 1): the installer SyncStatus mounts
+// for as long as the owner is signed in also runs the app's Realtime stream,
+// and its uninstaller stops it. `startSync()` is as shipped and does not
+// touch the stream. The app's client is the mocked one, whose `channel` /
+// `removeChannel` are the recording stub in supabase-mock.ts (`fake.realtime`).
+describe("installOnlineSync() also runs the app's Realtime stream (CAL-016 Block 4)", () => {
+  let drainRun: MockInstance<Drain["run"]>;
+  let syncRun: MockInstance<Sync["run"]>;
+  const uninstall: (() => void)[] = [];
+
+  beforeEach(() => {
+    fake.realtime.clear();
+    drainRun = vi
+      .spyOn(appDrain, "run")
+      .mockResolvedValue({ sent: 0, stoppedAt: "end" });
+    syncRun = vi.spyOn(appSync, "run").mockResolvedValue({ status: "ok" });
+  });
+
+  afterEach(() => {
+    for (const stop of uninstall.splice(0)) stop();
+    drainRun.mockRestore();
+    syncRun.mockRestore();
+  });
+
+  const settle = () => new Promise((done) => setTimeout(done, 20));
+
+  it("installing starts appRealtime once and the uninstaller stops it once", () => {
+    const start = vi.spyOn(appRealtime, "start");
+    const stop = vi.spyOn(appRealtime, "stop");
+    try {
+      const off = installOnlineSync(window);
+      uninstall.push(off);
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(stop).not.toHaveBeenCalled();
+      off();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(stop).toHaveBeenCalledTimes(1);
+    } finally {
+      start.mockRestore();
+      stop.mockRestore();
+    }
+  });
+
+  it("startSync() neither starts nor stops appRealtime, and opens no channel", async () => {
+    const start = vi.spyOn(appRealtime, "start");
+    const stop = vi.spyOn(appRealtime, "stop");
+    try {
+      await expect(startSync()).resolves.toStrictEqual({ status: "ok" });
+      expect(drainRun).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
+      expect(stop).not.toHaveBeenCalled();
+      expect(fake.realtime.channel).not.toHaveBeenCalled();
+    } finally {
+      start.mockRestore();
+      stop.mockRestore();
+    }
+  });
+
+  it("the app's stream is one channel named cache on the app's client; a rejoin runs appSync once and no drain; the uninstaller removes that channel", async () => {
+    const off = installOnlineSync(window);
+    uninstall.push(off); // also on failure; a second call is a no-op stop
+    expect(fake.realtime.channel.mock.calls).toStrictEqual([["cache"]]);
+    const [ch] = fake.realtime.channels;
+    expect(ch?.on).toHaveBeenCalledTimes(4);
+    ch?.report("SUBSCRIBED");
+    await settle();
+    expect(syncRun).not.toHaveBeenCalled();
+    ch?.report("SUBSCRIBED");
+    await settle();
+    expect(syncRun).toHaveBeenCalledTimes(1);
+    expect(drainRun).not.toHaveBeenCalled();
+
+    off();
+    expect(fake.realtime.removeChannel.mock.calls).toStrictEqual([[ch]]);
+  });
+
+  it("a payload on the app's channel lands in the app's db", async () => {
+    uninstall.push(installOnlineSync(window));
+    const [ch] = fake.realtime.channels;
+    ch?.deliver(changed("INSERT", "events", eventRowFull));
+    await vi.waitFor(async () =>
+      expect(await db.events.toArray()).toStrictEqual([eventFull]),
+    );
   });
 });
