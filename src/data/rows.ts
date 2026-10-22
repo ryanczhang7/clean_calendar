@@ -46,6 +46,9 @@ export type Event = {
   deletedAt: string | null;
   createdAt: string;
   updatedAt: string;
+  /** CAL-015 Block 6: set only by the cached events store from the outbox;
+   *  never stored, never sent. Absent (no key at all) when nothing is pending. */
+  sync?: "saving" | "failed";
 };
 
 export type EventOverride = {
@@ -140,14 +143,19 @@ export function toKind(row: KindRow): Kind {
   };
 }
 
-export function fromNewKind(kind: NewKind): KindInsert {
-  return {
+/** CAL-015 Block 1: `id`, when given, is the id the client chose (PO decision 2). */
+export function fromNewKind(
+  kind: NewKind,
+  id?: string,
+): KindInsert & { id?: string } {
+  const row: KindInsert = {
     name: kind.name,
     color_light: kind.colorLight,
     color_dark: kind.colorDark,
     sort_order: kind.sortOrder,
     is_default: kind.isDefault,
   };
+  return id === undefined ? row : { id, ...row };
 }
 
 export function fromKind(kind: Kind): KindRow {
@@ -192,8 +200,12 @@ export function toEvent(row: EventRow): Event {
   };
 }
 
-export function fromNewEvent(event: NewEvent): EventInsert {
-  return {
+/** CAL-015 Block 1: `id`, when given, is the id the client chose (PO decision 2). */
+export function fromNewEvent(
+  event: NewEvent,
+  id?: string,
+): EventInsert & { id?: string } {
+  const row: EventInsert = {
     title: event.title,
     kind_id: event.kindId,
     starts_at: iso(event.startsAt),
@@ -205,6 +217,7 @@ export function fromNewEvent(event: NewEvent): EventInsert {
     origin: event.origin,
     capture_job_id: event.captureJobId,
   };
+  return id === undefined ? row : { id, ...row };
 }
 
 export function fromEvent(event: Event): EventRow {

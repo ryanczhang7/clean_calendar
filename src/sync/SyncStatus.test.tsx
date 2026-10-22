@@ -25,6 +25,7 @@ import {
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import type { CalendarDb, OutboxOp } from "./db";
 import type { Drain, DrainNotice } from "./drain";
+import { appDrain, appSync } from "./startSync";
 import { SyncStatus } from "./SyncStatus";
 import type { SyncState, SyncStateStore } from "./syncState";
 
@@ -390,5 +391,39 @@ describe("the drain's toasts (AC-2, AC-3, AC-5, Block 7, PO decision 7)", () => 
     const [back] = await ops(db);
     expect(back?.status).toBe("queued");
     expect(back !== undefined && "error" in back).toBe(false);
+  });
+});
+
+// CAL-015 Return 1 (Regressions): the app's indicator is what installs the
+// app's online listener (AC-2 "when the network returns", Block 5). Rendered
+// with no props at all, so every collaborator is the app's own.
+describe("the app's indicator drains when the network returns (AC-2, Block 5)", () => {
+  it("with the app's defaults, a window online event runs the app's drain then the app's sync, and after unmount a second one runs neither", async () => {
+    const drainRun = vi
+      .spyOn(appDrain, "run")
+      .mockResolvedValue({ sent: 0, stoppedAt: "end" });
+    const syncRun = vi
+      .spyOn(appSync, "run")
+      .mockResolvedValue({ status: "ok" });
+    try {
+      const { unmount } = render(<SyncStatus />);
+      await act(async () => {
+        window.dispatchEvent(new Event("online"));
+      });
+      await vi.waitFor(() => expect(syncRun).toHaveBeenCalledTimes(1));
+      expect(drainRun.mock.calls).toStrictEqual([[{ announce: true }]]);
+      const [drainAt] = drainRun.mock.invocationCallOrder;
+      const [syncAt] = syncRun.mock.invocationCallOrder;
+      expect(drainAt).toBeLessThan(syncAt ?? 0);
+
+      unmount();
+      window.dispatchEvent(new Event("online"));
+      await new Promise((done) => setTimeout(done, 30));
+      expect(drainRun).toHaveBeenCalledTimes(1);
+      expect(syncRun).toHaveBeenCalledTimes(1);
+    } finally {
+      drainRun.mockRestore();
+      syncRun.mockRestore();
+    }
   });
 });

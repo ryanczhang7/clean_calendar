@@ -6,14 +6,21 @@ import type { Event, EventOverride, Kind } from "../data/rows";
 // rows.ts - `Date` fields stay `Date`s (structured clone keeps them), the
 // server's stamps stay its exact strings.
 
+// CAL-015 Contract, Block 1: one queued write. Stored whole under `++seq`, so
+// filling the record in needed no schema version.
 export type OutboxOp = {
   seq?: number;
-  op: "insert" | "update" | "delete";
+  op: "insert" | "update" | "delete" | "restore";
   table: "kinds" | "events" | "event_overrides" | "reminders";
   id: string;
+  /** insert: the NewEvent / NewKind; update: the EventPatch / KindPatch; delete, restore: null. */
   patch: unknown;
-  expectedUpdatedAt: string | null;
+  /** The cache row's updatedAt when the op was queued; informational - the drain sends the cache row's current stamp. */
+  baseUpdatedAt: string | null;
   clientTs: string;
+  status: "queued" | "failed";
+  /** Set with status "failed". */
+  error?: { code: string; message: string; http?: number };
 };
 export type MetaRow = { key: string; value: string };
 export type ReminderRow = {
@@ -34,7 +41,7 @@ export class CalendarDb extends Dexie {
   overrides!: Table<EventOverride, string>;
   /** Declared here, filled by CAL-026. */
   reminders!: Table<ReminderRow, string>;
-  /** Declared here, filled by CAL-015. */
+  /** The pending writes, in `seq` order (CAL-015; outbox.ts, drain.ts). */
   outbox!: Table<OutboxOp, number>;
   /** The high-water marks, `mark:<table>` → the greatest `updatedAt` seen. */
   meta!: Table<MetaRow, string>;

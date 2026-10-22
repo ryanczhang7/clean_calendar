@@ -1,7 +1,7 @@
 import type { Table } from "dexie";
 import type { ListResult } from "../data/result";
 import type { Event, EventOverride, Kind } from "../data/rows";
-import type { CalendarDb } from "./db";
+import type { CalendarDb, OutboxOp } from "./db";
 
 // Incremental hydration of the cache from the server (CAL-014 AC-1, AC-2;
 // Contract Block 2). Each table keeps its own high-water mark in `meta`.
@@ -23,6 +23,13 @@ export type SyncResult = { status: "ok" } | { status: "unavailable" };
 
 type Synced = { id: string; updatedAt: string };
 
+// The outbox's name for each cached table (CAL-015 Block 5).
+const OUTBOX_TABLE: Record<string, OutboxOp["table"]> = {
+  kinds: "kinds",
+  events: "events",
+  overrides: "event_overrides",
+};
+
 /** One table's step of a pass; false when the server did not answer ok. */
 async function pull<T extends Synced>(
   db: CalendarDb,
@@ -38,9 +45,22 @@ async function pull<T extends Synced>(
   for (const row of result.rows) {
     if (row.updatedAt > greatest) greatest = row.updatedAt;
   }
-  // Rows and mark together: a mark never moves past rows not written.
-  await db.transaction("rw", table, db.meta, async () => {
-    await table.bulkPut(result.rows);
+  // Rows and mark together: a mark never moves past rows not written. A row
+  // with a queued or failed op is not written (CAL-015 Block 5, PO decision
+  // 6): the optimistic patch would be overwritten and reappear only when its
+  // op lands. The mark still moves past it; the drain writes its stamps.
+  await db.transaction("rw", table, db.meta, db.outbox, async () => {
+    const opTable = OUTBOX_TABLE[table.name];
+    const pending = new Set(
+      (await db.outbox.toArray())
+        .filter((op) => op.table === opTable)
+        .map((op) => op.id),
+    );
+    await table.bulkPut(
+      pending.size === 0
+        ? result.rows
+        : result.rows.filter((row) => !pending.has(row.id)),
+    );
     await db.meta.put({ key, value: greatest });
   });
   return true;

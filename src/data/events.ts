@@ -20,7 +20,10 @@ import {
 export type EventsRepo = {
   listLive(): Promise<ListResult<Event>>;
   listSince(since: string): Promise<ListResult<Event>>;
-  insert(input: NewEvent): Promise<Result<Event>>;
+  /** CAL-015 Block 8: `id`, when given, is POSTed as the row's id. */
+  insert(input: NewEvent, id?: string): Promise<Result<Event>>;
+  /** CAL-015 Block 8: one row by id, soft-deleted included; zero rows → conflict. */
+  get(id: string): Promise<Result<Event>>;
   update(
     id: string,
     patch: EventPatch,
@@ -65,11 +68,14 @@ export function eventsRepo(client: SupabaseClient<Database>): EventsRepo {
           .order("updated_at", { ascending: true }),
         toEvent,
       ),
-    insert: async (input) =>
+    insert: async (input, id) =>
       fromPostgrestOne(
-        await table().insert(fromNewEvent(input)).select("*"),
+        await table().insert(fromNewEvent(input, id)).select("*"),
         toEvent,
       ),
+    // No deleted_at filter: the drain needs the soft-deleted copy (AC-4).
+    get: async (id) =>
+      fromPostgrestOne(await table().select("*").eq("id", id), toEvent),
     update: (id, patch, expectedUpdatedAt) =>
       patchIfUnchanged(id, fromEventPatch(patch), expectedUpdatedAt),
     remove: (id, expectedUpdatedAt) =>

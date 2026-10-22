@@ -138,6 +138,42 @@ describe("createSyncStateStore (Block 7)", () => {
     expect(listener).toHaveBeenCalled();
   });
 
+  // CAL-015 Return 1 (Regressions): an edit queued while no pass runs -
+  // offline, or behind a 5xx - gets no `changed` notice, and must still be
+  // counted (AC-7). This drain fake never emits; only the outbox moves.
+  it("follows the outbox itself with no drain notice: a queued op reads Syncing 1 change, then a failed op is counted", async () => {
+    const store = createSyncStateStore(db, drain, window);
+    cleanups.push(store.subscribe(() => {}));
+    await vi.waitFor(() => expect(drain.subscribe).toHaveBeenCalled());
+    // Let the read made on subscribe settle first, so only the outbox
+    // following can see the writes below.
+    await new Promise((done) => setTimeout(done, 30));
+    expect(store.getSnapshot()).toStrictEqual({
+      online: true,
+      queued: 0,
+      failed: 0,
+    });
+
+    await db.outbox.add(op("a", "queued"));
+    await vi.waitFor(() =>
+      expect(store.getSnapshot()).toStrictEqual({
+        online: true,
+        queued: 1,
+        failed: 0,
+      }),
+    );
+    expect(statusLabel(store.getSnapshot())).toBe("Syncing 1 change");
+
+    await db.outbox.add(op("b", "failed"));
+    await vi.waitFor(() =>
+      expect(store.getSnapshot()).toStrictEqual({
+        online: true,
+        queued: 1,
+        failed: 1,
+      }),
+    );
+  });
+
   it("follows the window's offline and online events and navigator.onLine", async () => {
     const store = createSyncStateStore(db, drain, window);
     cleanups.push(store.subscribe(() => {}));

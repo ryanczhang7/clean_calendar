@@ -1,11 +1,11 @@
 import { liveQuery, type Subscription } from "dexie";
-import type { EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind } from "../data/rows";
 import {
   ensureDefaultKinds,
   type SeedOutcome,
   type SeedRepo,
 } from "../kinds/seedKinds";
-import type { CalendarDb } from "./db";
+import type { CalendarDb, OutboxOp } from "./db";
 import type { EventsSnapshot, EventsStore } from "./eventsStore";
 import type { Sync } from "./hydrate";
 import type { KindsSnapshot, KindsStore } from "./kindsStore";
@@ -141,6 +141,25 @@ export function createCachedKindsStore(
   };
 }
 
+/**
+ * CAL-015 Block 6: an event with any failed op is `sync: "failed"`, else with
+ * any queued op `sync: "saving"`; an event with no op is returned as it is,
+ * with no `sync` key at all. Kinds carry no marker (PO decision 11).
+ */
+function withSyncMarkers(rows: Event[], ops: OutboxOp[]): Event[] {
+  const marks = new Map<string, "saving" | "failed">();
+  for (const op of ops) {
+    if (op.table !== "events") continue;
+    if (op.status === "failed") marks.set(op.id, "failed");
+    else if (!marks.has(op.id)) marks.set(op.id, "saving");
+  }
+  if (marks.size === 0) return rows;
+  return rows.map((row) => {
+    const sync = marks.get(row.id);
+    return sync === undefined ? row : { ...row, sync };
+  });
+}
+
 export function createCachedEventsStore(
   db: CalendarDb,
   sync: Sync,
@@ -150,7 +169,10 @@ export function createCachedEventsStore(
   const table = cachedTable(
     db,
     sync,
-    () => db.events.toArray(),
+    // Both tables read in one querier, so the liveQuery observes the outbox
+    // too and a marker follows its op in and out (CAL-015 Block 6).
+    async () =>
+      withSyncMarkers(await db.events.toArray(), await db.outbox.toArray()),
     (status, rows): EventsSnapshot => {
       const events = liveSorted(rows);
       return {

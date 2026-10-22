@@ -1,14 +1,24 @@
-import { type EventsRepo, eventsRepo } from "../data/events";
+import type { EventsRepo } from "../data/events";
 import type { Result } from "../data/result";
 import type { Event, EventPatch, NewEvent } from "../data/rows";
-import { supabase } from "../lib/supabase";
-import { type EventsStore, eventsStore } from "./eventsStore";
+import { type CalendarDb, db } from "./db";
+import type { Drain } from "./drain";
+import type { EventsStore } from "./eventsStore";
+import {
+  enqueueDelete,
+  enqueueInsert,
+  enqueueRestore,
+  enqueueUpdate,
+  queuedResult,
+} from "./outbox";
+import { appDrain } from "./startSync";
 
 // Event writes (CAL-012, Contract Block 2). Exactly kindActions.ts's
-// discipline: online through the repository until CAL-015 routes them through
-// the outbox behind the same signatures. Nothing throws and nothing retries;
-// an ok result is not handed back until the store has refreshed, so a caller
-// that awaits it sees the new snapshot.
+// discipline. `createEventActions` is the in-memory factory, online through
+// the repository: nothing throws and nothing retries; an ok result is not
+// handed back until the store has refreshed, so a caller that awaits it sees
+// the new snapshot. CAL-015 routes the app's actions through the outbox
+// behind the same type (`createOutboxEventActions`, below).
 
 export type EventActions = {
   createEvent(input: NewEvent): Promise<Result<Event>>;
@@ -49,8 +59,36 @@ export function createEventActions(
   };
 }
 
-/** The app's actions, over `eventsRepo(supabase)` and `eventsStore`. */
-export const eventActions: EventActions = createEventActions(
-  eventsRepo(supabase),
-  eventsStore,
+/**
+ * CAL-015 Contract, Block 4 (PO decision 1): the same EventActions over the
+ * outbox. Each action writes the cache and queues one op, then resolves with
+ * the cache row - never waiting for the server. The caller's
+ * `expectedUpdatedAt` is ignored: the cache row's stamp is the token the
+ * drain sends (PO decision 3).
+ */
+export function createOutboxEventActions(
+  db: CalendarDb,
+  drain: Pick<Drain, "run">,
+  online: () => boolean = () => navigator.onLine,
+): EventActions {
+  return {
+    createEvent: async (input) =>
+      queuedResult(await enqueueInsert(db, "events", input), drain, online),
+    updateEvent: async (id, patch) =>
+      queuedResult(await enqueueUpdate(db, "events", id, patch), drain, online),
+    removeEvent: async (event) =>
+      queuedResult(await enqueueDelete(db, "events", event.id), drain, online),
+    restoreEvent: async (deleted) =>
+      queuedResult(
+        await enqueueRestore(db, "events", deleted.id),
+        drain,
+        online,
+      ),
+  };
+}
+
+/** The app's actions: the outbox over the app's `db`, sent by `appDrain`. */
+export const eventActions: EventActions = createOutboxEventActions(
+  db,
+  appDrain,
 );

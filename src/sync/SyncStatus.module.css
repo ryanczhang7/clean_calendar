@@ -1,0 +1,97 @@
+/* components.md, "Sync status indicator" (CAL-015 Contract, Block 7). A 20px
+   glyph and, from 1024px, a 12px label; the colour follows the state. */
+.root {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  color: var(--color-text-muted);
+}
+
+.status[data-state="synced"] {
+  color: var(--color-success);
+}
+
+.status[data-state="offline"] {
+  color: var(--color-warning);
+}
+
+.status[data-state="error"] {
+  color: var(--color-danger);
+}
+
+.glyph {
+  display: inline-block;
+  width: 20px;
+  height: 20px;
+  font-size: 16px;
+  line-height: 20px;
+  text-align: center;
+}
+
+/* The label is the accessible name everywhere; it is shown from 1024px. */
+.label {
+  display: none;
+  font-size: var(--font-size-xs);
+  line-height: var(--line-height-xs);
+}
+
+@media (min-width: 1024px) {
+  .label {
+    display: inline;
+  }
+}
+
+.problems,
+.action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--size-control);
+  padding: 0 var(--space-3);
+  border: none;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-text);
+  font: inherit;
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+}
+
+.problems {
+  color: var(--color-danger);
+}
+
+.action[data-variant="danger"] {
+  color: var(--color-danger);
+}
+
+.problems:focus-visible,
+.action:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.problem {
+  flex: 1 1 100%;
+}

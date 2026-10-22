@@ -3,7 +3,9 @@ import type { PostgrestError } from "@supabase/supabase-js";
 // What a repository call resolves to (CAL-005, AC-4 and AC-6). None throws.
 
 export type Failure =
-  | { status: "error"; code: string; message: string }
+  /** `http` is the response status when it is >= 400 (CAL-015 Block 1): it is
+   *  how the drain tells a refusal (4xx) from a server fault (5xx). */
+  | { status: "error"; code: string; message: string; http?: number }
   | { status: "offline" };
 
 export type Result<T> =
@@ -25,6 +27,14 @@ type PostgrestReply<Row> = {
 // is the discriminator - never the message text.
 function failure(error: PostgrestError, status: number): Failure {
   if (status === 0) return { status: "offline" };
+  if (status >= 400) {
+    return {
+      status: "error",
+      code: error.code,
+      message: error.message,
+      http: status,
+    };
+  }
   return { status: "error", code: error.code, message: error.message };
 }
 

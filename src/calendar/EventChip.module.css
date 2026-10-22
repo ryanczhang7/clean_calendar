@@ -31,8 +31,41 @@
   inset: -2px 0;
 }
 
+/* CAL-015 Block 6 (components.md, Event chip states): written optimistically
+   and not yet confirmed - a 2px dashed outline in the text colour. Before
+   :focus-visible, so the focus ring still wins on a focused chip. */
+.chip[data-sync="saving"] {
+  outline: 2px dashed currentColor;
+  outline-offset: -2px;
+}
+
 .chip:hover {
   box-shadow: var(--shadow-1);
+}
+
+/* An op the server refused (4xx): the danger ring, kept on hover, and the "!"
+   badge after the title. */
+.chip[data-sync="failed"] {
+  box-shadow: 0 0 0 2px var(--color-danger);
+}
+
+.chip[data-sync="failed"]:hover {
+  box-shadow:
+    0 0 0 2px var(--color-danger),
+    var(--shadow-1);
+}
+
+.badge {
+  flex: none;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: var(--color-danger);
+  color: var(--color-danger-contrast);
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 14px;
+  text-align: center;
 }
 
 .chip:focus-visible {
