@@ -206,6 +206,7 @@ describe("kinds failures resolve, never throw (AC-6)", () => {
       status: "error",
       code: "42501",
       message: 'permission denied for table "kinds"',
+      http: 403,
     });
   });
 
@@ -219,6 +220,7 @@ describe("kinds failures resolve, never throw (AC-6)", () => {
       status: "error",
       code: "23505",
       message: "duplicate key value violates unique constraint",
+      http: 409,
     });
   });
 
@@ -402,6 +404,7 @@ describe("kinds.insertMany (CAL-006 AC-3, AC-5: one atomic statement)", () => {
       code: "23505",
       message:
         'duplicate key value violates unique constraint "kinds_live_name_key"',
+      http: 409,
     });
     expect(seen).toHaveLength(1);
   });
@@ -413,4 +416,73 @@ describe("kinds.insertMany (CAL-006 AC-3, AC-5: one atomic statement)", () => {
     ).resolves.toStrictEqual({ status: "offline" });
     expect(seen).toHaveLength(1);
   });
+});
+
+// CAL-015 Contract, Block 8 (PO decision 2) and Block 1 (PO decision 4).
+describe("kinds.insert with a client id (CAL-015 Block 8)", () => {
+  const input = {
+    name: "Work",
+    colorLight: "#1a73e8",
+    colorDark: "#8ab4f8",
+    sortOrder: 3,
+    isDefault: false,
+  };
+
+  test("POSTs the id the client chose beside the mapped columns", async () => {
+    const seen = onTable("kinds", () =>
+      HttpResponse.json([kindRowFull], { status: 201 }),
+    );
+    await kindsRepo(testClient()).insert(input, KIND_ID);
+    expect(seen[0]?.body).toStrictEqual({
+      id: KIND_ID,
+      name: "Work",
+      color_light: "#1a73e8",
+      color_dark: "#8ab4f8",
+      sort_order: 3,
+      is_default: false,
+    });
+  });
+});
+
+describe("kinds.get (CAL-015 Block 8)", () => {
+  test("GETs the one row by id, select=*, with no deleted_at filter, and maps it", async () => {
+    const seen = onTable("kinds", () => HttpResponse.json([kindRowFull]));
+    await expect(kindsRepo(testClient()).get(KIND_ID)).resolves.toStrictEqual({
+      status: "ok",
+      row: kindFull,
+    });
+    const [req] = seen;
+    expect(req?.method).toBe("GET");
+    expect(req?.url.searchParams.get("id")).toBe(`eq.${KIND_ID}`);
+    expect(req?.url.searchParams.get("select")).toBe("*");
+    expect(req?.url.searchParams.has("deleted_at")).toBe(false);
+  });
+
+  test("zero rows is a conflict; a network failure is offline", async () => {
+    onTable("kinds", () => HttpResponse.json([]));
+    await expect(kindsRepo(testClient()).get(KIND_ID)).resolves.toStrictEqual({
+      status: "conflict",
+    });
+    onTable("kinds", () => HttpResponse.error());
+    await expect(kindsRepo(testClient()).get(KIND_ID)).resolves.toStrictEqual({
+      status: "offline",
+    });
+  });
+});
+
+describe("kinds failures carry the HTTP status (CAL-015 Block 1, PO decision 4)", () => {
+  test.each([400, 409, 500])(
+    "a %i on remove is an error with http set to it",
+    async (status) => {
+      onTable("kinds", () => pgError(status, "XX000", "refused"));
+      await expect(
+        kindsRepo(testClient()).remove(KIND_ID, UPDATED_AT),
+      ).resolves.toStrictEqual({
+        status: "error",
+        code: "XX000",
+        message: "refused",
+        http: status,
+      });
+    },
+  );
 });

@@ -1,5 +1,13 @@
 import { HttpResponse } from "msw";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type MockInstance,
+  vi,
+} from "vitest";
 import { installServer, onTable, type Recorded } from "../test/msw";
 import {
   eventFull,
@@ -11,9 +19,11 @@ import {
   overrideFull,
   overrideRowFull,
 } from "../test/rows-fixtures";
+import { held } from "../test/outbox-fixtures";
 import { db } from "./db";
-import { EPOCH } from "./hydrate";
-import { appSync, startSync } from "./startSync";
+import type { Drain, DrainNotice } from "./drain";
+import { EPOCH, type Sync } from "./hydrate";
+import { appDrain, appSync, installOnlineSync, startSync } from "./startSync";
 
 vi.mock(
   "../lib/supabase",
@@ -96,5 +106,129 @@ describe("startSync() - sync starts after sign-in (AC-1, Block 3)", () => {
     expect(seen.kinds).toHaveLength(1);
     expect(seen.events).toHaveLength(1);
     expect(seen.overrides).toHaveLength(1);
+  });
+});
+
+// CAL-015 Contract, Block 5 (PO decisions 6 and 7): the app's drain runs
+// before the pull, so the pull sees our rows with their server stamps; the
+// pass startSync starts is announced. `installOnlineSync` runs both again on
+// every window `online` event.
+describe("startSync() drains the outbox first (CAL-015 Block 5)", () => {
+  it("sends a queued edit before it asks for rows: the PATCH, with the cached stamp, precedes the GET; the pass is announced", async () => {
+    const cached = { ...eventFull, title: "Mine" };
+    await db.events.put(cached);
+    await db.outbox.add({
+      op: "update",
+      table: "events",
+      id: cached.id,
+      patch: { title: "Mine" },
+      baseUpdatedAt: cached.updatedAt,
+      clientTs: "2026-10-21T09:00:00.000Z",
+      status: "queued",
+    });
+    const order: Recorded[] = onTable("events", (req) =>
+      req.method === "PATCH"
+        ? HttpResponse.json([
+            {
+              ...eventRowFull,
+              title: "Mine",
+              updated_at: "2026-10-21T10:00:00.000001+00:00",
+            },
+          ])
+        : HttpResponse.json([]),
+    );
+    const notices: DrainNotice[] = [];
+    const stop = appDrain.subscribe((n) => notices.push(n));
+    await expect(startSync()).resolves.toStrictEqual({ status: "ok" });
+    stop();
+    expect(order.map((r) => r.method)).toStrictEqual(["PATCH", "GET"]);
+    expect(order[0]?.url.searchParams.get("id")).toBe(`eq.${cached.id}`);
+    expect(order[0]?.url.searchParams.get("updated_at")).toBe(
+      `eq.${cached.updatedAt}`,
+    );
+    expect(await db.outbox.count()).toBe(0);
+    expect((await db.events.get(cached.id))?.updatedAt).toBe(
+      "2026-10-21T10:00:00.000001+00:00",
+    );
+    expect(notices.filter((n) => n.kind === "drained")).toStrictEqual([
+      { kind: "drained", count: 1 },
+    ]);
+  });
+
+  it("asks appDrain.run({ announce: true }) and starts appSync.run() only after it settled", async () => {
+    const pass = held<Awaited<ReturnType<Drain["run"]>>>();
+    const drainRun = vi.spyOn(appDrain, "run").mockReturnValue(pass.promise);
+    const syncRun = vi
+      .spyOn(appSync, "run")
+      .mockResolvedValue({ status: "ok" });
+    const started = startSync();
+    await new Promise((done) => setTimeout(done, 10));
+    expect(drainRun.mock.calls).toStrictEqual([[{ announce: true }]]);
+    expect(syncRun).not.toHaveBeenCalled();
+    pass.release({ sent: 0, stoppedAt: "end" });
+    await expect(started).resolves.toStrictEqual({ status: "ok" });
+    expect(syncRun).toHaveBeenCalledTimes(1);
+    drainRun.mockRestore();
+    syncRun.mockRestore();
+  });
+});
+
+describe("installOnlineSync(target) (CAL-015 Block 5)", () => {
+  let drainRun: MockInstance<Drain["run"]>;
+  let syncRun: MockInstance<Sync["run"]>;
+  const uninstall: (() => void)[] = [];
+
+  beforeEach(() => {
+    drainRun = vi
+      .spyOn(appDrain, "run")
+      .mockResolvedValue({ sent: 0, stoppedAt: "end" });
+    syncRun = vi.spyOn(appSync, "run").mockResolvedValue({ status: "ok" });
+  });
+
+  afterEach(() => {
+    for (const stop of uninstall.splice(0)) stop();
+    drainRun.mockRestore();
+    syncRun.mockRestore();
+  });
+
+  const goOnline = async () => {
+    window.dispatchEvent(new Event("online"));
+    await new Promise((done) => setTimeout(done, 10));
+  };
+
+  it("installing runs nothing", async () => {
+    uninstall.push(installOnlineSync(window));
+    await new Promise((done) => setTimeout(done, 10));
+    expect(drainRun).not.toHaveBeenCalled();
+    expect(syncRun).not.toHaveBeenCalled();
+  });
+
+  it("each online event runs one announced drain, then one sync", async () => {
+    uninstall.push(installOnlineSync(window));
+    await goOnline();
+    expect(drainRun.mock.calls).toStrictEqual([[{ announce: true }]]);
+    expect(syncRun).toHaveBeenCalledTimes(1);
+    const [drainAt] = drainRun.mock.invocationCallOrder;
+    const [syncAt] = syncRun.mock.invocationCallOrder;
+    expect(drainAt).toBeLessThan(syncAt ?? 0);
+    await goOnline();
+    expect(drainRun).toHaveBeenCalledTimes(2);
+    expect(syncRun).toHaveBeenCalledTimes(2);
+  });
+
+  it("installing twice still runs once per event", async () => {
+    uninstall.push(installOnlineSync(window));
+    uninstall.push(installOnlineSync(window));
+    await goOnline();
+    expect(drainRun).toHaveBeenCalledTimes(1);
+    expect(syncRun).toHaveBeenCalledTimes(1);
+  });
+
+  it("after the uninstaller ran, an online event runs nothing", async () => {
+    const stop = installOnlineSync(window);
+    stop();
+    await goOnline();
+    expect(drainRun).not.toHaveBeenCalled();
+    expect(syncRun).not.toHaveBeenCalled();
   });
 });

@@ -68,9 +68,14 @@ export function chipName(event: Event, kind: ChipKind): string {
   const when = event.allDay
     ? "all day"
     : `${hhmm(event.startsAt)} to ${hhmm(event.endsAt)}`;
-  return kind.status === "live"
-    ? `${event.title}, ${kind.kind.name}, ${when}`
-    : `${event.title}, ${when}, kind removed`;
+  const name =
+    kind.status === "live"
+      ? `${event.title}, ${kind.kind.name}, ${when}`
+      : `${event.title}, ${when}, kind removed`;
+  // CAL-015 Block 6: the sync marker comes last (accessibility.md order).
+  if (event.sync === "saving") return `${name}, saving`;
+  if (event.sync === "failed") return `${name}, not synced`;
+  return name;
 }
 
 export function EventChip(props: {
@@ -110,6 +115,13 @@ export function EventChip(props: {
           e.stopPropagation();
           onActivate(event);
         };
+  // CAL-015 Block 6: a refused op's "!" after the title; nothing otherwise.
+  const badge =
+    event.sync === "failed" ? (
+      <span aria-hidden="true" data-badge="true" className={styles.badge}>
+        !
+      </span>
+    ) : null;
   const dark = useColorScheme() === "dark";
   const live = kind.status === "live" ? kind.kind : null;
   const colour = live === null ? null : dark ? live.colorDark : live.colorLight;
@@ -130,6 +142,7 @@ export function EventChip(props: {
         data-neutral={kind.status === "removed" ? "true" : undefined}
         data-variant="block"
         data-event-id={event.id}
+        data-sync={event.sync}
         style={filled}
         tabIndex={tabIndex}
         onClick={onClick}
@@ -143,6 +156,7 @@ export function EventChip(props: {
         <span aria-hidden="true" className={styles.title}>
           {event.title}
         </span>
+        {badge}
         {(props.height ?? 0) >= 2 * MIN_BLOCK_HEIGHT && (
           <span aria-hidden="true" className={styles.time}>
             {`${hhmm(event.startsAt)} – ${hhmm(event.endsAt)}`}
@@ -160,6 +174,7 @@ export function EventChip(props: {
       data-allday={event.allDay ? "true" : "false"}
       data-neutral={kind.status === "removed" ? "true" : undefined}
       data-event-id={event.id}
+      data-sync={event.sync}
       style={fill}
       tabIndex={tabIndex}
       onClick={onClick}
@@ -186,6 +201,7 @@ export function EventChip(props: {
           </span>
         </>
       )}
+      {badge}
     </button>
   );
 }

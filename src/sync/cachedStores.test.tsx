@@ -38,7 +38,7 @@ import {
   createCachedKindsStore,
   createCachedOverridesStore,
 } from "./cachedStores";
-import { CalendarDb } from "./db";
+import { CalendarDb, type OutboxOp } from "./db";
 import { type EventsStore, useEventsInRange } from "./eventsStore";
 import { createSync, type SyncResult, type SyncRepos } from "./hydrate";
 import { type KindsStore, useKinds } from "./kindsStore";
@@ -689,5 +689,96 @@ describe("the cached kinds store's ensureSeeded() (Block 4, PO decision 2)", () 
     ]);
     expect(outcomes).toStrictEqual(["existing", "existing"]);
     expect(seed.listAll).toHaveBeenCalledTimes(1);
+  });
+});
+
+// CAL-015 Contract, Block 6 (AC-1, AC-5 on the chip): the cached events
+// store also observes the outbox. An event with any queued op is published
+// with `sync: "saving"`, with any failed op `sync: "failed"` (failed wins),
+// and otherwise with NO `sync` key at all - which is what keeps every
+// `toStrictEqual` case above green. Kinds carry no marker (PO decision 11).
+describe("sync markers from the outbox (CAL-015 Block 6)", () => {
+  const op = (
+    id: string,
+    status: "queued" | "failed",
+    table: "events" | "kinds" = "events",
+  ): OutboxOp => ({
+    op: "update",
+    table,
+    id,
+    patch: { title: "x" },
+    baseUpdatedAt: STAMP,
+    clientTs: "2026-10-21T09:00:00.000Z",
+    status,
+    ...(status === "failed"
+      ? { error: { code: "22P02", message: "bad", http: 400 } }
+      : {}),
+  });
+  const saving = ev(1, at(10, 14, 9), at(10, 14, 10));
+  const failing = ev(2, at(10, 15, 9), at(10, 15, 10));
+  const both = ev(3, at(10, 16, 9), at(10, 16, 10));
+  const plain = ev(4, at(10, 17, 9), at(10, 17, 10));
+
+  it("saving for a queued op, failed for a failed one, failed when both, no key without an op", async () => {
+    await db.events.bulkPut([saving, failing, both, plain]);
+    await db.outbox.bulkAdd([
+      op(saving.id, "queued"),
+      op(failing.id, "failed"),
+      op(both.id, "queued"),
+      op(both.id, "failed"),
+    ]);
+    const store = createCachedEventsStore(db, sync);
+    keep(store);
+    await vi.waitFor(() => expect(store.getSnapshot().status).toBe("ready"));
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().events).toStrictEqual([
+        { ...saving, sync: "saving" },
+        { ...failing, sync: "failed" },
+        { ...both, sync: "failed" },
+        plain,
+      ]),
+    );
+    const last = store.getSnapshot().events[3];
+    expect(last !== undefined && "sync" in last).toBe(false);
+  });
+
+  it("the marker follows the outbox: added when an op is queued, gone when it leaves", async () => {
+    await db.events.put(saving);
+    const store = createCachedEventsStore(db, sync);
+    keep(store);
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().events).toStrictEqual([saving]),
+    );
+    const seq = await db.outbox.add(op(saving.id, "queued"));
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().events).toStrictEqual([
+        { ...saving, sync: "saving" },
+      ]),
+    );
+    await db.outbox.delete(seq);
+    await vi.waitFor(() =>
+      expect(store.getSnapshot().events).toStrictEqual([saving]),
+    );
+  });
+
+  it("refresh() publishes the markers too, with no subscriber", async () => {
+    await db.events.put(saving);
+    await db.outbox.add(op(saving.id, "failed"));
+    const store = createCachedEventsStore(db, sync);
+    await store.refresh();
+    expect(store.getSnapshot().events).toStrictEqual([
+      { ...saving, sync: "failed" },
+    ]);
+  });
+
+  it("a kind with a queued op is published as it is: kinds carry no marker", async () => {
+    const k = kind(1);
+    await db.kinds.put(k);
+    await db.outbox.add(op(k.id, "queued", "kinds"));
+    const kinds = createCachedKindsStore(db, seed, sync);
+    keep(kinds);
+    await vi.waitFor(() =>
+      expect(kinds.getSnapshot().kinds).toStrictEqual([k]),
+    );
   });
 });

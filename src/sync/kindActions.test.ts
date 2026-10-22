@@ -1,9 +1,22 @@
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import type { KindsRepo } from "../data/kinds";
 import type { Result } from "../data/result";
 import type { Kind, KindPatch, NewKind } from "../data/rows";
+import { freshDb, T1 } from "../test/cache-fixtures";
+import { NOW, NOW_TS, ops, opsWithoutSeq, U1 } from "../test/outbox-fixtures";
+import type { CalendarDb } from "./db";
+import type { Drain } from "./drain";
 import {
   createKindActions,
+  createOutboxKindActions,
   type KindActions,
   kindActions,
 } from "./kindActions";
@@ -200,5 +213,141 @@ describe("the app's actions (Block 3)", () => {
     expect(typeof kindActions.addKind).toBe("function");
     expect(typeof kindActions.updateKind).toBe("function");
     expect(typeof kindActions.deleteKind).toBe("function");
+  });
+});
+
+// CAL-015 Contract, Block 4 (PO decisions 1 and 11): the outbox actions
+// behind the same KindActions type - cache and outbox written, the cache row
+// returned, then, online, one unannounced drain run that is not awaited. The
+// in-memory factory above is unchanged.
+describe("createOutboxKindActions (CAL-015 Block 4)", () => {
+  let db: CalendarDb;
+  let run: Mock<Pick<Drain, "run">["run"]>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(U1);
+    db = freshDb();
+    run = vi.fn<Pick<Drain, "run">["run"]>(() => new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    delete (navigator as { onLine?: boolean }).onLine;
+  });
+
+  const CACHED: Kind = { ...GYM, updatedAt: T1 };
+
+  it("offline: add, update and delete each resolve ok with the cache row and queue one op, in order, sending nothing", async () => {
+    await db.kinds.put(CACHED);
+    const outbox = createOutboxKindActions(db, { run }, () => false);
+    const added: Kind = {
+      ...NEW_KIND,
+      id: U1,
+      createdAt: NOW_TS,
+      updatedAt: NOW_TS,
+      deletedAt: null,
+    };
+    await expect(outbox.addKind(NEW_KIND)).resolves.toStrictEqual({
+      status: "ok",
+      row: added,
+    });
+    await expect(
+      outbox.updateKind(CACHED, { name: "Workouts" }),
+    ).resolves.toStrictEqual({
+      status: "ok",
+      row: { ...CACHED, name: "Workouts" },
+    });
+    await expect(outbox.deleteKind(added)).resolves.toStrictEqual({
+      status: "ok",
+      row: { ...added, deletedAt: NOW_TS },
+    });
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "insert",
+        table: "kinds",
+        id: U1,
+        patch: NEW_KIND,
+        baseUpdatedAt: null,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+      {
+        op: "update",
+        table: "kinds",
+        id: GYM.id,
+        patch: { name: "Workouts" },
+        baseUpdatedAt: T1,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+      {
+        op: "delete",
+        table: "kinds",
+        id: U1,
+        patch: null,
+        baseUpdatedAt: NOW_TS,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("updateKind's base is the cache row's stamp, not the stamp on the kind passed in", async () => {
+    await db.kinds.put(CACHED);
+    const outbox = createOutboxKindActions(db, { run }, () => false);
+    await outbox.updateKind(
+      { ...GYM, updatedAt: UPDATED_AT },
+      { sortOrder: 2 },
+    );
+    expect((await ops(db))[0]?.baseUpdatedAt).toBe(T1);
+  });
+
+  it("updateKind of a kind the cache does not hold resolves conflict and queues nothing", async () => {
+    const outbox = createOutboxKindActions(db, { run }, () => true);
+    await expect(
+      outbox.updateKind(GYM, { name: "Workouts" }),
+    ).resolves.toStrictEqual({ status: "conflict" });
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("online: each action starts one drain run, unannounced, and resolves without waiting for it", async () => {
+    const outbox = createOutboxKindActions(db, { run }, () => true);
+    await outbox.addKind(NEW_KIND);
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]?.announce).not.toBe(true);
+  });
+
+  it("online defaults to navigator.onLine", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxKindActions(db, { run });
+    await outbox.addKind(NEW_KIND);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("the app's kindActions are outbox actions: offline, addKind writes the app's outbox and sends nothing", async () => {
+    const { db: appDb } = await import("./db");
+    await Promise.all(appDb.tables.map((t) => t.clear()));
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const network = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    const result = await kindActions.addKind(NEW_KIND);
+    expect(result.status).toBe("ok");
+    expect(network).not.toHaveBeenCalled();
+    expect(
+      (await appDb.outbox.toArray()).map((o) => [o.op, o.table, o.id]),
+    ).toStrictEqual([["insert", "kinds", U1]]);
+    await Promise.all(appDb.tables.map((t) => t.clear()));
   });
 });

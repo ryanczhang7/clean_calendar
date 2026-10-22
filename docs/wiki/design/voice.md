@@ -123,14 +123,16 @@ change") · "Offline — changes will sync later" · "{n} changes couldn't sync"
 | Resize | "Now ends at {11:30}" | Undo |
 | Conflict (server copy newer) | "Edited elsewhere; your change to {field} was not applied." | Redo |
 | Sync failed (4xx) | "{title} couldn't sync." | Retry |
-| Back online, drained | "Back online. {n} changes synced." | — |
+| Back online, drained | "Back online. {n} changes synced." ("Back online. 1 change synced.") | — |
 | Kind deleted | "Deleted the kind {name}. Its events now show as Kind removed." | — |
 | Capture saved | "Added {title}" | View |
 | New version (service worker updated) | "A new version is ready." | Reload |
 
 The `{field}` in the conflict toast is the plain field name: "title",
-"start time", "end time", "location", "notes", "kind", "repeat", "reminder".
-Several fields: "your changes to title and location were not applied."
+"start time", "end time", "all day", "location", "notes", "kind", "repeat",
+"reminder"; for a kind: "name", "colour", "order" (CAL-015 PO decision 8).
+Several fields: "your changes to title and location were not applied."; three
+or more: "title, start time and notes".
 
 **Dialogs**
 

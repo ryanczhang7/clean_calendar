@@ -1,9 +1,33 @@
-import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  type Mock,
+  vi,
+} from "vitest";
 import type { EventsRepo } from "../data/events";
 import type { Result } from "../data/result";
 import type { Event, EventPatch, NewEvent } from "../data/rows";
+import { freshDb, T1 } from "../test/cache-fixtures";
+import {
+  asRepos,
+  fakeRepos,
+  held,
+  NOW,
+  NOW_TS,
+  okRow,
+  ops,
+  opsWithoutSeq,
+  S1,
+  U1,
+} from "../test/outbox-fixtures";
+import type { CalendarDb } from "./db";
+import type { Drain } from "./drain";
 import {
   createEventActions,
+  createOutboxEventActions,
   type EventActions,
   eventActions,
 } from "./eventActions";
@@ -316,5 +340,170 @@ describe("the app's actions (CAL-013 Block 3)", () => {
   it("export removeEvent and restoreEvent", () => {
     expect(typeof eventActions.removeEvent).toBe("function");
     expect(typeof eventActions.restoreEvent).toBe("function");
+  });
+});
+
+// CAL-015 AC-1, Contract Block 4 (PO decision 1): the outbox actions behind
+// the same EventActions type. An action writes the cache and the outbox and
+// resolves with the cache row - never waiting for the server - then, online,
+// starts one unannounced drain run it does not await. The in-memory factory
+// above is unchanged. `./drain` is loaded inside the cases through a
+// specifier Vite does not analyse, so that while it does not exist (CAL-015
+// RED) only these cases fail and every case above still runs.
+describe("createOutboxEventActions (CAL-015 AC-1, Block 4)", () => {
+  const DRAIN_MODULE = "./drain";
+  const loadDrain = async () =>
+    (await import(/* @vite-ignore */ DRAIN_MODULE)) as typeof import("./drain");
+
+  let db: CalendarDb;
+  let run: Mock<Pick<Drain, "run">["run"]>;
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    vi.spyOn(crypto, "randomUUID").mockReturnValueOnce(U1);
+    db = freshDb();
+    // A pass that never settles: an action must not wait for it.
+    run = vi.fn<Pick<Drain, "run">["run"]>(() => new Promise(() => {}));
+  });
+
+  afterEach(() => {
+    db.close();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    delete (navigator as { onLine?: boolean }).onLine;
+  });
+
+  const CACHED: Event = { ...SWIM, updatedAt: T1 };
+  const created: Event = {
+    ...NEW_EVENT,
+    id: U1,
+    createdAt: NOW_TS,
+    updatedAt: NOW_TS,
+    deletedAt: null,
+  };
+
+  it("offline: create, edit and delete each resolve ok with the cache row and queue one op, in order, sending nothing", async () => {
+    const outbox = createOutboxEventActions(db, { run }, () => false);
+    await expect(outbox.createEvent(NEW_EVENT)).resolves.toStrictEqual({
+      status: "ok",
+      row: created,
+    });
+    await expect(
+      outbox.updateEvent(U1, { title: "Swim, lane 3" }, NOW_TS),
+    ).resolves.toStrictEqual({
+      status: "ok",
+      row: { ...created, title: "Swim, lane 3" },
+    });
+    await expect(
+      outbox.removeEvent({ ...created, title: "Swim, lane 3" }),
+    ).resolves.toStrictEqual({
+      status: "ok",
+      row: { ...created, title: "Swim, lane 3", deletedAt: NOW_TS },
+    });
+    expect(
+      (await opsWithoutSeq(db)).map((o) => [o.op, o.id, o.patch]),
+    ).toStrictEqual([
+      ["insert", U1, NEW_EVENT],
+      ["update", U1, { title: "Swim, lane 3" }],
+      ["delete", U1, null],
+    ]);
+    expect((await ops(db)).map((o) => o.seq)).toStrictEqual([1, 2, 3]);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("online: each action starts one drain run, unannounced, and resolves without waiting for it", async () => {
+    const outbox = createOutboxEventActions(db, { run }, () => true);
+    await expect(outbox.createEvent(NEW_EVENT)).resolves.toStrictEqual({
+      status: "ok",
+      row: created,
+    });
+    expect(run).toHaveBeenCalledTimes(1);
+    expect(run.mock.calls[0]?.[0]?.announce).not.toBe(true);
+    await outbox.updateEvent(U1, { notes: "Locker 12" }, NOW_TS);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("online, through a real drain: the cache row is there at once, while the server's insert is still pending; it leaves the outbox when the server answers", async () => {
+    const { createDrain } = await loadDrain();
+    const repos = fakeRepos();
+    const answer = held<Result<Event>>();
+    repos.events.insert.mockReturnValue(answer.promise);
+    const drain = createDrain(db, asRepos(repos), () => true);
+    const outbox = createOutboxEventActions(db, drain, () => true);
+    await expect(outbox.createEvent(NEW_EVENT)).resolves.toStrictEqual({
+      status: "ok",
+      row: created,
+    });
+    expect(await db.events.get(U1)).toStrictEqual(created);
+    await vi.waitFor(() =>
+      expect(repos.events.insert.mock.calls).toStrictEqual([[NEW_EVENT, U1]]),
+    );
+    expect(await db.outbox.count()).toBe(1);
+    answer.release(okRow({ ...created, createdAt: S1, updatedAt: S1 }));
+    await vi.waitFor(async () => expect(await db.outbox.count()).toBe(0));
+    expect((await db.events.get(U1))?.updatedAt).toBe(S1);
+  });
+
+  it("updateEvent ignores the caller's expectedUpdatedAt: the op's base is the cache row's stamp (PO decision 3)", async () => {
+    await db.events.put(CACHED);
+    const outbox = createOutboxEventActions(db, { run }, () => false);
+    await expect(
+      outbox.updateEvent(SWIM.id, { title: "Lift" }, UPDATED_AT),
+    ).resolves.toStrictEqual({
+      status: "ok",
+      row: { ...CACHED, title: "Lift" },
+    });
+    expect((await ops(db))[0]?.baseUpdatedAt).toBe(T1);
+  });
+
+  it("updateEvent of a row the cache does not hold resolves conflict and queues nothing", async () => {
+    const outbox = createOutboxEventActions(db, { run }, () => true);
+    await expect(
+      outbox.updateEvent(SWIM.id, { title: "Lift" }, UPDATED_AT),
+    ).resolves.toStrictEqual({ status: "conflict" });
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("restoreEvent brings the row back in the cache and queues a restore op", async () => {
+    await db.events.put({ ...CACHED, deletedAt: T1 });
+    const outbox = createOutboxEventActions(db, { run }, () => false);
+    await expect(
+      outbox.restoreEvent({ ...CACHED, deletedAt: T1 }),
+    ).resolves.toStrictEqual({ status: "ok", row: CACHED });
+    expect((await opsWithoutSeq(db)).map((o) => o.op)).toStrictEqual([
+      "restore",
+    ]);
+  });
+
+  it("online defaults to navigator.onLine", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxEventActions(db, { run });
+    await outbox.createEvent(NEW_EVENT);
+    expect(run).not.toHaveBeenCalled();
+  });
+
+  it("the app's eventActions are outbox actions: offline, createEvent writes the app's outbox and sends nothing", async () => {
+    const { db: appDb } = await import("./db");
+    await Promise.all(appDb.tables.map((t) => t.clear()));
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const network = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new TypeError("Failed to fetch"));
+    await expect(eventActions.createEvent(NEW_EVENT)).resolves.toStrictEqual({
+      status: "ok",
+      row: created,
+    });
+    expect(network).not.toHaveBeenCalled();
+    expect(
+      (await appDb.outbox.toArray()).map((o) => [o.op, o.table, o.id]),
+    ).toStrictEqual([["insert", "events", U1]]);
+    await Promise.all(appDb.tables.map((t) => t.clear()));
   });
 });

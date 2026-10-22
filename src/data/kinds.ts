@@ -22,7 +22,10 @@ import {
 export type KindsRepo = {
   listLive(): Promise<ListResult<Kind>>;
   listSince(since: string): Promise<ListResult<Kind>>;
-  insert(input: NewKind): Promise<Result<Kind>>;
+  /** CAL-015 Block 8: `id`, when given, is POSTed as the row's id. */
+  insert(input: NewKind, id?: string): Promise<Result<Kind>>;
+  /** CAL-015 Block 8: one row by id, soft-deleted included; zero rows → conflict. */
+  get(id: string): Promise<Result<Kind>>;
   update(
     id: string,
     patch: KindPatch,
@@ -72,11 +75,14 @@ export function kindsRepo(client: SupabaseClient<Database>): KindsRepo {
           .order("updated_at", { ascending: true }),
         toKind,
       ),
-    insert: async (input) =>
+    insert: async (input, id) =>
       fromPostgrestOne(
-        await table().insert(fromNewKind(input)).select("*"),
+        await table().insert(fromNewKind(input, id)).select("*"),
         toKind,
       ),
+    // No deleted_at filter: the drain needs the soft-deleted copy (AC-4).
+    get: async (id) =>
+      fromPostgrestOne(await table().select("*").eq("id", id), toKind),
     update: (id, patch, expectedUpdatedAt) =>
       patchIfUnchanged(id, fromKindPatch(patch), expectedUpdatedAt),
     // A soft delete: a PATCH of deleted_at, never an HTTP DELETE.
@@ -96,7 +102,10 @@ export function kindsRepo(client: SupabaseClient<Database>): KindsRepo {
     // (CAL-006 AC-5). A 23505 comes back as an error; nothing retries.
     insertMany: async (inputs) =>
       fromPostgrest(
-        await table().insert(inputs.map(fromNewKind)).select("*"),
+        // A lambda, not `map(fromNewKind)`: map's index must not become an id.
+        await table()
+          .insert(inputs.map((input) => fromNewKind(input)))
+          .select("*"),
         toKind,
       ),
   };
