@@ -244,12 +244,8 @@ describe("app shell live regions (AC-5, Contract)", () => {
     await renderAt("/month/2026-10");
     const regions = screen.getAllByRole("status");
     expect(regions).toHaveLength(2);
-    expect(
-      screen.getByRole("status", { name: "Sync status" }),
-    ).toBeInTheDocument();
-    const toast = regions.filter(
-      (r) => r.getAttribute("aria-label") !== "Sync status",
-    );
+    expect(screen.getByRole("status", { name: "Synced" })).toBeInTheDocument();
+    const toast = regions.filter((r) => !r.hasAttribute("aria-label"));
     expect(toast).toHaveLength(1);
     expect(toast[0]).toHaveAttribute("aria-live", "polite");
   });

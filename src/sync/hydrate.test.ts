@@ -23,7 +23,7 @@ import {
   T4,
   T5,
 } from "../test/cache-fixtures";
-import type { CalendarDb } from "./db";
+import type { CalendarDb, OutboxOp } from "./db";
 import { createSync, EPOCH, hydrate, type SyncRepos } from "./hydrate";
 
 // CAL-014 AC-1 and AC-2, Contract Block 2. MECHANICAL: the exact listSince
@@ -420,5 +420,91 @@ describe("createSync(db, repos) (Block 2)", () => {
     await sync.run();
     await sync.run();
     expect(repos.kinds.listSince.mock.calls).toStrictEqual([[EPOCH], [T1]]);
+  });
+});
+
+// CAL-015 Contract, Block 5 (PO decision 6): a server row whose id has a
+// queued or failed outbox op is not written - the optimistic patch would be
+// overwritten and reappear only when its op lands - and the mark still moves
+// past it. The ops are put straight into the outbox.
+describe("rows with a pending op are not pulled over (CAL-015 Block 5)", () => {
+  const pending = (
+    table: "events" | "kinds",
+    id: string,
+    status: "queued" | "failed",
+  ): OutboxOp => ({
+    op: "update",
+    table,
+    id,
+    patch: { title: "Mine" },
+    baseUpdatedAt: T1,
+    clientTs: "2026-10-21T09:00:00.000Z",
+    status,
+    ...(status === "failed"
+      ? { error: { code: "22P02", message: "bad", http: 400 } }
+      : {}),
+  });
+
+  it("a server row whose id has a queued op is not written over the optimistic one", async () => {
+    const mine = ev(1, at(10, 14, 9), at(10, 14, 10), {
+      title: "Mine",
+      updatedAt: T1,
+    });
+    const theirs = { ...mine, title: "Server", updatedAt: T3 };
+    const other = ev(2, at(10, 15, 9), at(10, 15, 10), { updatedAt: T2 });
+    await db.events.put(mine);
+    await db.outbox.add(pending("events", mine.id, "queued"));
+    repos.events.listSince.mockResolvedValueOnce(ok([theirs, other]));
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(byId(await db.events.toArray())).toStrictEqual(byId([mine, other]));
+    expect((await db.meta.get("mark:events"))?.value).toBe(T3);
+  });
+
+  it("a failed op holds the row too", async () => {
+    const mine = ev(1, at(10, 14, 9), at(10, 14, 10), {
+      title: "Mine",
+      updatedAt: T1,
+    });
+    await db.events.put(mine);
+    await db.outbox.add(pending("events", mine.id, "failed"));
+    repos.events.listSince.mockResolvedValueOnce(
+      ok([{ ...mine, title: "Server", updatedAt: T2 }]),
+    );
+    await hydrate(db, asRepos(repos));
+    expect(await db.events.get(mine.id)).toStrictEqual(mine);
+    expect((await db.meta.get("mark:events"))?.value).toBe(T2);
+  });
+
+  it("a kind with a queued op is held the same way; a kind without one is written", async () => {
+    const mine = kind(1, { name: "Mine", updatedAt: T1 });
+    const free = kind(2, { updatedAt: T1 });
+    await db.kinds.bulkPut([mine, free]);
+    await db.outbox.add(pending("kinds", mine.id, "queued"));
+    repos.kinds.listSince.mockResolvedValueOnce(
+      ok([
+        { ...mine, name: "Server", updatedAt: T4 },
+        { ...free, name: "Renamed", updatedAt: T3 },
+      ]),
+    );
+    await hydrate(db, asRepos(repos));
+    expect(byId(await db.kinds.toArray())).toStrictEqual(
+      byId([mine, { ...free, name: "Renamed", updatedAt: T3 }]),
+    );
+    expect((await db.meta.get("mark:kinds"))?.value).toBe(T4);
+  });
+
+  it("once the op is gone the next pull writes the row", async () => {
+    const mine = ev(1, at(10, 14, 9), at(10, 14, 10), { updatedAt: T1 });
+    await db.events.put({ ...mine, title: "Mine" });
+    const seq = await db.outbox.add(pending("events", mine.id, "queued"));
+    repos.events.listSince.mockResolvedValue(
+      ok([{ ...mine, title: "Server", updatedAt: T2 }]),
+    );
+    await hydrate(db, asRepos(repos));
+    await db.outbox.delete(seq);
+    await hydrate(db, asRepos(repos));
+    expect((await db.events.get(mine.id))?.title).toBe("Server");
   });
 });

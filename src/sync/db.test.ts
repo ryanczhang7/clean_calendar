@@ -151,8 +151,9 @@ describe("rows are stored as domain objects (Block 1)", () => {
       table: "events",
       id,
       patch: { title: "x" },
-      expectedUpdatedAt: STAMP_A,
+      baseUpdatedAt: STAMP_A,
       clientTs: "2026-10-14T09:00:00.000Z",
+      status: "queued",
     });
     await d.outbox.add(op("a"));
     await d.outbox.add(op("b"));
@@ -187,5 +188,40 @@ describe("rows are stored as domain objects (Block 1)", () => {
     expect(
       await d.reminders.where("eventId").equals(r.eventId).toArray(),
     ).toStrictEqual([r]);
+  });
+});
+
+// CAL-015 Contract, Block 1: the outbox record filled in - `baseUpdatedAt`
+// (AC-1's name), a status, the error a 4xx left, and a restore op. No schema
+// change: the record is stored whole under `++seq`.
+describe("the outbox record (CAL-015 Block 1)", () => {
+  it("a failed restore op with its error round-trips exactly, numbered after a queued insert", async () => {
+    const d = track(freshDb());
+    const insert: OutboxOp = {
+      op: "insert",
+      table: "kinds",
+      id: "a",
+      patch: { name: "Climbing" },
+      baseUpdatedAt: null,
+      clientTs: "2026-10-21T09:00:00.000Z",
+      status: "queued",
+    };
+    const restore: OutboxOp = {
+      op: "restore",
+      table: "events",
+      id: "b",
+      patch: null,
+      baseUpdatedAt: STAMP_A,
+      clientTs: "2026-10-21T09:00:01.000Z",
+      status: "failed",
+      error: { code: "22P02", message: "invalid input", http: 400 },
+    };
+    await d.outbox.add(insert);
+    await d.outbox.add(restore);
+    expect(await d.outbox.toArray()).toStrictEqual([
+      { ...insert, seq: 1 },
+      { ...restore, seq: 2 },
+    ]);
+    expect(d.verno).toBe(1);
   });
 });

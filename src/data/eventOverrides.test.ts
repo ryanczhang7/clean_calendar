@@ -201,6 +201,7 @@ describe("eventOverrides failures resolve, never throw (AC-6)", () => {
       status: "error",
       code: "42501",
       message: "new row violates row-level security policy",
+      http: 403,
     });
   });
 

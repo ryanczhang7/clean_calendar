@@ -234,6 +234,7 @@ describe("events failures resolve, never throw (AC-6)", () => {
       status: "error",
       code: "23514",
       message: 'new row violates check constraint "ends_after_start"',
+      http: 400,
     });
   });
 
@@ -245,6 +246,7 @@ describe("events failures resolve, never throw (AC-6)", () => {
       status: "error",
       code: "PGRST301",
       message: "JWT expired",
+      http: 401,
     });
   });
 
@@ -302,5 +304,117 @@ describe("events.restore clears deleted_at (CAL-013 AC-5, Block 2)", () => {
     await expect(
       eventsRepo(testClient()).restore(EVENT_ID, UPDATED_AT),
     ).resolves.toStrictEqual({ status: "offline" });
+  });
+});
+
+// CAL-015 Contract, Block 8 (PO decision 2) and Block 1 (PO decision 4): the
+// client names a new row, `get` re-fetches one row for the drain's conflict
+// path, and a failure carries the HTTP status so the drain can tell a 4xx
+// (failed) from a 5xx (retried).
+describe("events.insert with a client id (CAL-015 Block 8)", () => {
+  const input = {
+    title: "Swim",
+    kindId: KIND_ID,
+    startsAt: new Date("2026-10-22T07:00:00Z"),
+    endsAt: new Date("2026-10-22T08:00:00Z"),
+    allDay: false,
+    location: null,
+    notes: null,
+    recurrence: null,
+    origin: "manual" as const,
+    captureJobId: null,
+  };
+
+  test("POSTs the id the client chose beside the mapped columns", async () => {
+    const seen = onTable("events", () =>
+      HttpResponse.json([eventRowFull], { status: 201 }),
+    );
+    await eventsRepo(testClient()).insert(input, EVENT_ID);
+    expect(seen.map((r) => r.method)).toStrictEqual(["POST"]);
+    expect(seen[0]?.body).toStrictEqual({
+      id: EVENT_ID,
+      title: "Swim",
+      kind_id: KIND_ID,
+      starts_at: "2026-10-22T07:00:00.000Z",
+      ends_at: "2026-10-22T08:00:00.000Z",
+      all_day: false,
+      location: null,
+      notes: null,
+      recurrence: null,
+      origin: "manual",
+      capture_job_id: null,
+    });
+  });
+
+  test("without an id the body carries no id key", async () => {
+    const seen = onTable("events", () =>
+      HttpResponse.json([eventRowFull], { status: 201 }),
+    );
+    await eventsRepo(testClient()).insert(input);
+    expect(Object.keys(seen[0]?.body as object)).not.toContain("id");
+  });
+});
+
+describe("events.get (CAL-015 Block 8)", () => {
+  test("GETs the one row by id, select=*, with no deleted_at filter", async () => {
+    const seen = onTable("events", () => HttpResponse.json([eventRowFull]));
+    await eventsRepo(testClient()).get(EVENT_ID);
+    expect(seen).toHaveLength(1);
+    const [req] = seen;
+    expect(req?.method).toBe("GET");
+    expect(req?.url.pathname).toBe("/rest/v1/events");
+    expect(req?.url.searchParams.get("id")).toBe(`eq.${EVENT_ID}`);
+    expect(req?.url.searchParams.get("select")).toBe("*");
+    expect(req?.url.searchParams.has("deleted_at")).toBe(false);
+  });
+
+  test("one row is ok with the row mapped - a soft-deleted one included", async () => {
+    onTable("events", () => HttpResponse.json([eventRowFull]));
+    await expect(eventsRepo(testClient()).get(EVENT_ID)).resolves.toStrictEqual(
+      { status: "ok", row: eventFull },
+    );
+  });
+
+  test("zero rows is a conflict (the row is gone)", async () => {
+    onTable("events", () => HttpResponse.json([]));
+    await expect(eventsRepo(testClient()).get(EVENT_ID)).resolves.toStrictEqual(
+      { status: "conflict" },
+    );
+  });
+
+  test("a network failure is offline", async () => {
+    onTable("events", () => HttpResponse.error());
+    await expect(eventsRepo(testClient()).get(EVENT_ID)).resolves.toStrictEqual(
+      { status: "offline" },
+    );
+  });
+});
+
+describe("events failures carry the HTTP status (CAL-015 Block 1, PO decision 4)", () => {
+  test.each([400, 404, 422, 500, 503])(
+    "a %i on update is an error with http set to it",
+    async (status) => {
+      onTable("events", () => pgError(status, "XX000", "refused"));
+      await expect(
+        eventsRepo(testClient()).update(EVENT_ID, { title: "x" }, UPDATED_AT),
+      ).resolves.toStrictEqual({
+        status: "error",
+        code: "XX000",
+        message: "refused",
+        http: status,
+      });
+    },
+  );
+
+  test("a 404 on get is an error with http 404", async () => {
+    onTable("events", () => pgError(404, "PGRST205", "not found"));
+    await expect(eventsRepo(testClient()).get(EVENT_ID)).resolves.toStrictEqual(
+      {
+        status: "error",
+        code: "PGRST205",
+        message: "not found",
+        http: 404,
+      },
+    );
   });
 });

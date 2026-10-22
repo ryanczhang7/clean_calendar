@@ -666,3 +666,100 @@ describe("onCommand, dragProps and data-event-id (CAL-013 Block 5)", () => {
     },
   );
 });
+
+// CAL-015 AC-1 and AC-5 at the chip, Contract Block 6 (accessibility.md,
+// Roles and names; components.md, Event chip states). `event.sync`, set only
+// by the cached events store, appends ", saving" / ", not synced" LAST to the
+// name, marks the button data-sync, and for "failed" adds an aria-hidden "!"
+// badge after the title. Without `sync` the markup is the markup shipped.
+describe("the sync marker (CAL-015 AC-1, AC-5, Block 6)", () => {
+  const SAVING = { ...TIMED, sync: "saving" as const };
+  const FAILED = { ...TIMED, sync: "failed" as const };
+
+  it.each([
+    [SAVING, LIVE, "Dentist, Gym, 09:00 to 10:30, saving"],
+    [FAILED, LIVE, "Dentist, Gym, 09:00 to 10:30, not synced"],
+    [
+      { ...ALL_DAY, sync: "saving" as const },
+      LIVE,
+      "Hotel, Gym, all day, saving",
+    ],
+    [SAVING, REMOVED, "Dentist, 09:00 to 10:30, kind removed, saving"],
+    [FAILED, REMOVED, "Dentist, 09:00 to 10:30, kind removed, not synced"],
+  ])("chipName ends with the marker, last: %#", (event, kind, name) => {
+    expect(chipName(event, kind)).toBe(name);
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    'saving: the %s is named "..., saving" and marked data-sync="saving", with no badge',
+    (_label, variant) => {
+      const chip =
+        variant === undefined
+          ? renderChip(SAVING, LIVE)
+          : renderBlock(SAVING, LIVE, 60);
+      expect(chip).toHaveAccessibleName("Dentist, Gym, 09:00 to 10:30, saving");
+      expect(chip).toHaveAttribute("data-sync", "saving");
+      expect(chip.querySelector("[data-badge]")).toBeNull();
+    },
+  );
+
+  it.each([
+    ["chip", undefined, "09:00 Dentist"],
+    ["block", "block", "Dentist"],
+  ] as const)(
+    'failed: the %s is named "..., not synced", marked data-sync="failed", with an aria-hidden "!" badge after the title',
+    (_label, variant, titleText) => {
+      const chip =
+        variant === undefined
+          ? renderChip(FAILED, LIVE)
+          : renderBlock(FAILED, LIVE, 60);
+      expect(chip).toHaveAccessibleName(
+        "Dentist, Gym, 09:00 to 10:30, not synced",
+      );
+      expect(chip).toHaveAttribute("data-sync", "failed");
+      const badges = chip.querySelectorAll('[data-badge="true"]');
+      expect(badges).toHaveLength(1);
+      const badge = badges[0] as HTMLElement;
+      expect(badge.tagName).toBe("SPAN");
+      expect(badge).toHaveAttribute("aria-hidden", "true");
+      expect(badge.textContent).toBe("!");
+      const title = hiddenText(chip, titleText);
+      expect(
+        title.compareDocumentPosition(badge) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    },
+  );
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "without sync the %s carries no data-sync and no badge",
+    (_label, variant) => {
+      const chip =
+        variant === undefined
+          ? renderChip(TIMED, LIVE)
+          : renderBlock(TIMED, LIVE, 60);
+      expect(chip).not.toHaveAttribute("data-sync");
+      expect(chip.querySelector("[data-badge]")).toBeNull();
+      expect(chip).toHaveAccessibleName("Dentist, Gym, 09:00 to 10:30");
+    },
+  );
+
+  it('EventChip.module.css: .chip[data-sync="saving"] has a 2px dashed outline; .chip[data-sync="failed"] uses the danger colour', () => {
+    const css = parseCss(
+      readFileSync(join(import.meta.dirname, "EventChip.module.css"), "utf8"),
+    );
+    const saving = blocksAt(css, '.chip[data-sync="saving"]')
+      .map((r) => r.body)
+      .join(";");
+    expect(propertyValue(saving, "outline")).toMatch(/^2px dashed /);
+    const failed = blocksAt(css, '.chip[data-sync="failed"]')
+      .map((r) => r.body)
+      .join(";");
+    expect(failed).toContain("var(--color-danger)");
+  });
+});
