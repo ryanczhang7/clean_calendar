@@ -6,6 +6,7 @@ import { db } from "./db";
 import { createDrain, type Drain } from "./drain";
 import { createSync, type Sync, type SyncResult } from "./hydrate";
 import type { Repos } from "./outbox";
+import { createRealtime, type Realtime } from "./realtime";
 
 // CAL-014 Contract, Block 3. The app's sync over the real repositories and
 // the app's `db`. Constructing it asks nothing; the cached kinds store runs it
@@ -45,8 +46,21 @@ const onOnline = () => {
   void startSync();
 };
 
-/** window "online" → startSync(); returns the uninstaller. Idempotent. */
+/**
+ * CAL-016 Block 4: the app's Realtime stream over the app's client, `db` and
+ * `appSync`; a rejoin or a return to the foreground runs `appSync.run()`.
+ */
+export const appRealtime: Realtime = createRealtime(supabase, db, appSync);
+
+/**
+ * window "online" → startSync(), and the app's Realtime stream; returns the
+ * uninstaller, which stops both. Idempotent.
+ */
 export function installOnlineSync(target: Window = window): () => void {
   target.addEventListener("online", onOnline);
-  return () => target.removeEventListener("online", onOnline);
+  appRealtime.start();
+  return () => {
+    target.removeEventListener("online", onOnline);
+    appRealtime.stop();
+  };
 }
