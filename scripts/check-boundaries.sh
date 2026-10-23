@@ -391,6 +391,7 @@ case "$ph:$story_type" in
     if ! awk 'BEGIN{n=ARGV[1];ARGV[1]=""} index($0,n){h=1} END{exit !h}' "$GATE_MARKER" <<< "$gr"; then
       problem "story $sid: ## Gate results was not written by scripts/gates.sh. Run 'bash scripts/gates.sh' - it records its own result; a pasted summary is not evidence."
     else
+      bgates=""
       res=$(printf '%s\n' "$gr" | sed -nE 's/^[[:space:]]*result:[[:space:]]*//p' | head -1)
       case "$res" in
         pass*) ok "recorded gate result: $res" ;;
@@ -445,9 +446,14 @@ case "$ph:$story_type" in
       # A gate the story escalated must appear in the record as having passed.
       # gates.sh enforces this while it runs; this catches the record written
       # before the escalation was added, where the gate is optional again by
-      # the time anyone looks.
+      # the time anyone looks. A gate is only BLOCKED because it is required,
+      # so one the record shows BLOCKED is judged by the BLOCKED check above -
+      # pending CI at REVIEW, the CI run at DONE - and demanding a PASS here
+      # would close that path to every story that escalated the gate.
       for g in $(frontmatter_list "$sfile" required_gates); do
-        if awk 'BEGIN{r=ARGV[1];ARGV[1]=""} $0~r{h=1} END{exit !h}' "^[[:space:]]*PASS[[:space:]]+$g( |\(|$)" <<< "$gr"; then
+        if grep -qx -- "$g" <<< "$bgates"; then
+          ok "story-required gate '$g' was BLOCKED; judged as pending CI above"
+        elif awk 'BEGIN{r=ARGV[1];ARGV[1]=""} $0~r{h=1} END{exit !h}' "^[[:space:]]*PASS[[:space:]]+$g( |\(|$)" <<< "$gr"; then
           ok "story-required gate '$g' passed in the recorded run"
         else
           problem "story $sid: frontmatter requires gate '$g', but the recorded run has no PASS for it. Run 'bash scripts/gates.sh' again."

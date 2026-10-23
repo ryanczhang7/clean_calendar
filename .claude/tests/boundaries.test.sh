@@ -1341,14 +1341,53 @@ describe "a gate the story escalated for itself appears in the record"
 # the time anyone looks. No fixture ever set required_gates, so the loop body
 # never executed once - and a loop that never runs cannot be broken by anything
 # done to its condition.
+story_blocked REVIEW <<'EOF'
+1. PO decision: the `types` gate is BLOCKED here, not failing - Smart App Control
+   refuses the locally built binary by reputation (os error 4551), the branch does
+   not touch it, and the same command passes elsewhere. Marking types pending CI.
+EOF
+# The escalation lands AFTER the run, as the comment above describes: `lint` is
+# not in the record at all - neither PASS nor BLOCKED.
+sed -i 's/^branch: story\/T-1-fixture$/&\nrequired_gates: [lint]/' "$FIX/docs/backlog/stories/T-1.md"
+commit_all "T-1 escalates lint after the run"
+run_boundaries
+refused "a required gate the record has no PASS for" \
+  "frontmatter requires gate 'lint', but the recorded run has no PASS for it"
+
+# A gate is only ever BLOCKED because it is required, so a story-required gate
+# the environment refused is the ordinary BLOCKED case, not an exception to it.
+# Demanding a PASS for it contradicted the BLOCKED check above, which accepts
+# REVIEW on "pending CI" - and no local run can ever produce that PASS, so the
+# path /advance-story prescribes was closed to every story that escalated the
+# gate it blocked on (CAL-016, `db`, in clean_calendar). The pending-CI line
+# and, at DONE, the CI run URL are judged by the BLOCKED check; this loop defers.
 story_blocked REVIEW '[types]' <<'EOF'
 1. PO decision: the `types` gate is BLOCKED here, not failing - Smart App Control
    refuses the locally built binary by reputation (os error 4551), the branch does
    not touch it, and the same command passes elsewhere. Marking types pending CI.
 EOF
 run_boundaries
-refused "a required gate the record has no PASS for" \
-  "frontmatter requires gate 'types', but the recorded run has no PASS for it"
+assert_contains "a required gate that was BLOCKED defers to the pending-CI check" \
+  "ok    story-required gate 'types' was BLOCKED; judged as pending CI above" "$out"
+assert_eq "and a blocked required gate recorded as pending CI is not refused" 0 "$rc"
+
+# Deferring must not become a way past the BLOCKED check: with nothing written
+# down, the same story is still refused, by that check.
+story_blocked REVIEW '[types]' <<'EOF'
+Ran the gates. One of them did not work on this machine.
+EOF
+run_boundaries
+refused "a blocked required gate with no pending-CI line is still refused" \
+  "gate 'types' was BLOCKED - the environment would not launch it - and nothing in the story says so"
+
+# And at DONE the CI run is still owed.
+story_blocked DONE '[types]' <<'EOF'
+1. PO decision: types is BLOCKED locally by Smart App Control. Marking it
+   pending CI.
+EOF
+run_boundaries
+refused "a blocked required gate at DONE still needs the CI run" \
+  "gate 'types' was BLOCKED locally and has not been verified on CI"
 
 # The other direction, and this fixture IS clean, so it asserts the exit status
 # rather than the absence of a message.

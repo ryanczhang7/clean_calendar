@@ -558,9 +558,9 @@ describe "C-5: the twelve status-discarded lines in this tree are excluded by th
 # is vacuous, and vacuous is the failure mode this whole story is about: if the
 # line no longer holds the shape, this fails as a stale fixture rather than
 # reporting the guard correct.
-DISCARDED='scripts/check-boundaries.sh:394:res=$(printf
-scripts/check-boundaries.sh:433:rec=$(printf
-scripts/check-boundaries.sh:608:ph_at="$(git show
+DISCARDED='scripts/check-boundaries.sh:395:res=$(printf
+scripts/check-boundaries.sh:434:rec=$(printf
+scripts/check-boundaries.sh:614:ph_at="$(git show
 scripts/ci-local.sh:169:dirty="$(git status
 scripts/doctor.sh:68:v="$(grep
 scripts/doctor.sh:140:BOOTSTRAPPED="$(grep
