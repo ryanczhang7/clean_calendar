@@ -55,8 +55,15 @@ export const geminiResponseSchema: Record<string, unknown> = {
   required: ["proposal", "confidence", "missing"],
 };
 
+/** An image sent inline (CAL-019 Block 2); `data` is the base64 as received. */
+export type InlineImage = { mimeType: string; data: string };
+
+export type GeminiPart =
+  | { text: string }
+  | { inline_data: { mime_type: string; data: string } };
+
 export type GeminiRequest = {
-  contents: [{ role: "user"; parts: [{ text: string }] }];
+  contents: [{ role: "user"; parts: GeminiPart[] }];
   generationConfig: {
     responseMimeType: "application/json";
     responseSchema: typeof geminiResponseSchema;
@@ -64,9 +71,17 @@ export type GeminiRequest = {
   };
 };
 
-export function buildGeminiRequest(prompt: string): GeminiRequest {
+/** With an image, the image part comes first, then the prompt. */
+export function buildGeminiRequest(
+  prompt: string,
+  image?: InlineImage,
+): GeminiRequest {
+  const parts: GeminiPart[] = image === undefined ? [{ text: prompt }] : [
+    { inline_data: { mime_type: image.mimeType, data: image.data } },
+    { text: prompt },
+  ];
   return {
-    contents: [{ role: "user", parts: [{ text: prompt }] }],
+    contents: [{ role: "user", parts }],
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: geminiResponseSchema,
@@ -93,6 +108,7 @@ function replyText(body: unknown): string {
 
 export async function callGemini(args: {
   prompt: string;
+  image?: InlineImage;
   apiKey: string;
   base: string;
   fetch: typeof fetch;
@@ -107,7 +123,7 @@ export async function callGemini(args: {
         "x-goog-api-key": args.apiKey,
         "content-type": "application/json",
       },
-      body: JSON.stringify(buildGeminiRequest(args.prompt)),
+      body: JSON.stringify(buildGeminiRequest(args.prompt, args.image)),
     });
   } catch {
     return { kind: "network", latencyMs: args.now() - started };
