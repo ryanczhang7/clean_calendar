@@ -1,5 +1,5 @@
-// The capture function (CAL-018 Contract Block 2): shared text in, a proposed
-// event out. The order of the checks below IS the contract - nothing is fetched
+// The capture function (CAL-018 Contract Block 2, CAL-019 Block 1): shared
+// text or a screenshot in, a proposed event out. The order of the checks below IS the contract - nothing is fetched
 // before the bearer and body checks, and Gemini is not called before the owner
 // check passes. Every outbound call goes through deps.fetch.
 
@@ -9,7 +9,7 @@ import {
 } from "../../../shared/captureSchema.ts";
 import { bearer, jsonResponse, requireOwner } from "../_shared/owner.ts";
 import { callGemini, DEFAULT_GEMINI_API_BASE, GEMINI_MODEL } from "./gemini.ts";
-import { buildPrompt } from "./prompt.ts";
+import { buildImagePrompt, buildPrompt } from "./prompt.ts";
 
 export type CaptureDeps = {
   fetch: typeof fetch;
@@ -20,8 +20,18 @@ export type CaptureDeps = {
 /** In UTF-16 code units (`String.length`), the client's measure. */
 export const MAX_TEXT_CHARS = 20_000;
 
+/** Decoded bytes (CAL-019 PO decision 4): this many passes, one more is 413. */
+export const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+/** Exact and lowercase, no parameters (CAL-019 PO decision 5). */
+export const IMAGE_MIME_TYPES = [
+  "image/png",
+  "image/jpeg",
+  "image/webp",
+] as const;
+
 type JobRow = {
-  input_kind: "text";
+  input_kind: "text" | "image";
   input_hash: string;
   model: string;
   proposal: GeminiReply["proposal"] | null;
@@ -31,24 +41,100 @@ type JobRow = {
   latency_ms: number;
 };
 
-async function readText(req: Request): Promise<string | null> {
+type Input =
+  | { kind: "text"; text: string }
+  | {
+    kind: "image";
+    mimeType: string;
+    data: string;
+    bytes: Uint8Array<ArrayBuffer>;
+  };
+
+function isBase64Char(c: number): boolean {
+  return (c >= 65 && c <= 90) || // A-Z
+    (c >= 97 && c <= 122) || // a-z
+    (c >= 48 && c <= 57) || // 0-9
+    c === 43 || c === 47; // + /
+}
+
+/**
+ * Strict standard base64 (CAL-019 PO decision 6), the same language as
+ * `^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$` on a
+ * non-empty string: a length that is a multiple of four, at most two `=` and
+ * only at the end, the standard alphabet everywhere else. A scan rather than
+ * that regex, because V8 overflows its stack backtracking the repeated group
+ * over a 5.6 MB input. The platform decoders skip whitespace and accept "",
+ * so this runs before decoding.
+ */
+function isStrictBase64(data: string): boolean {
+  if (data.length === 0 || data.length % 4 !== 0) return false;
+  let end = data.length;
+  if (data.charCodeAt(end - 1) === 61) end--; // =
+  if (data.charCodeAt(end - 1) === 61) end--;
+  for (let i = 0; i < end; i++) {
+    if (!isBase64Char(data.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function decodeBase64(data: string): Uint8Array<ArrayBuffer> | null {
+  if (!isStrictBase64(data)) return null;
+  const binary = atob(data);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/**
+ * The body, as an Input or as the refusal it earns. An `image` key, whatever
+ * its value, takes the image path and `text` is ignored (CAL-019 AC-3). The
+ * image checks run in PO decision 7's order: string, MIME, base64, size.
+ */
+async function readInput(req: Request): Promise<Input | Response> {
+  const badRequest = () => jsonResponse({ error: "bad_request" }, 400);
   let body: unknown;
   try {
     body = await req.json();
   } catch {
-    return null;
+    return badRequest();
   }
-  const text = (body as { text?: unknown } | null)?.text;
-  if (typeof text !== "string") return null;
-  if (text.trim() === "" || text.length > MAX_TEXT_CHARS) return null;
-  return text;
+  const fields = (typeof body === "object" && body !== null ? body : {}) as {
+    text?: unknown;
+    image?: unknown;
+    mime?: unknown;
+  };
+
+  if (Object.hasOwn(fields, "image")) {
+    const { image, mime } = fields;
+    if (typeof image !== "string") return badRequest();
+    if (
+      typeof mime !== "string" ||
+      !(IMAGE_MIME_TYPES as readonly string[]).includes(mime)
+    ) {
+      return jsonResponse({ error: "unsupported_media_type" }, 415);
+    }
+    const bytes = decodeBase64(image);
+    if (bytes === null) return badRequest();
+    if (bytes.length > MAX_IMAGE_BYTES) {
+      return jsonResponse({ error: "payload_too_large" }, 413);
+    }
+    return { kind: "image", mimeType: mime, data: image, bytes };
+  }
+
+  const text = fields.text;
+  if (typeof text !== "string") return badRequest();
+  if (text.trim() === "" || text.length > MAX_TEXT_CHARS) return badRequest();
+  return { kind: "text", text };
 }
 
-async function sha256Hex(text: string): Promise<string> {
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
+/** Lowercase SHA-256 hex of the bytes; text is hashed as its UTF-8. */
+async function sha256Hex(
+  input: string | Uint8Array<ArrayBuffer>,
+): Promise<string> {
+  const bytes = typeof input === "string"
+    ? new TextEncoder().encode(input)
+    : input;
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
   return Array.from(
     new Uint8Array(digest),
     (b) => b.toString(16).padStart(2, "0"),
@@ -113,8 +199,8 @@ export async function handleCapture(
     return jsonResponse({ error: "unauthorized" }, 401);
   }
   // 3. The body. Nothing attempted, so no job row (PO decision 3).
-  const text = await readText(req);
-  if (text === null) return jsonResponse({ error: "bad_request" }, 400);
+  const input = await readInput(req);
+  if (input instanceof Response) return input;
 
   // 4. The owner.
   const refused = await requireOwner(req, deps);
@@ -151,7 +237,12 @@ export async function handleCapture(
 
   // 6. Gemini, timed around the one call.
   const outcome = await callGemini({
-    prompt: buildPrompt(text, kindNames),
+    ...(input.kind === "image"
+      ? {
+        prompt: buildImagePrompt(kindNames),
+        image: { mimeType: input.mimeType, data: input.data },
+      }
+      : { prompt: buildPrompt(input.text, kindNames) }),
     apiKey: deps.env("GEMINI_API_KEY") ?? "",
     base: deps.env("GEMINI_API_BASE") ?? DEFAULT_GEMINI_API_BASE,
     fetch: deps.fetch,
@@ -159,8 +250,10 @@ export async function handleCapture(
   });
 
   const row: JobRow = {
-    input_kind: "text",
-    input_hash: await sha256Hex(text),
+    input_kind: input.kind,
+    input_hash: await sha256Hex(
+      input.kind === "image" ? input.bytes : input.text,
+    ),
     model: GEMINI_MODEL,
     proposal: null,
     confidence: null,
@@ -191,7 +284,8 @@ export async function handleCapture(
     }
   }
 
-  // 8. The job row: a hash of the text, never the text.
+  // 8. The job row: a hash of the text or the decoded image bytes, never
+  // the input itself.
   let jobId: unknown;
   try {
     const res = await deps.fetch(`${supabaseUrl}/rest/v1/capture_jobs`, {

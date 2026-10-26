@@ -221,3 +221,145 @@ Deno.test("a prompt for an owner with no kinds still carries the text", () => {
   const prompt = buildPrompt("Dentist Tue 9:30", []);
   assert(prompt.includes("Dentist Tue 9:30"));
 });
+
+// ================================================================ CAL-019
+//
+// CAL-019 Contract Blocks 2 and 3: the image part and the image prompt. The
+// new exports and the widened signatures are reached through namespace
+// imports, cast to the Contract's shapes: Deno type-checks the whole test
+// graph first, so a named import of a missing export, or a second argument the
+// current signature lacks, would take every existing test dark. Read this way,
+// each absence fails exactly the test that needs it, at run time.
+
+import * as geminiModule from "./gemini.ts";
+import * as promptModule from "./prompt.ts";
+
+/** Contract Block 2's InlineImage: the base64 exactly as received. */
+type InlineImageShape = { mimeType: string; data: string };
+
+const buildGeminiRequestWithImage = geminiModule
+  .buildGeminiRequest as unknown as (
+    prompt: string,
+    image?: InlineImageShape,
+  ) => {
+    contents: { role: string; parts: Record<string, unknown>[] }[];
+    generationConfig: Record<string, unknown>;
+  };
+
+const callGeminiWithImage = geminiModule.callGemini as unknown as (
+  args: Parameters<typeof callGemini>[0] & { image?: InlineImageShape },
+) => ReturnType<typeof callGemini>;
+
+function buildImagePrompt(kindNames: readonly string[]): string {
+  const fn = (promptModule as Record<string, unknown>).buildImagePrompt;
+  assertEquals(
+    typeof fn,
+    "function",
+    "prompt.ts does not export buildImagePrompt",
+  );
+  return (fn as (k: readonly string[]) => string)(kindNames);
+}
+
+const IMAGE: InlineImageShape = { mimeType: "image/webp", data: "//4AgA==" };
+
+Deno.test("CAL-019 AC-1: with an image the request's parts are exactly [inline_data {mime_type, data}, the prompt text], image first", () => {
+  const req = buildGeminiRequestWithImage("PROMPT TEXT", IMAGE);
+  assertEquals(req.contents, [
+    {
+      role: "user",
+      parts: [
+        { inline_data: { mime_type: "image/webp", data: "//4AgA==" } },
+        { text: "PROMPT TEXT" },
+      ],
+    },
+  ]);
+});
+
+Deno.test("CAL-019 AC-1: an image request keeps the text request's generationConfig while its parts gain the image", () => {
+  const withImage = buildGeminiRequestWithImage("P", IMAGE);
+  assertEquals(
+    withImage.generationConfig,
+    buildGeminiRequest("P").generationConfig,
+  );
+  assertEquals(
+    withImage.contents[0]!.parts.length,
+    2,
+    "the image argument was ignored",
+  );
+});
+
+Deno.test("CAL-019 AC-1: the inline data is the base64 as given, not re-encoded or trimmed", () => {
+  const data = "Qm9va2luZyByZWYgUVgtNzc4MTIgc2NyZWVuc2hvdA==";
+  const req = buildGeminiRequestWithImage("P", { mimeType: "image/png", data });
+  const part = req.contents[0]!.parts[0] as {
+    inline_data?: { mime_type: string; data: string };
+  };
+  assert(part.inline_data !== undefined, "the first part is not inline_data");
+  assert(part.inline_data.data === data, `data was ${part.inline_data.data}`);
+  assertEquals(part.inline_data.mime_type, "image/png");
+});
+
+Deno.test("CAL-019: an explicitly undefined image builds a text-only request, one text part and nothing else", () => {
+  assertEquals(buildGeminiRequestWithImage("P", undefined).contents, [
+    { role: "user", parts: [{ text: "P" }] },
+  ]);
+  assertEquals(
+    buildGeminiRequestWithImage("P", undefined),
+    buildGeminiRequest("P"),
+  );
+});
+
+Deno.test("CAL-019 AC-1: callGemini with an image posts [inline_data, text] to the same URL with the same key header", async () => {
+  const s = stub(() => json({ candidates: [] }));
+  await callGeminiWithImage({
+    prompt: "the prompt",
+    image: { mimeType: "image/jpeg", data: "YWJj" },
+    apiKey: KEY,
+    base: BASE,
+    fetch: s.fetch,
+    now: s.now,
+  });
+  assertEquals(s.seen.length, 1);
+  const call = s.seen[0]!;
+  assertEquals(call.method, "POST");
+  assertEquals(call.url, URL_);
+  assertEquals(call.headers.get("x-goog-api-key"), KEY);
+  const body = JSON.parse(call.body);
+  assertEquals(body.contents, [
+    {
+      role: "user",
+      parts: [
+        { inline_data: { mime_type: "image/jpeg", data: "YWJj" } },
+        { text: "the prompt" },
+      ],
+    },
+  ]);
+  assertEquals(body.generationConfig, buildGeminiRequest("x").generationConfig);
+});
+
+Deno.test("CAL-019 AC-1: the image prompt names every kind verbatim", () => {
+  const kinds = ["Work", "Physio & Rehab", "Kids' clubs"];
+  const prompt = buildImagePrompt(kinds);
+  for (const k of kinds) assert(prompt.includes(k), `no kind ${k}`);
+});
+
+Deno.test("CAL-019 AC-1: the image prompt has no <<< >>> text delimiters, since it carries no user text", () => {
+  const prompt = buildImagePrompt(["Work"]);
+  assert(!prompt.includes("<<<"), "the image prompt carries <<<");
+  assert(!prompt.includes(">>>"), "the image prompt carries >>>");
+});
+
+Deno.test("CAL-019 AC-1: the image prompt tells the model the event is in the attached image", () => {
+  const prompt = buildImagePrompt(["Work"]);
+  assert(
+    /image|screenshot/i.test(prompt),
+    "the image prompt never mentions the image or screenshot",
+  );
+});
+
+Deno.test("CAL-019 AC-1: the image prompt for an owner with no kinds is still a prompt, and differs from one with kinds", () => {
+  const none = buildImagePrompt([]);
+  assertEquals(typeof none, "string");
+  assert(none.length > 0, "the image prompt is empty");
+  assert(none !== buildImagePrompt(["Work"]), "the kinds make no difference");
+});
