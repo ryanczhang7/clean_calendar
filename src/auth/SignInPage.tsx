@@ -57,6 +57,9 @@ function useOnline(): boolean {
     const update = () => setOnline(navigator.onLine);
     window.addEventListener("online", update);
     window.addEventListener("offline", update);
+    // The first render read navigator.onLine before this effect ran; a change
+    // in between fired no listener of ours, so read it again (CAL-038).
+    update();
     return () => {
       window.removeEventListener("online", update);
       window.removeEventListener("offline", update);
