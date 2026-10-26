@@ -106,6 +106,8 @@ actionable, no codes. Examples:
   screenshot."
 - Buttons: "Save event", "Discard"
 - Collapsed source: "Show what was captured" / "Hide what was captured"
+- Opened with nothing to confirm (a reload, a typed URL): "Nothing to
+  confirm. Start from Capture." with "Capture" linking to `/capture` (CAL-020)
 - After save (toast): "Added {title} · View"
 
 **Notification permission**
