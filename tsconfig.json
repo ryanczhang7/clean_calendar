@@ -11,7 +11,7 @@
     "isolatedModules": true,
     "skipLibCheck": true,
     "allowImportingTsExtensions": true,
-    "types": ["vite/client", "node"]
+    "types": ["vite/client", "vite-plugin-pwa/client", "node"]
   },
   "include": [
     "src",
@@ -20,5 +20,6 @@
     "vite.config.ts",
     "vitest.config.ts",
     "playwright.config.ts"
-  ]
+  ],
+  "exclude": ["src/sw.ts"]
 }

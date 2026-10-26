@@ -1,8 +1,23 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
+import { manifest } from "./src/pwa/manifest";
 
-// The PWA plugin (vite-plugin-pwa, injectManifest with src/sw.ts) is added by
-// the story that writes the service worker; CAL-001 only installs it.
+// CAL-017 Block 2: injectManifest, so src/sw.ts is ours; registration is done
+// by src/main.tsx (registerType "prompt", injectRegister false).
 export default defineConfig({
-  plugins: [react()],
+  plugins: [
+    react(),
+    VitePWA({
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      registerType: "prompt",
+      injectRegister: false,
+      manifest,
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,png,webmanifest}"],
+      },
+    }),
+  ],
 });

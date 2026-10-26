@@ -59,6 +59,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # The `integration` gate (optional repo-wide, required by CAL-017 and
+      # later PWA stories through `required_gates`) drives Playwright's
+      # Chromium against `vite preview`. Without the browser the gate stops
+      # at launch and reports nothing about the specs. --with-deps installs
+      # the shared libraries Chromium needs on ubuntu-latest.
+      - name: Install Playwright Chromium
+        run: pnpm exec playwright install --with-deps chromium
+
       # The `db` gate (CAL-004) runs supabase/tests/**/*.db.test.ts against a
       # RUNNING local stack and does not start one itself. Docker is present
       # on ubuntu-latest; the CLI is the `supabase` dev dependency. `start`

@@ -3,6 +3,7 @@ import {
   type JSX,
   type KeyboardEvent,
   type ReactNode,
+  useContext,
   useEffect,
   useRef,
   useState,
@@ -10,6 +11,7 @@ import {
 import { Link, Outlet, useLocation, useNavigate } from "react-router";
 import { signOut } from "../auth/session";
 import { KindLegend } from "../kinds/KindLegend";
+import { UpdatePrompt, UpdateSignalContext } from "../pwa/registerSW";
 import { SyncStatus } from "../sync/SyncStatus";
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import styles from "./AppShell.module.css";
@@ -110,6 +112,8 @@ export function AppShell(props: { toolbar?: ReactNode }): JSX.Element {
   // CAL-008 Block 4: both Legend buttons toggle the one legend.
   const [legendOpen, setLegendOpen] = useState(false);
   const toggleLegend = () => setLegendOpen((o) => !o);
+  // CAL-017 Block 4: the update prompt shows inside the shell only.
+  const updateSignal = useContext(UpdateSignalContext);
   return (
     <ToastProvider>
       <div className={styles.shell}>
@@ -158,6 +162,7 @@ export function AppShell(props: { toolbar?: ReactNode }): JSX.Element {
           </button>
           <Link to="/capture">Capture</Link>
         </nav>
+        {updateSignal ? <UpdatePrompt signal={updateSignal} /> : null}
         <ToastHost />
       </div>
     </ToastProvider>
