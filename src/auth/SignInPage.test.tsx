@@ -307,7 +307,11 @@ describe("offline (AC-5)", () => {
     );
     renderAt("/signin");
     const button = await signInButton();
-    expect(dropped).toBe(true);
+    // The page subscribes after the button is on screen, so the drop may
+    // still be to come.
+    await waitFor(() => {
+      expect(dropped).toBe(true);
+    });
     expect(
       await screen.findByText(OFFLINE, { exact: true }),
     ).toBeInTheDocument();
