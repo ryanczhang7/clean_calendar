@@ -84,6 +84,15 @@ actionable, no codes. Examples:
 - Working: "Asking the assistant… usually takes a few seconds."
 - Offline: "Capture needs a connection. Your other changes are saved and
   will sync."
+- Paste button: "Paste" (CAL-020)
+- Thumbnail alt text: "Screenshot preview" · remove button: "Remove
+  screenshot" (CAL-020)
+- Both text and a screenshot present: "Only the screenshot will be sent."
+  (CAL-020)
+- While working, beside the status line: "Cancel"; on the error strip:
+  "Retry" (CAL-020)
+- Too large after shrinking: "That screenshot is too large, even after
+  shrinking it. Try cropping it." (CAL-020)
 
 **Confirm screen**
 
