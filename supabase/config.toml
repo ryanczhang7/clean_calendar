@@ -407,6 +407,9 @@ deno_version = 2
 # reads every declared function's index.ts and refuses to start while the
 # file is missing (measured 2026-10-14, CLI 2.120.0, CAL-004).
 
+[functions.capture]
+verify_jwt = true
+
 [analytics]
 enabled = true
 port = 54327
