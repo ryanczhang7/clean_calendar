@@ -27,8 +27,10 @@ export function KindPicker(props: {
   /** The existing event's kind is soft-deleted or unknown (AC-7). */
   removed: boolean;
   onChange: (kindId: string) => void;
+  /** An id list for the trigger's aria-describedby (CAL-021: the field's state helper). */
+  describedBy?: string;
 }): JSX.Element {
-  const { kinds, value, removed, onChange } = props;
+  const { kinds, value, removed, onChange, describedBy } = props;
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const baseId = useId();
@@ -117,6 +119,7 @@ export function KindPicker(props: {
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={`Kind, ${shownName}`}
+        aria-describedby={describedBy}
         onClick={() => (open ? close(false) : openAt(chosenIndex()))}
         onKeyDown={onTriggerKeyDown}
       >
