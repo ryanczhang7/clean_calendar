@@ -123,3 +123,25 @@
     flex: 1;
   }
 }
+
+/* CAL-021 (components.md "Confirm screen"): a low or missing field, keyed
+   off data-state rather than a colour-only class. The glyph and the helper
+   say the same thing in text, so colour is never the only signal. */
+.glyph {
+  display: inline-block;
+  margin-inline-start: var(--space-1);
+  vertical-align: -2px;
+  color: var(--color-warning);
+}
+
+[data-state] .input,
+[data-state] button[aria-haspopup="listbox"] {
+  background: var(--color-warning-subtle);
+}
+
+.helper {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}

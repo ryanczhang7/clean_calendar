@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
 } from "react";
+import { format } from "date-fns";
 import { Link, useLocation, useNavigate } from "react-router";
 import type { Proposal } from "../../shared/captureSchema";
 import { useBreakpoint } from "../calendar/media";
@@ -16,6 +17,7 @@ import {
   type EventFormValue,
   type FormErrors,
   newEventValue,
+  toInstants,
   toNewEvent,
   validate,
 } from "../domain/eventForm";
@@ -26,6 +28,16 @@ import { type EventActions, eventActions } from "../sync/eventActions";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { useMaybeToast } from "../ui/Toast";
 import type { CaptureHandoff } from "./captureClient";
+import {
+  blankMissing,
+  type FieldStates,
+  type FormField,
+  fieldStates,
+  firstFocus,
+  saveBlockers,
+  saveDescription,
+  summaryText,
+} from "./confirmSummary";
 import styles from "./ConfirmPage.module.css";
 
 // CAL-020 Contract, Block 4 (components.md "Confirm screen"; voice.md
@@ -87,6 +99,59 @@ export function proposalToFormValue(
   };
 }
 
+/**
+ * An empty end, filled at Save (CAL-021 PO decision 3): timed → start + 1 h;
+ * all day → the start's day. A partly filled end is the owner's, left to
+ * `validate`.
+ */
+function withEnd(value: EventFormValue): EventFormValue {
+  if (value.allDay)
+    return value.endDate === ""
+      ? { ...value, endDate: value.startDate }
+      : value;
+  if (value.endDate !== "" || value.endTime !== "") return value;
+  const end = new Date(toInstants(value).startsAt.getTime() + HOUR_MS);
+  return {
+    ...value,
+    endDate: format(end, "yyyy-MM-dd"),
+    endTime: format(end, "HH:mm"),
+  };
+}
+
+/** The element focus lands on for a field (CAL-021 Block 4, AC-3). */
+function focusTarget(
+  form: HTMLFormElement | null,
+  field: FormField,
+  titleId: string,
+): HTMLElement | null {
+  switch (field) {
+    case "title":
+      return document.getElementById(titleId);
+    case "kind":
+      return (
+        form?.querySelector<HTMLElement>('button[aria-haspopup="listbox"]') ??
+        null
+      );
+    case "start":
+      return (
+        form?.querySelector<HTMLElement>('input[aria-label="Start date"]') ??
+        null
+      );
+    case "end":
+      return (
+        form?.querySelector<HTMLElement>('input[aria-label="End date"]') ?? null
+      );
+    case "location": {
+      const label = [...(form?.querySelectorAll("label") ?? [])].find(
+        (l) => l.textContent?.trim() === "Location",
+      );
+      return label === undefined
+        ? null
+        : document.getElementById(label.htmlFor);
+    }
+  }
+}
+
 type Props = {
   actions?: EventActions;
   jobs?: Pick<CaptureJobsRepo, "setStatus">;
@@ -133,18 +198,29 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
   const ids = useId();
   const titleId = `${ids}-title`;
   const sourceId = `${ids}-source`;
+  const saveDescriptionId = `${ids}-save-description`;
   const root = useRef<HTMLFormElement>(null);
+  // The proposal's states, once: the marking and the summary describe what
+  // the model did, and do not change as the owner edits (PO decision 4).
+  const [states] = useState<FieldStates>(() => fieldStates(handoff.response));
   const [value, setValue] = useState(() =>
-    proposalToFormValue(proposal, kinds.kinds, new Date()),
+    blankMissing(
+      proposalToFormValue(proposal, kinds.kinds, new Date()),
+      states,
+    ),
   );
+  const [summary] = useState(() => summaryText(states, value.allDay));
   const [errors, setErrors] = useState<FormErrors>({});
   const [failed, setFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [showSource, setShowSource] = useState(false);
   const busyRef = useRef(false);
   // The kinds usually arrive after the first render: the proposal's kind is
-  // looked up once they are ready, unless one has been chosen by then.
-  const kindApplied = useRef(kinds.status === "ready");
+  // looked up once they are ready, unless one has been chosen by then. A
+  // missing kind is never looked up: it stays empty (CAL-021 AC-2).
+  const kindApplied = useRef(
+    kinds.status === "ready" || states.kind === "missing",
+  );
 
   useEffect(() => {
     if (kindApplied.current || kinds.status !== "ready") return;
@@ -153,7 +229,22 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
     setValue((v) => (v.kindId === null ? { ...v, kindId } : v));
   }, [kinds, proposal.kindName]);
 
-  const saveBlocked = value.title.trim() === "" || busy;
+  // Focus on open (AC-3), once. Deferred past RouteFocus, whose effect runs
+  // later in this same commit and focuses the <h1>; the kind trigger exists
+  // before the kinds load, so nothing here waits for them.
+  const focused = useRef(false);
+  useEffect(() => {
+    if (focused.current) return;
+    focused.current = true;
+    const target = focusTarget(root.current, firstFocus(states), titleId);
+    queueMicrotask(() => {
+      if (target?.isConnected) target.focus();
+    });
+  }, [states, titleId]);
+
+  const blockers = saveBlockers(value);
+  const blockedBy = saveDescription(blockers, value.allDay);
+  const saveBlocked = blockers.length > 0 || busy;
 
   const begin = (): boolean => {
     if (busyRef.current) return false;
@@ -179,14 +270,16 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (saveBlocked || busyRef.current) return;
-    const found = validate(value);
+    const filled = withEnd(value);
+    if (filled !== value) setValue(filled);
+    const found = validate(filled);
     setErrors(found);
     setFailed(false);
     if (found.title !== undefined || found.end !== undefined) {
       focusField(found);
       return;
     }
-    const kindId = value.kindId;
+    const kindId = filled.kindId;
     if (kindId === null) {
       // A kind is required, as in the sheet.
       root.current
@@ -196,7 +289,7 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
     }
     if (!begin()) return;
     const result = await actions.createEvent({
-      ...toNewEvent(value, kindId),
+      ...toNewEvent(filled, kindId),
       origin: "capture",
       captureJobId: jobId,
     });
@@ -231,6 +324,9 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
       <h1 tabIndex={-1} className={styles.title}>
         Check the details
       </h1>
+      <p role="status" className={styles.summary}>
+        {summary}
+      </p>
       <form
         ref={root}
         noValidate
@@ -249,6 +345,7 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
           kinds={kinds.kinds}
           kindRemoved={false}
           titleId={titleId}
+          fieldStates={states}
         />
 
         <div className={styles.source}>
@@ -286,9 +383,17 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
             type="submit"
             className={styles.primary}
             aria-disabled={saveBlocked}
+            aria-describedby={
+              blockedBy === null ? undefined : saveDescriptionId
+            }
           >
             Save event
           </button>
+          {blockedBy === null ? null : (
+            <p id={saveDescriptionId} className={styles.visuallyHidden}>
+              {blockedBy}
+            </p>
+          )}
         </div>
       </form>
     </div>

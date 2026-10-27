@@ -22,6 +22,25 @@
   margin: 0;
 }
 
+/* CAL-021: the proposal's one-line summary (role="status"). */
+.summary {
+  margin: 0;
+}
+
+/* Save's description while something blocks it: read, not shown - the
+   marked fields already show what is missing. */
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .form {
   display: flex;
   flex-direction: column;
