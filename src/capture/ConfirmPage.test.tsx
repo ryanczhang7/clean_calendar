@@ -9,7 +9,12 @@ import {
 import userEvent from "@testing-library/user-event";
 import { HttpResponse } from "msw";
 import type { JSX } from "react";
-import { createMemoryRouter, RouterProvider, useLocation } from "react-router";
+import {
+  createMemoryRouter,
+  Outlet,
+  RouterProvider,
+  useLocation,
+} from "react-router";
 import {
   afterEach,
   beforeEach,
@@ -20,6 +25,7 @@ import {
   vi,
 } from "vitest";
 import type { CaptureResponse, Proposal } from "../../shared/captureSchema";
+import { RouteFocus } from "../app/routes";
 import type { CaptureJobsRepo } from "../data/captureJobs";
 import type { Kind } from "../data/rows";
 import { END_ERROR } from "../domain/eventForm";
@@ -905,5 +911,446 @@ describe('"Discard" (AC-6, Block 4)', () => {
     await settle();
     expect(actions.createEvent).not.toHaveBeenCalled();
     expect(jobs?.setStatus).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-021 Contract, Block 4 (AC-2 to AC-6). The same page, now with the
+// function's `confidence` and `missing` supplied (`marked` builds on
+// `handoff()`, which is unchanged). SETTLED: voice.md's copy, written out by
+// hand; total 5; focus missing -> low -> Title. Focus is asserted twice per
+// target: in `renderConfirm`'s router, which has NO RouteFocus, and in
+// `renderFocused`, which wraps the page in the app's own pathless layout
+// (<Outlet /> then the real RouteFocus, routes.tsx) - so RouteFocus's <h1>
+// focus lands in the same commit, after the page's own effects, as in the
+// app. A summary or Save-description case renders without the toast host, so
+// the page's status line is the only role="status" on screen.
+
+const LOW_TEXT = "Not sure about this — check it";
+const MISSING_TEXT = "Not found in the text — add it";
+
+/** A handoff whose response carries the given confidence and missing list. */
+function marked(
+  proposal: Partial<Proposal>,
+  extra: {
+    confidence?: CaptureResponse["confidence"];
+    missing?: CaptureResponse["missing"];
+  },
+): CaptureHandoff {
+  const base = handoff(proposal);
+  return {
+    ...base,
+    response: {
+      ...base.response,
+      confidence: extra.confidence ?? {},
+      missing: extra.missing ?? [],
+    },
+  };
+}
+
+/** The confirm page under the app's FocusLayout: the page, then RouteFocus. */
+function renderFocused(state: CaptureHandoff) {
+  const user = userEvent.setup();
+  const actions = fakeActions();
+  const router = createMemoryRouter(
+    [
+      {
+        element: (
+          <>
+            <Outlet />
+            <RouteFocus />
+          </>
+        ),
+        children: [
+          {
+            path: "/capture/confirm",
+            element: (
+              <ConfirmPage
+                actions={actions}
+                jobs={fakeJobs()}
+                kinds={kindsStoreOf([GYM, DINING, TRAVEL])}
+              />
+            ),
+          },
+        ],
+      },
+    ],
+    { initialEntries: [{ pathname: "/capture/confirm", state }] },
+  );
+  render(<RouterProvider router={router} />);
+  return { user, actions };
+}
+
+const summary = () => screen.getByRole("status");
+const group = (name: string) => screen.getByRole("group", { name });
+const stateOf = (el: HTMLElement) =>
+  el.closest("[data-state]")?.getAttribute("data-state") ?? null;
+
+describe("the status summary (AC-4, AC-5, Block 4)", () => {
+  it('nothing low or missing: one role="status" line reading "Found 5 of 5 details.", after the heading and before the form', async () => {
+    renderConfirm({ toast: false });
+    await formReady();
+    expect(screen.getAllByRole("status")).toHaveLength(1);
+    const status = summary();
+    expect(status).toHaveTextContent(/^Found 5 of 5 details\.$/);
+    expect(status.closest("form")).toBeNull();
+    const h1 = screen.getByRole("heading", { level: 1 });
+    expect(
+      h1.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      status.compareDocumentPosition(titleBox()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('voice.md\'s example: kind low and end missing reads "Found 4 of 5 details. Check the kind and add the end time.", and the form is marked to match', async () => {
+    renderConfirm({
+      toast: false,
+      state: marked({}, { confidence: { kind: 0.5 }, missing: ["endsAt"] }),
+    });
+    await formReady();
+    expect(summary()).toHaveTextContent(
+      /^Found 4 of 5 details\. Check the kind and add the end time\.$/,
+    );
+    // fieldStates reaches the form: Kind low, Ends missing, Title plain.
+    expect(stateOf(kindTrigger())).toBe("low");
+    expect(kindTrigger()).toHaveAccessibleDescription(LOW_TEXT);
+    expect(group("Ends")).toHaveAttribute("data-state", "missing");
+    expect(field("End date")).toHaveAccessibleDescription(MISSING_TEXT);
+    expect(stateOf(titleBox())).toBeNull();
+    expect(group("Starts")).not.toHaveAttribute("data-state");
+  });
+
+  it('an all-day proposal names the dates: "Check the start date and add the end date."', async () => {
+    renderConfirm({
+      toast: false,
+      state: marked(
+        { allDay: true, startsAt: "2026-11-03", endsAt: null },
+        { confidence: { startsAt: 0.6 }, missing: ["endsAt"] },
+      ),
+    });
+    await formReady();
+    expect(summary()).toHaveTextContent(
+      /^Found 4 of 5 details\. Check the start date and add the end date\.$/,
+    );
+  });
+
+  it("the summary is the proposal's: typing into a missing Title changes neither it nor the marking (PO decision 4)", async () => {
+    const { user } = renderConfirm({
+      toast: false,
+      state: marked({ title: null }, { missing: ["title"] }),
+    });
+    await formReady();
+    expect(summary()).toHaveTextContent(
+      /^Found 4 of 5 details\. Add the title\.$/,
+    );
+    await user.type(titleBox(), "Dinner");
+    expect(titleBox()).toHaveValue("Dinner");
+    expect(summary()).toHaveTextContent(
+      /^Found 4 of 5 details\. Add the title\.$/,
+    );
+    expect(stateOf(titleBox())).toBe("missing");
+    expect(titleBox()).toHaveAccessibleDescription(MISSING_TEXT);
+  });
+
+  it("nothing found: the summary reads the nothing-found sentence and every field is empty (AC-5)", async () => {
+    const { user } = renderConfirm({
+      toast: false,
+      state: marked(
+        {
+          title: null,
+          startsAt: null,
+          endsAt: null,
+          allDay: false,
+          location: null,
+          kindName: null,
+        },
+        { missing: ["title", "startsAt", "endsAt", "location", "kind"] },
+      ),
+    });
+    // The kinds have loaded once the list can be opened with them.
+    await user.click(kindTrigger());
+    await screen.findByRole("option", { name: "Dining" });
+    await user.keyboard("{Escape}");
+    expect(summary()).toHaveTextContent(
+      /^Couldn't find event details\. Fill them in, or try a clearer screenshot\.$/,
+    );
+    expect(titleBox()).toHaveValue("");
+    expect(kindTrigger()).toHaveAccessibleName("Kind,");
+    for (const label of [
+      "Start date",
+      "Start time",
+      "End date",
+      "End time",
+      "Location",
+      "Notes",
+    ]) {
+      expect(field(label), label).toHaveValue("");
+    }
+    expect(document.querySelectorAll('[data-state="missing"]')).toHaveLength(5);
+  });
+});
+
+describe("a missing field opens empty, never guessed (AC-2, Block 4)", () => {
+  it("a missing start and end open empty instead of the next-whole-hour and +1 h guesses; the confident title and location keep the proposal's", async () => {
+    renderConfirm({
+      state: marked(
+        { startsAt: null, endsAt: null },
+        { missing: ["startsAt", "endsAt"] },
+      ),
+    });
+    await formReady();
+    for (const label of ["Start date", "Start time", "End date", "End time"]) {
+      expect(field(label), label).toHaveValue("");
+    }
+    expect(titleBox()).toHaveValue("Dinner at Lupa");
+    expect(field("Location")).toHaveValue("Lupa, Via Roma 1");
+  });
+
+  it("a missing title and location open empty even when the proposal carries text for them; the start keeps the proposal's", async () => {
+    renderConfirm({
+      state: marked({}, { missing: ["title", "location"] }),
+    });
+    await formReady();
+    expect(titleBox()).toHaveValue("");
+    expect(field("Location")).toHaveValue("");
+    expect(field("Start date")).toHaveValue("2026-11-03");
+    expect(field("Start time")).toHaveValue("19:30");
+  });
+
+  it("a missing kind stays empty after the kinds load - the late lookup is skipped", async () => {
+    const first = renderConfirm({
+      toast: false,
+      state: marked({ kindName: "Dining" }, { missing: ["kind"] }),
+    });
+    await first.user.click(kindTrigger());
+    expect(
+      await screen.findByRole("option", { name: "Dining" }),
+    ).toHaveAttribute("aria-selected", "false");
+    await first.user.keyboard("{Escape}");
+    await settle();
+    expect(kindTrigger()).toHaveAccessibleName("Kind,");
+    expect(stateOf(kindTrigger())).toBe("missing");
+  });
+
+  it("a low kind keeps the proposal's pick once the kinds load", async () => {
+    renderConfirm({
+      state: marked({ kindName: "Dining" }, { confidence: { kind: 0.4 } }),
+    });
+    await formReady("Dining");
+    expect(stateOf(kindTrigger())).toBe("low");
+  });
+});
+
+describe("focus on open (AC-3, Block 4)", () => {
+  const RENDERERS = [
+    [
+      "without RouteFocus",
+      (state: CaptureHandoff) => renderConfirm({ state, toast: false }),
+    ],
+    [
+      "after RouteFocus has focused the <h1>",
+      (state: CaptureHandoff) => renderFocused(state),
+    ],
+  ] as const;
+
+  const CASES: [string, () => CaptureHandoff, () => HTMLElement][] = [
+    ["nothing low or missing: Title", () => handoff(), titleBox],
+    [
+      "a missing title: the Title input",
+      () => marked({ title: null }, { missing: ["title"] }),
+      titleBox,
+    ],
+    [
+      "a low kind: the kind picker's trigger",
+      () => marked({}, { confidence: { kind: 0.5 } }),
+      kindTrigger,
+    ],
+    [
+      "a missing start: the Start date input",
+      () => marked({ startsAt: null, endsAt: null }, { missing: ["startsAt"] }),
+      () => field("Start date"),
+    ],
+    [
+      "a missing end: the End date input",
+      () => marked({}, { missing: ["endsAt"] }),
+      () => field("End date"),
+    ],
+    [
+      "a low location: the Location input",
+      () => marked({}, { confidence: { location: 0.3 } }),
+      () => field("Location"),
+    ],
+    [
+      "a low title before a missing location: the missing Location wins",
+      () =>
+        marked(
+          { location: null },
+          { confidence: { title: 0.2 }, missing: ["location"] },
+        ),
+      () => field("Location"),
+    ],
+  ];
+
+  for (const [how, renderWith] of RENDERERS) {
+    it.each(CASES)(`${how}: %s`, async (_label, state, target) => {
+      renderWith(state());
+      await settle();
+      await waitFor(() => expect(target()).toHaveFocus());
+    });
+  }
+
+  it("focus is moved once: after the owner moves to Notes and types, nothing pulls it back", async () => {
+    const { user } = renderFocused(
+      marked({ title: null }, { missing: ["title"] }),
+    );
+    await settle();
+    await waitFor(() => expect(titleBox()).toHaveFocus());
+    await user.click(field("Notes"));
+    await user.type(field("Notes"), "Window table");
+    await formReady();
+    await settle();
+    expect(field("Notes")).toHaveFocus();
+  });
+});
+
+describe('"Save event" waits for Title and Start (AC-6, Block 4)', () => {
+  it('a missing title: aria-disabled="true" and described "Add the title to save."; once typed, neither', async () => {
+    const { user } = renderConfirm({
+      toast: false,
+      state: marked({ title: null }, { missing: ["title"] }),
+    });
+    await formReady();
+    expect(saveButton()).toHaveAttribute("aria-disabled", "true");
+    const describedBy = saveButton().getAttribute("aria-describedby") ?? "";
+    expect(describedBy).not.toBe("");
+    expect(document.getElementById(describedBy)).toHaveTextContent(
+      /^Add the title to save\.$/,
+    );
+    expect(saveButton()).toHaveAccessibleDescription("Add the title to save.");
+    await user.type(titleBox(), "Dinner");
+    expect(saveButton()).not.toHaveAttribute("aria-disabled", "true");
+    expect(saveButton()).not.toHaveAttribute("aria-describedby");
+    expect(screen.queryByText(/to save\.$/)).toBeNull();
+  });
+
+  it('a missing title and start: "Add the title and the start time to save."; with the start filled, "Add the title to save."', async () => {
+    renderConfirm({
+      toast: false,
+      state: marked(
+        { title: null, startsAt: null, endsAt: null },
+        { missing: ["title", "startsAt", "endsAt"] },
+      ),
+    });
+    await formReady();
+    expect(saveButton()).toHaveAccessibleDescription(
+      "Add the title and the start time to save.",
+    );
+    fireEvent.change(field("Start date"), { target: { value: "2026-11-05" } });
+    expect(saveButton()).toHaveAccessibleDescription(
+      "Add the title and the start time to save.",
+    );
+    fireEvent.change(field("Start time"), { target: { value: "18:00" } });
+    expect(saveButton()).toHaveAccessibleDescription("Add the title to save.");
+    expect(saveButton()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it('an all-day missing start: "Add the start date to save."', async () => {
+    renderConfirm({
+      toast: false,
+      state: marked(
+        { allDay: true, startsAt: null, endsAt: null },
+        { missing: ["startsAt", "endsAt"] },
+      ),
+    });
+    await formReady();
+    expect(saveButton()).toHaveAttribute("aria-disabled", "true");
+    expect(saveButton()).toHaveAccessibleDescription(
+      "Add the start date to save.",
+    );
+  });
+
+  it("a click while the start is empty saves nothing; once the start is filled, the same click saves", async () => {
+    const { user, actions } = renderConfirm({
+      state: marked(
+        { startsAt: null, endsAt: null },
+        { missing: ["startsAt", "endsAt"] },
+      ),
+    });
+    await formReady();
+    await user.click(saveButton());
+    await settle();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+    fireEvent.change(field("Start date"), { target: { value: "2026-11-05" } });
+    fireEvent.change(field("Start time"), { target: { value: "18:00" } });
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+  });
+});
+
+describe("an empty end is filled at Save (PO decision 3, Block 4)", () => {
+  it("timed: the end opens empty and is saved as start + 1 h", async () => {
+    const { user, actions } = renderConfirm({
+      state: marked({ endsAt: null }, { missing: ["endsAt"] }),
+    });
+    await formReady();
+    expect(field("End date")).toHaveValue("");
+    expect(field("End time")).toHaveValue("");
+    expect(saveButton()).not.toHaveAttribute("aria-disabled", "true");
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    expect(actions.createEvent.mock.calls[0]?.[0]).toStrictEqual({
+      title: "Dinner at Lupa",
+      kindId: DINING.id,
+      startsAt: nov(3, 19, 30),
+      endsAt: nov(3, 20, 30),
+      allDay: false,
+      location: "Lupa, Via Roma 1",
+      notes: null,
+      origin: "capture",
+      recurrence: null,
+      captureJobId: JOB_ID,
+    });
+  });
+
+  it("all day: the end date opens empty and is saved as the same day", async () => {
+    const { user, actions } = renderConfirm({
+      state: marked(
+        { allDay: true, startsAt: "2026-11-03", endsAt: null },
+        { missing: ["endsAt"] },
+      ),
+    });
+    await formReady();
+    expect(field("End date")).toHaveValue("");
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    const saved = actions.createEvent.mock.calls[0]?.[0];
+    expect([saved?.allDay, saved?.startsAt, saved?.endsAt]).toStrictEqual([
+      true,
+      nov(3),
+      nov(4),
+    ]);
+  });
+
+  it("a missing start and end: the owner fills the start, the end stays empty, and the save ends an hour after the start they chose", async () => {
+    const { user, actions } = renderConfirm({
+      state: marked(
+        { startsAt: null, endsAt: null },
+        { missing: ["startsAt", "endsAt"] },
+      ),
+    });
+    await formReady();
+    expect(field("Start date")).toHaveValue("");
+    fireEvent.change(field("Start date"), { target: { value: "2026-11-05" } });
+    fireEvent.change(field("Start time"), { target: { value: "18:00" } });
+    expect(field("End date")).toHaveValue("");
+    expect(field("End time")).toHaveValue("");
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    const saved = actions.createEvent.mock.calls[0]?.[0];
+    expect([saved?.startsAt, saved?.endsAt]).toStrictEqual([
+      nov(5, 18, 0),
+      nov(5, 19, 0),
+    ]);
   });
 });

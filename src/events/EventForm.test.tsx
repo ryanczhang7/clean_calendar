@@ -370,3 +370,301 @@ describe("errors on the fields (AC-2, Block 4)", () => {
     );
   });
 });
+
+// CAL-021 Contract, Block 2 (AC-1, AC-2; components.md "Confirm screen").
+// MECHANICAL: a field whose state is "low" or "missing" carries data-state
+// on its wrapper (the .field div, or the Starts / Ends <fieldset>), a
+// <svg aria-hidden="true" data-glyph="warning"> in its label or legend, and
+// a helper <p id> that every input of the field names in aria-describedby -
+// helper first, then the error when both render. A state never sets
+// aria-invalid. "confident", and no prop at all, render nothing extra. The
+// copy is voice.md's, written out by hand.
+
+type FieldStatesProp = Partial<
+  Record<
+    "title" | "kind" | "start" | "end" | "location",
+    "confident" | "low" | "missing"
+  >
+>;
+
+const LOW = "Not sure about this — check it";
+const MISSING = "Not found in the text — add it";
+
+function StateHost(props: {
+  initial: EventFormValue;
+  errors: FormErrors;
+  fieldStates: FieldStatesProp;
+}): JSX.Element {
+  const [value, setValue] = useState(props.initial);
+  return (
+    <EventForm
+      value={value}
+      onChange={setValue}
+      errors={props.errors}
+      kinds={[GYM, MOVIES]}
+      kindRemoved={false}
+      titleId="the-title"
+      fieldStates={props.fieldStates}
+    />
+  );
+}
+
+function renderStates(
+  fieldStates: FieldStatesProp,
+  options: { value?: EventFormValue; errors?: FormErrors } = {},
+) {
+  const user = userEvent.setup();
+  const view = render(
+    <MemoryRouter>
+      <StateHost
+        initial={options.value ?? TIMED}
+        errors={options.errors ?? {}}
+        fieldStates={fieldStates}
+      />
+    </MemoryRouter>,
+  );
+  return { user, container: view.container, unmount: view.unmount };
+}
+
+const glyphIn = (el: Element | null) =>
+  el?.querySelector('svg[data-glyph="warning"]') ?? null;
+const group = (name: string) => screen.getByRole("group", { name });
+const labelOf = (el: HTMLElement) =>
+  (el as HTMLInputElement).labels?.[0] ?? null;
+const locationBox = () => screen.getByRole("textbox", { name: "Location" });
+const kindLabel = () => screen.getByText("Kind", { selector: "span" });
+const describedBy = (el: HTMLElement) =>
+  (el.getAttribute("aria-describedby") ?? "").split(" ").filter(Boolean);
+
+/** The helper <p> with this text: its id, which must be non-empty. */
+function helper(text: string): { el: HTMLElement; id: string } {
+  const el = screen.getByText(text);
+  expect(el.tagName).toBe("P");
+  const id = el.getAttribute("id") ?? "";
+  expect(id).not.toBe("");
+  return { el, id };
+}
+
+describe("per-field confirm state (CAL-021 Block 2, AC-1, AC-2)", () => {
+  it("without fieldStates nothing is marked; with a low Title, Title alone is", () => {
+    const first = renderStates({});
+    expect(first.container.querySelector("[data-state]")).toBeNull();
+    expect(first.container.querySelector("svg[data-glyph]")).toBeNull();
+    expect(screen.queryByText(LOW)).toBeNull();
+    expect(screen.queryByText(MISSING)).toBeNull();
+    expect(title()).not.toHaveAttribute("aria-describedby");
+    first.unmount();
+
+    const second = renderStates({ title: "low" });
+    expect(second.container.querySelectorAll("[data-state]")).toHaveLength(1);
+    expect(title().closest("[data-state]")).toHaveAttribute(
+      "data-state",
+      "low",
+    );
+  });
+
+  it('"confident" passed explicitly sets no data-state, no glyph and no helper, beside a missing Location that does', () => {
+    const { container } = renderStates({
+      title: "confident",
+      kind: "confident",
+      start: "confident",
+      end: "confident",
+      location: "missing",
+    });
+    expect(container.querySelectorAll("[data-state]")).toHaveLength(1);
+    expect(title().closest("[data-state]")).toBeNull();
+    expect(glyphIn(labelOf(title()))).toBeNull();
+    expect(title()).not.toHaveAttribute("aria-describedby");
+    expect(locationBox().closest("[data-state]")).toHaveAttribute(
+      "data-state",
+      "missing",
+    );
+  });
+
+  it('a low Title: data-state="low" on its wrapper, the glyph in its <label>, the helper describing the input, no aria-invalid', () => {
+    renderStates({ title: "low" });
+    const wrapper = title().closest("[data-state]") as HTMLElement;
+    expect(wrapper).toHaveAttribute("data-state", "low");
+    expect(wrapper).toContainElement(labelOf(title()));
+    const glyph = glyphIn(labelOf(title()));
+    expect(glyph).not.toBeNull();
+    expect(glyph).toHaveAttribute("aria-hidden", "true");
+    const { el, id } = helper(LOW);
+    expect(wrapper).toContainElement(el);
+    expect(
+      title().compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(title()).toHaveAttribute("aria-describedby", id);
+    expect(title()).toHaveAccessibleDescription(LOW);
+    expect(title()).toHaveAccessibleName("Title");
+    expect(title()).not.toHaveAttribute("aria-invalid");
+  });
+
+  it('a missing Title: data-state="missing" and "Not found in the text — add it"', () => {
+    renderStates({ title: "missing" }, { value: { ...TIMED, title: "" } });
+    expect(title().closest("[data-state]")).toHaveAttribute(
+      "data-state",
+      "missing",
+    );
+    expect(glyphIn(labelOf(title()))).toHaveAttribute("aria-hidden", "true");
+    expect(title()).toHaveAttribute("aria-describedby", helper(MISSING).id);
+    expect(title()).toHaveAccessibleDescription(MISSING);
+    expect(title()).not.toHaveAttribute("aria-invalid");
+    expect(screen.queryByText(LOW)).toBeNull();
+  });
+
+  it("a low Title with the title error: helper and error both describe it, helper first", () => {
+    renderStates(
+      { title: "low" },
+      { value: { ...TIMED, title: "" }, errors: { title: TITLE_ERROR } },
+    );
+    const { id } = helper(LOW);
+    const errorId = screen.getByText(TITLE_ERROR).getAttribute("id");
+    expect(describedBy(title())).toStrictEqual([id, errorId]);
+    expect(title()).toHaveAttribute("aria-invalid", "true");
+  });
+
+  it("a low Kind: the Kind wrapper is marked, the glyph sits in the Kind label, and the picker trigger is described by the helper", () => {
+    renderStates({ kind: "low" });
+    const trigger = screen.getByRole("button", { name: "Kind, Gym" });
+    const wrapper = trigger.closest("[data-state]") as HTMLElement;
+    expect(wrapper).toHaveAttribute("data-state", "low");
+    expect(wrapper).toContainElement(kindLabel());
+    expect(glyphIn(kindLabel())).toHaveAttribute("aria-hidden", "true");
+    expect(trigger).toHaveAttribute("aria-describedby", helper(LOW).id);
+    expect(trigger).toHaveAccessibleDescription(LOW);
+    expect(trigger).toHaveAccessibleName("Kind, Gym");
+    expect(title().closest("[data-state]")).toBeNull();
+  });
+
+  it("a missing Start: the Starts fieldset is marked, the glyph is in its legend, and BOTH start inputs are described; Ends is not", () => {
+    renderStates(
+      { start: "missing" },
+      { value: { ...TIMED, startDate: "", startTime: "" } },
+    );
+    const starts = group("Starts");
+    expect(starts.tagName).toBe("FIELDSET");
+    expect(starts).toHaveAttribute("data-state", "missing");
+    expect(glyphIn(starts.querySelector("legend"))).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    const { el, id } = helper(MISSING);
+    expect(starts).toContainElement(el);
+    for (const label of ["Start date", "Start time"]) {
+      expect(field(label).closest("[data-state]")).toBe(starts);
+      expect(field(label)).toHaveAttribute("aria-describedby", id);
+      expect(field(label)).toHaveAccessibleDescription(MISSING);
+      expect(field(label)).not.toHaveAttribute("aria-invalid");
+    }
+    expect(group("Ends")).not.toHaveAttribute("data-state");
+    expect(field("End date")).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("a low End, timed: both end inputs are described by the helper", () => {
+    renderStates({ end: "low" });
+    const ends = group("Ends");
+    expect(ends).toHaveAttribute("data-state", "low");
+    expect(glyphIn(ends.querySelector("legend"))).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    const { id } = helper(LOW);
+    for (const label of ["End date", "End time"]) {
+      expect(field(label)).toHaveAttribute("aria-describedby", id);
+      expect(field(label)).toHaveAccessibleDescription(LOW);
+    }
+    expect(group("Starts")).not.toHaveAttribute("data-state");
+  });
+
+  it("a low End on an all-day value: End date, the one end input, is described", () => {
+    renderStates({ end: "low" }, { value: { ...TIMED, allDay: true } });
+    expect(screen.queryByLabelText("End time")).toBeNull();
+    expect(field("End date")).toHaveAttribute(
+      "aria-describedby",
+      helper(LOW).id,
+    );
+  });
+
+  it('a missing End with the end error: aria-describedby is "{helperId} {errorId}" on both inputs, the helper rendered before the error', () => {
+    renderStates(
+      { end: "missing" },
+      {
+        value: { ...TIMED, endDate: "", endTime: "" },
+        errors: { end: END_ERROR },
+      },
+    );
+    const { el, id } = helper(MISSING);
+    const error = screen.getByText(END_ERROR);
+    const errorId = error.getAttribute("id") ?? "";
+    expect(errorId).not.toBe("");
+    expect(
+      el.compareDocumentPosition(error) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    for (const label of ["End date", "End time"]) {
+      expect(field(label)).toHaveAttribute(
+        "aria-describedby",
+        `${id} ${errorId}`,
+      );
+      expect(field(label)).toHaveAccessibleDescription(
+        `${MISSING} ${END_ERROR}`,
+      );
+      // The error, not the state, sets aria-invalid.
+      expect(field(label)).toHaveAttribute("aria-invalid", "true");
+    }
+  });
+
+  it("a low Location: its wrapper, its label's glyph and its helper; Notes is never marked", () => {
+    renderStates({ location: "low" });
+    const wrapper = locationBox().closest("[data-state]") as HTMLElement;
+    expect(wrapper).toHaveAttribute("data-state", "low");
+    expect(wrapper).toContainElement(labelOf(locationBox()));
+    expect(glyphIn(labelOf(locationBox()))).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+    expect(locationBox()).toHaveAttribute("aria-describedby", helper(LOW).id);
+    expect(locationBox()).toHaveAccessibleDescription(LOW);
+    expect(locationBox()).not.toHaveAttribute("aria-invalid");
+    expect(
+      screen.getByRole("textbox", { name: "Notes" }).closest("[data-state]"),
+    ).toBeNull();
+  });
+
+  it("all five missing: five marked wrappers with five distinct helper ids; All day and Notes stay plain", () => {
+    const { container } = renderStates({
+      title: "missing",
+      kind: "missing",
+      start: "missing",
+      end: "missing",
+      location: "missing",
+    });
+    expect(container.querySelectorAll('[data-state="missing"]')).toHaveLength(
+      5,
+    );
+    const ids = screen.getAllByText(MISSING).map((p) => p.id);
+    expect(ids).toHaveLength(5);
+    expect(new Set(ids).size).toBe(5);
+    expect(
+      container.querySelectorAll('svg[data-glyph="warning"]'),
+    ).toHaveLength(5);
+    expect(allDaySwitch().closest("[data-state]")).toBeNull();
+    expect(
+      screen.getByRole("textbox", { name: "Notes" }).closest("[data-state]"),
+    ).toBeNull();
+  });
+
+  it("the marking stays while the owner types: a missing Title filled in is still marked (PO decision 4)", async () => {
+    const { user } = renderStates(
+      { title: "missing" },
+      { value: { ...TIMED, title: "" } },
+    );
+    await user.type(title(), "Dinner");
+    expect(title()).toHaveValue("Dinner");
+    expect(title().closest("[data-state]")).toHaveAttribute(
+      "data-state",
+      "missing",
+    );
+    expect(title()).toHaveAccessibleDescription(MISSING);
+  });
+});

@@ -272,3 +272,49 @@ describe("a removed kind (AC-7, Block 3, voice.md)", () => {
     expect(trigger("Travel")).toBeInTheDocument();
   });
 });
+
+describe("describedBy lands on the trigger (CAL-021 Block 2, AC-1, AC-2)", () => {
+  it('describedBy="kind-state" becomes the trigger\'s aria-describedby, and without it the trigger has none', () => {
+    const view = render(
+      <MemoryRouter>
+        <p id="kind-state">Not sure about this — check it</p>
+        <KindPicker
+          kinds={LIVE}
+          value={GYM.id}
+          removed={false}
+          onChange={() => {}}
+          describedBy="kind-state"
+        />
+      </MemoryRouter>,
+    );
+    expect(trigger("Gym")).toHaveAttribute("aria-describedby", "kind-state");
+    expect(trigger("Gym")).toHaveAccessibleDescription(
+      "Not sure about this — check it",
+    );
+    view.unmount();
+    renderPicker(GYM.id);
+    expect(trigger("Gym")).not.toHaveAttribute("aria-describedby");
+  });
+
+  it("the described trigger still opens its listbox and picks a kind", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<(id: string) => void>();
+    render(
+      <MemoryRouter>
+        <p id="kind-state">Not found in the text — add it</p>
+        <KindPicker
+          kinds={LIVE}
+          value={null}
+          removed={false}
+          onChange={onChange}
+          describedBy="kind-state"
+        />
+      </MemoryRouter>,
+    );
+    const button = screen.getByRole("button", { name: "Kind," });
+    expect(button).toHaveAttribute("aria-describedby", "kind-state");
+    await user.click(button);
+    await user.click(option("Travel"));
+    expect(onChange).toHaveBeenCalledWith(TRAVEL.id);
+  });
+});

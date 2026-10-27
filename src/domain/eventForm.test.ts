@@ -640,3 +640,67 @@ describe("the last kind on this device (AC-4, Block 1)", () => {
     expect(setItem).toHaveBeenCalledWith("cc.lastKind", GYM.id);
   });
 });
+
+describe("moveStart and setAllDay from an empty start (CAL-021 Block 3, AC-2)", () => {
+  // The confirm screen blanks a missing start and end (blankMissing). With no
+  // previous start there is no duration to keep: the start is set and the
+  // end is left exactly as it is - empty stays empty, filled stays filled.
+  // Measured in RED: the shipped moveStart already does this (an invalid old
+  // start returns `moved`), so these passed on arrival and are earned by the
+  // mutate.sh probe recorded in the story's handoff.
+  const blankStart = (extra: Partial<EventFormValue> = {}) =>
+    timedValue({ startDate: "", startTime: "", ...extra });
+
+  it("timed, start and end both empty: the start is set and the end stays empty", () => {
+    const value = blankStart({ endDate: "", endTime: "" });
+    expect(moveStart(value, "2026-10-15", "")).toStrictEqual(
+      blankStart({ startDate: "2026-10-15", endDate: "", endTime: "" }),
+    );
+    expect(moveStart(value, "2026-10-15", "14:00")).toStrictEqual(
+      blankStart({
+        startDate: "2026-10-15",
+        startTime: "14:00",
+        endDate: "",
+        endTime: "",
+      }),
+    );
+  });
+
+  it("timed, start empty and end filled: the start is set and the filled end stays where it was", () => {
+    expect(moveStart(blankStart(), "2026-10-20", "08:00")).toStrictEqual(
+      timedValue({ startDate: "2026-10-20", startTime: "08:00" }),
+    );
+  });
+
+  it("timed, start filled and end empty: moving the start leaves the end empty", () => {
+    const value = timedValue({ endDate: "", endTime: "" });
+    expect(moveStart(value, "2026-10-15", "14:00")).toStrictEqual(
+      timedValue({
+        startDate: "2026-10-15",
+        startTime: "14:00",
+        endDate: "",
+        endTime: "",
+      }),
+    );
+  });
+
+  it("all day, start and end empty: the start date is set and the end date stays empty", () => {
+    const value = allDayValue({ startDate: "", endDate: "" });
+    expect(moveStart(value, "2026-10-20", value.startTime)).toStrictEqual(
+      allDayValue({ startDate: "2026-10-20", endDate: "" }),
+    );
+  });
+
+  it("all day, start empty and end filled: the end date stays the 14th", () => {
+    const value = allDayValue({ startDate: "" });
+    expect(moveStart(value, "2026-10-20", value.startTime)).toStrictEqual(
+      allDayValue({ startDate: "2026-10-20", endDate: "2026-10-14" }),
+    );
+  });
+
+  it("toggling All day with an empty start keeps it (and the end) empty, both ways", () => {
+    const value = blankStart({ endDate: "", endTime: "" });
+    expect(setAllDay(value, true)).toStrictEqual({ ...value, allDay: true });
+    expect(setAllDay(setAllDay(value, true), false)).toStrictEqual(value);
+  });
+});
