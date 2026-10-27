@@ -6,6 +6,7 @@ import {
   useReducer,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
 import type { Event } from "../data/rows";
@@ -27,7 +28,11 @@ import {
   type SheetRequest,
 } from "../events/EventSheet";
 import { type EventActions, eventActions } from "../sync/eventActions";
-import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
+import {
+  type EventsStore,
+  eventsStore,
+  useEventsInRange,
+} from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
@@ -265,6 +270,39 @@ function useEventEdits(
   };
 }
 
+/**
+ * CAL-020 Contract, Block 5: a navigation carrying `state: { focusEventId }`
+ * (the confirm screen, after a save) focuses that event's chip as soon as it
+ * renders, once. The page re-renders with the events store, so the check runs
+ * after every render that may have brought the chip in; a later render does
+ * not steal focus again.
+ */
+function useFocusEventFromState(store: EventsStore): void {
+  const { key, state } = useLocation();
+  const wanted = (state as { focusEventId?: unknown } | null | undefined)
+    ?.focusEventId;
+  const pending = useRef<string | null>(null);
+  const seenKey = useRef<string | null>(null);
+  if (seenKey.current !== key) {
+    seenKey.current = key;
+    pending.current = typeof wanted === "string" ? wanted : null;
+  }
+  useSyncExternalStore(store.subscribe, store.getSnapshot);
+
+  useEffect(() => {
+    const id = pending.current;
+    if (id === null) return;
+    const chip = document.querySelector<HTMLElement>(`[data-event-id="${id}"]`);
+    if (chip === null) return;
+    pending.current = null;
+    // After RouteFocus, whose effect runs later in this same commit and
+    // focuses the <h1> when the chip arrives with the page's first render.
+    queueMicrotask(() => {
+      if (chip.isConnected) chip.focus();
+    });
+  });
+}
+
 function MonthPage(
   props: Stores & Opens & { first: Date; today: Date; selected: Date },
 ): JSX.Element {
@@ -359,6 +397,7 @@ export function CalendarPage(
   const [sheet, setSheet] = useState<SheetRequest | null>(null);
   const actions = props.actions ?? eventActions;
   const edits = useEventEdits(actions, period.view === "month");
+  useFocusEventFromState(props.events ?? eventsStore);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new period is the trigger; `selected` is that render's answer
   useEffect(() => {
