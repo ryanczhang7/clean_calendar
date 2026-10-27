@@ -131,8 +131,11 @@ the user confirms.
 **Share target.** The manifest declares `share_target` with `method: POST`,
 `enctype: multipart/form-data`, `action: /share`, `params: {text, title, url,
 files: [{name: 'image', accept: ['image/*']}]}`. The service worker intercepts
-`POST /share`, stores the fields and the file blob in the Dexie `inbox`, and
-responds with a redirect to `/capture?from=share`.
+`POST /share`, stores the fields (title, text and url joined by blank lines)
+and the file's bytes, MIME type and name in the Dexie `inbox` (its own
+database, `src/pwa/inbox.ts`; at most one entry), and responds with a 303 to
+`/capture?from=share`, which takes the entry - read and cleared in one
+transaction - and prefills the capture screen (CAL-022).
 
 ## Deployment shape
 

@@ -124,3 +124,19 @@ describe("the web app manifest (AC-1)", () => {
     }
   });
 });
+
+describe("the manifest declares the Android share target (CAL-022 AC-1)", () => {
+  test("share_target is exactly AC-1's POST multipart target at /share, with one image file field", () => {
+    expect(manifest.share_target).toStrictEqual({
+      action: "/share",
+      method: "POST",
+      enctype: "multipart/form-data",
+      params: {
+        title: "title",
+        text: "text",
+        url: "url",
+        files: [{ name: "image", accept: ["image/*"] }],
+      },
+    });
+  });
+});

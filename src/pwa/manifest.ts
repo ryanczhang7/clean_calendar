@@ -9,6 +9,20 @@ export type ManifestIcon = {
   purpose?: "maskable";
 };
 
+// CAL-022 Contract Block 1 (architecture.md, "Share target"): Android's share
+// sheet POSTs a multipart form to /share, which the service worker answers.
+export type ShareTarget = {
+  action: "/share";
+  method: "POST";
+  enctype: "multipart/form-data";
+  params: {
+    title: "title";
+    text: "text";
+    url: "url";
+    files: [{ name: "image"; accept: ["image/*"] }];
+  };
+};
+
 export const manifest: {
   name: "Clean Calendar";
   short_name: string;
@@ -18,6 +32,7 @@ export const manifest: {
   theme_color: string;
   background_color: string;
   icons: ManifestIcon[];
+  share_target: ShareTarget;
 } = {
   name: "Clean Calendar",
   short_name: "Calendar",
@@ -37,4 +52,15 @@ export const manifest: {
       purpose: "maskable",
     },
   ],
+  share_target: {
+    action: "/share",
+    method: "POST",
+    enctype: "multipart/form-data",
+    params: {
+      title: "title",
+      text: "text",
+      url: "url",
+      files: [{ name: "image", accept: ["image/*"] }],
+    },
+  },
 };
