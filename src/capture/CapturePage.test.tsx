@@ -12,6 +12,7 @@ import {
   vi,
 } from "vitest";
 import type { CaptureResponse } from "../../shared/captureSchema";
+import type { ShareEntry } from "../pwa/inbox";
 import type { CaptureOutcome, proposeEvent } from "./captureClient";
 import { CapturePage } from "./CapturePage";
 import type { downscaleImage } from "./downscale";
@@ -74,13 +75,20 @@ const ONLY_IMAGE = "Only the screenshot will be sent.";
 
 type Propose = Mock<typeof proposeEvent>;
 type Downscale = Mock<typeof downscaleImage>;
+type Take = Mock<() => Promise<ShareEntry | null>>;
 
 function Confirmed(): JSX.Element {
   return <h1>Confirm stand-in</h1>;
 }
 
 function renderCapture(
-  opts: { propose?: Propose; downscale?: Downscale } = {},
+  opts: {
+    propose?: Propose;
+    downscale?: Downscale;
+    // CAL-022: the share inbox, and the URL the page is opened at.
+    inbox?: { take: Take };
+    at?: string;
+  } = {},
 ) {
   const user = userEvent.setup();
   const propose = opts.propose ?? vi.fn<typeof proposeEvent>(async () => OK);
@@ -94,11 +102,17 @@ function renderCapture(
     [
       {
         path: "/capture",
-        element: <CapturePage propose={propose} downscale={downscale} />,
+        element: (
+          <CapturePage
+            propose={propose}
+            downscale={downscale}
+            inbox={opts.inbox}
+          />
+        ),
       },
       { path: "/capture/confirm", element: <Confirmed /> },
     ],
-    { initialEntries: ["/capture"] },
+    { initialEntries: [opts.at ?? "/capture"] },
   );
   render(<RouterProvider router={router} />);
   return { user, propose, downscale, router };
@@ -679,5 +693,236 @@ describe("the Paste button (PO decision 7, Block 3)", () => {
     await user.click(screen.getByRole("button", { name: "Paste" }));
     await waitFor(() => expect(textBox()).toHaveFocus());
     expect(textBox()).toHaveValue("Dinner");
+  });
+});
+
+// CAL-022 Contract, Block 5 (AC-4; components.md "Capture screen", loading
+// state; voice.md "Reading what you shared…"). Opened at /capture?from=share
+// the page takes the one entry from the share inbox - the `inbox` prop, a
+// vi.fn `take` settled by hand - showing a status line until it is read, then
+// the normal page prefilled. The inbox emptying itself is `take`'s job
+// (src/pwa/inbox.test.ts); here the page must call it exactly once.
+describe("opened from a share (CAL-022 AC-4, Block 5)", () => {
+  const READING = "Reading what you shared…";
+  const SHARE_URL = "/capture?from=share";
+  const SHOT_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2];
+
+  const textEntry = (
+    text = "Table for two\n\nLupa, 3 Nov 19:30",
+  ): ShareEntry => ({
+    text,
+    image: null,
+    receivedAt: "2026-10-27T09:15:00.000Z",
+  });
+  const imageEntry = (text = ""): ShareEntry => ({
+    text,
+    image: {
+      bytes: new Uint8Array(SHOT_BYTES).buffer as ArrayBuffer,
+      mime: "image/png",
+      name: "Screenshot_20261027.png",
+    },
+    receivedAt: "2026-10-27T09:16:00.000Z",
+  });
+
+  /** A take() the test settles by hand. */
+  function pendingTake() {
+    const read = deferred<ShareEntry | null>();
+    const take: Take = vi.fn(() => read.promise);
+    return { take, read };
+  }
+
+  it('while the entry is read: the heading, one status line "Reading what you shared…", no paste box, no picker, and Propose aria-disabled', async () => {
+    const { take } = pendingTake();
+    const { user, propose } = renderCapture({
+      at: SHARE_URL,
+      inbox: { take },
+    });
+    expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent(
+      /^Capture$/,
+    );
+    const statuses = screen.getAllByRole("status");
+    expect(statuses).toHaveLength(1);
+    expect(statuses[0]).toHaveTextContent(/^Reading what you shared…$/);
+    expect(
+      screen.queryByRole("textbox", { name: "Booking email or text" }),
+    ).toBeNull();
+    expect(screen.queryByLabelText("Choose a screenshot")).toBeNull();
+    expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
+    await user.click(proposeButton());
+    await settle();
+    expect(propose).not.toHaveBeenCalled();
+  });
+
+  it("the status line comes after the heading and before Propose", () => {
+    const { take } = pendingTake();
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    const order = [
+      screen.getByRole("heading", { level: 1 }),
+      screen.getByText(READING),
+      proposeButton(),
+    ];
+    for (let i = 1; i < order.length; i += 1) {
+      const before = order[i - 1] as HTMLElement;
+      const after = order[i] as HTMLElement;
+      expect(
+        before.compareDocumentPosition(after) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
+  });
+
+  it("a shared text: once read, the status line goes and the paste box holds the text, with Propose enabled", async () => {
+    const { take, read } = pendingTake();
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    expect(screen.getByText(READING)).toBeInTheDocument();
+    await act(async () => read.resolve(textEntry()));
+    await settle();
+    expect(screen.queryByText(READING)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(textBox()).toHaveValue("Table for two\n\nLupa, 3 Nov 19:30");
+    expect(screen.queryByRole("img")).toBeNull();
+    expectEnabled(proposeButton());
+  });
+
+  it('a shared image: once read, the thumbnail <img alt="Screenshot preview"> and "Remove screenshot" show, the paste box is empty, Propose is enabled', async () => {
+    const { take, read } = pendingTake();
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    await act(async () => read.resolve(imageEntry()));
+    const thumb = await screen.findByRole("img", {
+      name: "Screenshot preview",
+    });
+    expect(thumb.getAttribute("src")).toMatch(/^data:image\/png;base64,/);
+    expect(
+      screen.getByRole("button", { name: "Remove screenshot" }),
+    ).toBeInTheDocument();
+    expect(textBox()).toHaveValue("");
+    expect(screen.queryByText(READING)).toBeNull();
+    expect(screen.queryByText(ONLY_IMAGE)).toBeNull();
+    expectEnabled(proposeButton());
+  });
+
+  it('a shared text and image: both are prefilled and "Only the screenshot will be sent." shows', async () => {
+    const take: Take = vi.fn(async () => imageEntry("Lupa, 3 Nov"));
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    await screen.findByRole("img", { name: "Screenshot preview" });
+    expect(textBox()).toHaveValue("Lupa, 3 Nov");
+    expect(screen.getByText(ONLY_IMAGE)).toBeInTheDocument();
+    expectEnabled(proposeButton());
+  });
+
+  it("an empty inbox (take resolves null): the normal empty capture page, Propose disabled, no status line", async () => {
+    const take: Take = vi.fn(async () => null);
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    await waitFor(() => expect(take).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByText(READING)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByRole("img")).toBeNull();
+    expect(textBox()).toHaveValue("");
+    expect(fileInput()).toHaveAttribute("type", "file");
+    expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("an inbox that cannot be read (take rejects): the normal empty capture page, and no alert", async () => {
+    const take: Take = vi.fn(async () => {
+      throw new DOMException("IndexedDB unavailable", "UnknownError");
+    });
+    renderCapture({ at: SHARE_URL, inbox: { take } });
+    await waitFor(() => expect(take).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(screen.queryByText(READING)).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(textBox()).toHaveValue("");
+    expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
+  });
+
+  it("take is called exactly once per mount, however often the page re-renders", async () => {
+    const { take, read } = pendingTake();
+    const { user } = renderCapture({ at: SHARE_URL, inbox: { take } });
+    await act(async () => read.resolve(textEntry("Dinner")));
+    await settle();
+    await user.type(textBox(), " at 8");
+    act(() => {
+      window.dispatchEvent(new Event("online"));
+    });
+    await settle();
+    expect(textBox()).toHaveValue("Dinner at 8");
+    expect(take).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["/capture", "no query"],
+    ["/capture?from=elsewhere", "another from value"],
+    ["/capture?share=1", "a different parameter"],
+  ])(
+    "opened at %s (%s): take is never called and the empty page renders at once",
+    async (at) => {
+      const take: Take = vi.fn(async () => textEntry());
+      renderCapture({ at, inbox: { take } });
+      expect(screen.queryByRole("status")).toBeNull();
+      expect(textBox()).toHaveValue("");
+      await settle();
+      expect(take).not.toHaveBeenCalled();
+      expect(textBox()).toHaveValue("");
+    },
+  );
+
+  it("the URL keeps ?from=share after the read (PO decision 3)", async () => {
+    const take: Take = vi.fn(async () => textEntry());
+    const { router } = renderCapture({ at: SHARE_URL, inbox: { take } });
+    await waitFor(() => expect(textBox()).toHaveValue(textEntry().text));
+    expect(router.state.location.pathname).toBe("/capture");
+    expect(router.state.location.search).toBe("?from=share");
+  });
+
+  it("proposing a shared text sends {text} exactly as shared", async () => {
+    const take: Take = vi.fn(async () => textEntry());
+    const { user, propose, downscale } = renderCapture({
+      at: SHARE_URL,
+      inbox: { take },
+    });
+    await waitFor(() => expect(textBox()).toHaveValue(textEntry().text));
+    await user.click(proposeButton());
+    await waitFor(() => expect(propose).toHaveBeenCalledTimes(1));
+    expect(propose.mock.calls[0]?.[0]).toStrictEqual({
+      text: "Table for two\n\nLupa, 3 Nov 19:30",
+    });
+    expect(downscale).not.toHaveBeenCalled();
+  });
+
+  it("proposing a shared image goes through downscale with a File of the entry's bytes, type and name, then sends the downscaled {image, mime}", async () => {
+    const take: Take = vi.fn(async () => imageEntry());
+    const { user, propose, downscale } = renderCapture({
+      at: SHARE_URL,
+      inbox: { take },
+    });
+    await screen.findByRole("img", { name: "Screenshot preview" });
+    await user.click(proposeButton());
+    await waitFor(() => expect(propose).toHaveBeenCalledTimes(1));
+    expect(downscale).toHaveBeenCalledTimes(1);
+    const file = downscale.mock.calls[0]?.[0];
+    expect(file).toBeInstanceOf(File);
+    expect(file?.type).toBe("image/png");
+    expect((file as File).name).toBe("Screenshot_20261027.png");
+    const sent = new Uint8Array(await (file as File).arrayBuffer());
+    expect([...sent]).toStrictEqual(SHOT_BYTES);
+    expect(propose.mock.calls[0]?.[0]).toStrictEqual({
+      image: DOWNSCALED.base64,
+      mime: "image/jpeg",
+    });
+  });
+
+  it('"Remove screenshot" on a shared image works as for a picked one: no thumbnail, Propose disabled with no text', async () => {
+    const take: Take = vi.fn(async () => imageEntry());
+    const { user } = renderCapture({ at: SHARE_URL, inbox: { take } });
+    await user.click(
+      await screen.findByRole("button", { name: "Remove screenshot" }),
+    );
+    expect(
+      screen.queryByRole("img", { name: "Screenshot preview" }),
+    ).toBeNull();
+    expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
   });
 });
