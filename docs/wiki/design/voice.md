@@ -102,6 +102,14 @@ actionable, no codes. Examples:
   kind and add the end time."
 - Low-confidence helper: "Not sure about this — check it"
 - Missing helper: "Not found in the text — add it"
+- Field names in the summary carry the article: "the title", "the kind",
+  "the start time", "the end time", "the location" (all-day: "the start
+  date", "the end date"); lists join as "a and b" / "a, b and c". Summary
+  with only low fields: " Check {low fields}."; only missing: " Add {missing
+  fields}." (CAL-021)
+- Save blocked (Title or Start empty), described to screen readers: "Add
+  {fields} to save." - "Add the title to save.", "Add the title and the
+  start time to save." (CAL-021)
 - Nothing found: "Couldn't find event details. Fill them in, or try a clearer
   screenshot."
 - Buttons: "Save event", "Discard"
