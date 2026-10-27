@@ -1,4 +1,4 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { createMemoryRouter, RouterProvider } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -49,6 +49,20 @@ function renderAt(path: string) {
 /** The sign-in button, once the page has settled on the card. */
 function signInButton() {
   return screen.findByRole("button", { name: "Sign in with Google" });
+}
+
+/**
+ * Call before rendering; the returned wait resolves once the page has
+ * registered its window listener for `type`. The button is on screen before
+ * the page subscribes (it does so in an effect), so an event sent straight
+ * after finding the button can reach nobody - CAL-038, Notes.
+ */
+function whenListeningFor(type: "online" | "offline") {
+  const add = vi.spyOn(window, "addEventListener");
+  return () =>
+    waitFor(() => {
+      expect(add).toHaveBeenCalledWith(type, expect.any(Function));
+    });
 }
 
 beforeEach(() => {
@@ -241,8 +255,10 @@ describe("offline (AC-5)", () => {
   it("re-enables the button when the connection comes back", async () => {
     const user = userEvent.setup();
     const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(false);
+    const listening = whenListeningFor("online");
     renderAt("/signin");
     await signInButton();
+    await listening();
     onLine.mockReturnValue(true);
     act(() => {
       window.dispatchEvent(new Event("online"));
@@ -256,8 +272,10 @@ describe("offline (AC-5)", () => {
 
   it("disables the button when the connection drops while the page is open", async () => {
     const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    const listening = whenListeningFor("offline");
     renderAt("/signin");
     await signInButton();
+    await listening();
     expect(screen.queryByText(OFFLINE)).toBeNull();
     onLine.mockReturnValue(false);
     act(() => {
@@ -267,5 +285,36 @@ describe("offline (AC-5)", () => {
       screen.getByRole("button", { name: "Sign in with Google" }),
     ).toHaveAttribute("aria-disabled", "true");
     expect(screen.getByText(OFFLINE, { exact: true })).toBeInTheDocument();
+  });
+
+  it("disables the button when the connection dropped before the page started listening (CAL-038 AC-3)", async () => {
+    const onLine = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    // The drop lands in the gap between the card's first render (online) and
+    // the page's subscription: the event goes out while nothing of the
+    // page's is listening, so only a fresh read of navigator.onLine sees it.
+    const add = window.addEventListener.bind(window);
+    let dropped = false;
+    vi.spyOn(window, "addEventListener").mockImplementation(
+      (...args: Parameters<typeof window.addEventListener>) => {
+        const [type] = args;
+        if (!dropped && (type === "online" || type === "offline")) {
+          dropped = true;
+          onLine.mockReturnValue(false);
+          window.dispatchEvent(new Event("offline"));
+        }
+        add(...args);
+      },
+    );
+    renderAt("/signin");
+    const button = await signInButton();
+    // The page subscribes after the button is on screen, so the drop may
+    // still be to come.
+    await waitFor(() => {
+      expect(dropped).toBe(true);
+    });
+    expect(
+      await screen.findByText(OFFLINE, { exact: true }),
+    ).toBeInTheDocument();
+    expect(button).toHaveAttribute("aria-disabled", "true");
   });
 });
