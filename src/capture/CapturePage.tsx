@@ -1,5 +1,13 @@
-import { type JSX, useEffect, useId, useRef, useState } from "react";
-import { useNavigate } from "react-router";
+import {
+  type JSX,
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
+import { useNavigate, useSearchParams } from "react-router";
+import { type Inbox, openInbox } from "../pwa/inbox";
 import {
   type CaptureHandoff,
   type CaptureInput,
@@ -21,6 +29,7 @@ export const COULDNT_READ = "Couldn't read that. Try pasting the text instead.";
 export const TOO_LARGE =
   "That screenshot is too large, even after shrinking it. Try cropping it.";
 export const ONLY_IMAGE = "Only the screenshot will be sent.";
+export const READING_SHARE = "Reading what you shared…";
 
 type Picked = { file: File; preview: string | null };
 type Attempt = { text: string; file: File | null };
@@ -54,10 +63,14 @@ export function CapturePage(
   props: {
     propose?: typeof proposeEvent;
     downscale?: typeof downscaleImage;
+    /** CAL-022: the share inbox, read once when opened at ?from=share. */
+    inbox?: Pick<Inbox, "take">;
   } = {},
 ): JSX.Element {
-  const { propose = proposeEvent, downscale = downscaleImage } = props;
+  const { propose = proposeEvent, downscale = downscaleImage, inbox } = props;
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const fromShare = searchParams.get("from") === "share";
   const ids = useId();
   const textId = `${ids}-text`;
   const [text, setText] = useState("");
@@ -78,8 +91,45 @@ export function CapturePage(
     [],
   );
 
+  const pick = useCallback((file: File) => {
+    setImage({ file, preview: null });
+    readDataUrl(file).then(
+      (preview) =>
+        setImage((current) =>
+          current?.file === file ? { file, preview } : current,
+        ),
+      () => {
+        // No thumbnail; the file is still sent.
+      },
+    );
+  }, []);
+
+  // CAL-022 Contract, Block 5: opened from a share, the page takes the one
+  // inbox entry - exactly once per mount, guarded by a ref - and prefills
+  // through the same paths as typing and picking. `take` clears the inbox;
+  // an empty or unreadable inbox leaves the normal empty page.
+  const [reading, setReading] = useState(fromShare);
+  const took = useRef(false);
+  useEffect(() => {
+    if (!fromShare || took.current) return;
+    took.current = true;
+    (inbox ?? openInbox()).take().then(
+      (entry) => {
+        if (entry !== null) {
+          setText(entry.text);
+          if (entry.image !== null) {
+            const { bytes, name, mime } = entry.image;
+            pick(new File([bytes], name, { type: mime }));
+          }
+        }
+        setReading(false);
+      },
+      () => setReading(false),
+    );
+  }, [fromShare, inbox, pick]);
+
   const hasContent = text.trim() !== "" || image !== null;
-  const blocked = !hasContent || !online || working;
+  const blocked = reading || !hasContent || !online || working;
 
   const run = async (attempt: Attempt) => {
     runs.current += 1;
@@ -145,19 +195,6 @@ export function CapturePage(
     }
   };
 
-  const pick = (file: File) => {
-    setImage({ file, preview: null });
-    readDataUrl(file).then(
-      (preview) =>
-        setImage((current) =>
-          current?.file === file ? { file, preview } : current,
-        ),
-      () => {
-        // No thumbnail; the file is still sent.
-      },
-    );
-  };
-
   const onRemove = () => {
     setImage(null);
     if (fileInput.current !== null) fileInput.current.value = "";
@@ -171,68 +208,76 @@ export function CapturePage(
         Capture
       </h1>
 
-      <div className={styles.field}>
-        <div className={styles.labelRow}>
-          <label htmlFor={textId} className={styles.label}>
-            Booking email or text
-          </label>
-          <button
-            type="button"
-            className={styles.ghost}
-            disabled={working}
-            onClick={() => void onPaste()}
-          >
-            Paste
-          </button>
-        </div>
-        <textarea
-          id={textId}
-          ref={textBox}
-          rows={8}
-          className={styles.textarea}
-          placeholder="Paste the confirmation email, or any text with a date in it."
-          value={text}
-          readOnly={working}
-          onChange={(e) => setText(e.target.value)}
-        />
-      </div>
-
-      <div className={styles.field}>
-        <label className={styles.drop}>
-          Choose a screenshot
-          <input
-            ref={fileInput}
-            type="file"
-            accept="image/*"
-            className={styles.hidden}
-            disabled={working}
-            onChange={(e) => {
-              const file = e.target.files?.[0];
-              if (file !== undefined) pick(file);
-            }}
-          />
-        </label>
-        {image === null ? null : (
-          <div className={styles.picked}>
-            {image.preview === null ? null : (
-              <img
-                alt="Screenshot preview"
-                height={96}
-                src={image.preview}
-                className={styles.thumb}
-              />
-            )}
-            <button
-              type="button"
-              className={styles.ghost}
-              disabled={working}
-              onClick={onRemove}
-            >
-              Remove screenshot
-            </button>
+      {reading ? (
+        <p role="status" className={styles.status}>
+          {READING_SHARE}
+        </p>
+      ) : (
+        <>
+          <div className={styles.field}>
+            <div className={styles.labelRow}>
+              <label htmlFor={textId} className={styles.label}>
+                Booking email or text
+              </label>
+              <button
+                type="button"
+                className={styles.ghost}
+                disabled={working}
+                onClick={() => void onPaste()}
+              >
+                Paste
+              </button>
+            </div>
+            <textarea
+              id={textId}
+              ref={textBox}
+              rows={8}
+              className={styles.textarea}
+              placeholder="Paste the confirmation email, or any text with a date in it."
+              value={text}
+              readOnly={working}
+              onChange={(e) => setText(e.target.value)}
+            />
           </div>
-        )}
-      </div>
+
+          <div className={styles.field}>
+            <label className={styles.drop}>
+              Choose a screenshot
+              <input
+                ref={fileInput}
+                type="file"
+                accept="image/*"
+                className={styles.hidden}
+                disabled={working}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file !== undefined) pick(file);
+                }}
+              />
+            </label>
+            {image === null ? null : (
+              <div className={styles.picked}>
+                {image.preview === null ? null : (
+                  <img
+                    alt="Screenshot preview"
+                    height={96}
+                    src={image.preview}
+                    className={styles.thumb}
+                  />
+                )}
+                <button
+                  type="button"
+                  className={styles.ghost}
+                  disabled={working}
+                  onClick={onRemove}
+                >
+                  Remove screenshot
+                </button>
+              </div>
+            )}
+          </div>
+        </>
+      )}
 
       {showNote ? <p className={styles.note}>{ONLY_IMAGE}</p> : null}
       {online ? null : <p className={styles.note}>{OFFLINE}</p>}

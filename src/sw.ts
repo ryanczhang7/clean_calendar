@@ -9,6 +9,8 @@ import {
   precacheAndRoute,
 } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
+import { openInbox } from "./pwa/inbox";
+import { handleShare, isShareRequest } from "./pwa/shareTarget";
 
 declare let self: ServiceWorkerGlobalScope;
 
@@ -35,4 +37,13 @@ self.addEventListener("message", (event) => {
   ) {
     void self.skipWaiting();
   }
+});
+
+// CAL-022 Contract, Block 4: the share target. A plain fetch listener rather
+// than a workbox route (CAL-017's registerRoute stays the only one); workbox's
+// routes are GET-only, so its router never answers POST /share. Anything but
+// POST /share is left alone: no respondWith, and the inbox is not opened.
+self.addEventListener("fetch", (event) => {
+  if (!isShareRequest(event.request)) return;
+  event.respondWith(handleShare(event.request, openInbox()));
 });
