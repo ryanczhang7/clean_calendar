@@ -1821,3 +1821,111 @@ describe("undo (CAL-013 AC-5, Block 8)", () => {
     await expectSaveAlert();
   });
 });
+
+// CAL-020 Contract, Block 5 (AC-5, PO decision 4). After a capture is saved
+// the confirm screen navigates here with `state: { focusEventId }`; the page
+// focuses that event's chip as soon as it renders, once. Rendered like
+// renderPage (toolbar, routes, the real RouteFocus), but entered with router
+// state - so RouteFocus's h1 focus on arrival happens first, as in the app,
+// and the chip must take focus after it, when the events arrive.
+describe("focusEventId in router state focuses the new chip once (CAL-020 AC-5, Block 5)", () => {
+  function renderWithFocus(path: string, focusEventId: string) {
+    const user = userEvent.setup();
+    const kinds: KindsStore = createKindsStore(kindsRepo);
+    const events: EventsStore = createEventsStore(eventsRepo);
+    const page = <CalendarPage kinds={kinds} events={events} now={() => NOW} />;
+    render(
+      <MemoryRouter
+        initialEntries={[{ pathname: path, state: { focusEventId } }]}
+      >
+        <header>
+          <CalendarToolbar now={() => NOW} />
+        </header>
+        <main>
+          <Routes>
+            <Route path="/" element={page} />
+            <Route path="/month/:ym" element={page} />
+            <Route path="/week/:date" element={page} />
+            <Route path="/day/:date" element={page} />
+          </Routes>
+        </main>
+        <RouteFocus />
+        <Where />
+      </MemoryRouter>,
+    );
+    return { user, events };
+  }
+
+  const dinner = () =>
+    timed(
+      "Dinner",
+      new Date(2026, 9, 14, 19, 30),
+      new Date(2026, 9, 14, 20, 30),
+    );
+
+  it("in the month view, the chip of focusEventId takes focus once the events load", async () => {
+    const event = dinner();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [event] });
+    renderWithFocus("/month/2026-10", event.id);
+    await screen.findByRole("button", { name: "Dinner, Gym, 19:30 to 20:30" });
+    await waitFor(() =>
+      expectFocusedChip(event.id, "Dinner, Gym, 19:30 to 20:30"),
+    );
+  });
+
+  it("in the day view too", async () => {
+    const event = dinner();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [event] });
+    renderWithFocus("/day/2026-10-14", event.id);
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute("data-event-id", event.id),
+    );
+  });
+
+  it("a chip that renders only after a slow load is still focused when it appears", async () => {
+    const event = dinner();
+    const slow = held();
+    eventsRepo.listLive.mockReturnValue(slow.promise);
+    renderWithFocus("/week/2026-10-14", event.id);
+    await settledToolbar();
+    expect(document.querySelector("[data-event-id]")).toBeNull();
+    await act(async () => slow.release({ status: "ok", rows: [event] }));
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute("data-event-id", event.id),
+    );
+  });
+
+  it("only once: after focus moves away, a later change to the events does not pull it back", async () => {
+    const event = dinner();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [event] });
+    const { events } = renderWithFocus("/day/2026-10-14", event.id);
+    await waitFor(() =>
+      expect(document.activeElement).toHaveAttribute("data-event-id", event.id),
+    );
+
+    const h1 = screen.getByRole("heading", { level: 1 });
+    act(() => h1.focus());
+    expect(h1).toHaveFocus();
+
+    const later = timed(
+      "Later",
+      new Date(2026, 9, 14, 21, 0),
+      new Date(2026, 9, 14, 22, 0),
+    );
+    eventsRepo.listLive.mockResolvedValue({
+      status: "ok",
+      rows: [event, later],
+    });
+    await act(async () => events.refresh());
+    await screen.findByRole("button", { name: /^Later, / });
+    await act(async () => {
+      for (let i = 0; i < 5; i += 1) await Promise.resolve();
+    });
+    expect(h1).toHaveFocus();
+  });
+
+  /** The toolbar's title is up, so the page has mounted. */
+  async function settledToolbar(): Promise<void> {
+    await screen.findByRole("heading", { level: 1 });
+  }
+});
