@@ -4,8 +4,8 @@ title: ci-local runs only workflows that trigger on pull_request
 slug: ci-local-runs-only-workflows-that-trigge
 epic: 
 type: fix
-status: todo
-phase: PLANNED
+status: in-progress
+phase: RED
 branch: story/HARNESS-052-ci-local-runs-only-workflows-that-trigge
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
@@ -249,6 +249,17 @@ name, below the table.
 <!-- Filled by the Test Developer during RED: which tests, at which level,
      and which AC each one covers. -->
 
+
+
+All in `.claude/tests/ci-local.test.sh`, block `describe "only workflows CI runs on a pull request"`: one fixture with five workflows (`gates.yml` block `on:` with pull_request/schedule/workflow_dispatch; `deploy.yml` push+workflow_dispatch; `both.yml` `[push, pull_request]`; `bare.yml` `pull_request`; `release.yml` push-only that mentions pull_request in a comment and an `if:`). Each step is `touch .m-<name>`.
+
+- AC-1: whole-line `touch .m-gates` in dry stdout; no `m-deploy` anywhere in it.
+- AC-2: a real run exits 0, writes `.m-gates` (positive control), does not write `.m-deploy`.
+- AC-3 / AC-4: whole-line `touch .m-both` / `touch .m-bare`.
+- AC-5: no `m-release` in dry stdout.
+- AC-6: exact stderr lines `note: not running deploy.yml: it does not trigger on pull_request` and the same for `release.yml`, dry and real; no `not running gates.yml`.
+- AC-7: every pre-existing assertion untouched.
+
 ## Handoff: RED -> GREEN
 
 <!-- Filled by the Test Developer at the end of RED. This is the ONLY channel
@@ -268,6 +279,23 @@ name, below the table.
          suite fails at import, so no assertion in it has run - the controls
          are claims until GREEN confirms them against the shipped module
        * anything discovered that changes the approach -->
+
+
+
+Command: `bash scripts/selftest.sh ci-local`. Result on the unfixed script (34 passed, 6 failed):
+
+    FAIL AC-1: a push-only workflow's step is not listed
+    FAIL AC-5: pull_request mentioned outside on: does not count
+    FAIL AC-6: an excluded workflow is named on stderr
+    FAIL AC-6: so is the one that only mentions pull_request
+    FAIL AC-2: the push-only workflow's step did not run
+    FAIL AC-6: a real run names the excluded workflow too
+    1 of 1 harness suite(s) FAILED.
+    ci-local: 34 passed, 6 failed
+
+Right failure: every excluded workflow is listed, run and unannounced, which is the defect. Passed on arrival: AC-1 positive, AC-3, AC-4, AC-6 "gates not reported" (today includes everything and prints no note); AC-3/AC-4 are earned by DV-2 in GATES.
+
+Shape the tests pin: only stdout lines, stderr note text, marker files. They do not constrain the function name `triggers_on_pull_request` (the Contract names it; DV-1/DV-2 target it) or the parser technique. Note text is pinned exactly.
 
 ## Regressions
 
