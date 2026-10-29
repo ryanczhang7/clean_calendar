@@ -1,0 +1,92 @@
+name: deploy
+
+# CAL-030. Every merge to main (and a manual run on main) ships the tree:
+# gates, production build, Supabase schema and functions, then the static PWA
+# to Cloudflare Pages. A pull request runs nothing here - the `production`
+# environment only hands its secrets to jobs on main, and this workflow does
+# not even start for a PR.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Two merges in quick succession queue rather than cancel: cancelling a run
+# mid-migration would leave the schema half applied.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v5
+
+      # The same toolchain as gates.yml: pnpm from `packageManager`, Node from
+      # .nvmrc, and the same Deno, so the gates below judge what CI judged.
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.9.x
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `--fast`, not the full run: `db` needs Docker and `integration` a
+      # browser (both optional, run locally and in CAL-031), and `build` runs
+      # for real in the next step with the production variables. Its own exit
+      # status stops the job.
+      - name: Gates
+        run: bash scripts/gates.sh --fast
+
+      # The three VITE_ variables are public (they are compiled into the
+      # bundle); they come from the environment's variables, on this step only.
+      - name: Build
+        run: pnpm build
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+          VITE_OWNER_EMAIL: ${{ vars.VITE_OWNER_EMAIL }}
+
+      # Schema and functions BEFORE the client: the new client never runs
+      # against a schema older than it expects, and a failed migration stops
+      # the job before the client changes. Credentials are mapped per step,
+      # never at job level, so no other step can see them.
+      - name: Link Supabase
+        run: pnpm exec supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+
+      - name: Push migrations
+        run: pnpm exec supabase db push --linked --password "$SUPABASE_DB_PASSWORD"
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+
+      # No function names: the CLI deploys every function under
+      # supabase/functions when none is given. `--use-api` bundles server-side,
+      # so no Docker is needed.
+      - name: Deploy functions
+        run: pnpm exec supabase functions deploy --project-ref "$SUPABASE_PROJECT_REF" --use-api
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+
+      # `--branch=main` makes this upload the Pages project's production
+      # deployment (a direct-upload project's production branch is main).
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=${{ vars.CLOUDFLARE_PAGES_PROJECT }} --branch=main
