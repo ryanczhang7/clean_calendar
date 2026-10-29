@@ -372,10 +372,24 @@ Shape the tests pin: only stdout lines, stderr note text, marker files. They do 
 
 ## Gate results
 
-<!-- Written by scripts/gates.sh itself on every full run, stamped with the
-     commit and a hash of the code it ran against. Do not paste or edit it:
-     check-boundaries.sh refuses a PR whose recorded run does not match the
-     code being merged. -->
+<!-- gates.sh: written by bash scripts/gates.sh; do not edit or paste by hand -->
+
+    run:    2026-10-29T19:00:11Z
+    commit: e7b5b9a
+    tree:   5afb7ab423f831db2a9cf73ccedefbf4f7207afb
+    result: pass (10 ran, 0 unconfigured, 0 known)
+
+    PASS         format (2s, observed 200)
+    PASS         lint (1s, observed 201)
+    PASS         typecheck (6s)
+    PASS         unit (36s, observed 2288, floor 2)
+    PASS         coverage (32s, observed 2288, floor 2)
+    PASS         deno-check (3s, observed 10, floor 10)
+    PASS         deno-test (3s, observed 145, floor 145)
+    WARN         db (9s, could not launch: is the local stack running, optional) -> .claude/state/gate-logs/db.log
+    PASS         build (5s, observed 2)
+    PASS         integration (10s, observed 11)
+    ON REQUEST   mutation (not run: per-story cost the user declined (HARNESS-015); run it with /audit-mutations; bash scripts/gates.sh --gate mutation)
 
 ## Gate probes
 
