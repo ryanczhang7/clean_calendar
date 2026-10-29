@@ -4,8 +4,8 @@ title: ci-local runs only workflows that trigger on pull_request
 slug: ci-local-runs-only-workflows-that-trigge
 epic: 
 type: fix
-status: in-progress
-phase: RED
+status: in-review
+phase: REVIEW
 branch: story/HARNESS-052-ci-local-runs-only-workflows-that-trigge
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh, .claude/tests/sigpipe.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
@@ -425,19 +425,19 @@ Shape the tests pin: only stdout lines, stderr note text, marker files. They do 
 
 <!-- gates.sh: written by bash scripts/gates.sh; do not edit or paste by hand -->
 
-    run:    2026-10-29T21:31:46Z
-    commit: 9c93fd5
-    tree:   867cb5379a96ac10b358eb3b33a44330c3655f37
+    run:    2026-10-29T22:23:51Z
+    commit: 23ddf48
+    tree:   0d3067967e02c2a553cd9fae7b302768e3ed1562
     result: pass (10 ran, 0 unconfigured, 0 known)
 
-    PASS         format (2s, observed 204)
+    PASS         format (1s, observed 204)
     PASS         lint (1s, observed 205)
     PASS         typecheck (4s)
-    PASS         unit (25s, observed 2380, floor 2)
+    PASS         unit (23s, observed 2380, floor 2)
     PASS         coverage (25s, observed 2380, floor 2)
-    PASS         deno-check (1s, observed 10, floor 10)
-    PASS         deno-test (2s, observed 145, floor 145)
-    WARN         db (7s, could not launch: is the local stack running, optional) -> .claude/state/gate-logs/db.log
+    PASS         deno-check (0s, observed 10, floor 10)
+    PASS         deno-test (1s, observed 145, floor 145)
+    WARN         db (6s, could not launch: is the local stack running, optional) -> .claude/state/gate-logs/db.log
     PASS         build (4s, observed 2)
     PASS         integration (7s, observed 11)
     ON REQUEST   mutation (not run: per-story cost the user declined (HARNESS-015); run it with /audit-mutations; bash scripts/gates.sh --gate mutation)
