@@ -5,10 +5,10 @@ slug: ci-local-runs-only-workflows-that-trigge
 epic: 
 type: fix
 status: in-progress
-phase: GATES
+phase: RED
 branch: story/HARNESS-052-ci-local-runs-only-workflows-that-trigge
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
-touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
+touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh, .claude/tests/sigpipe.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
 required_gates: []  # gate ids that are optional for the repo but binding for THIS story
 ---
 
@@ -124,7 +124,7 @@ arrival, because today includes everything. They are earned by DV-1.
          caller of it still compiles and is absent from RED's typecheck. One
          such file went missing and took 25 tests with it, silently, at GREEN. -->
 
-**Writes:** `scripts/ci-local.sh`, `.claude/tests/ci-local.test.sh`
+**Writes:** `scripts/ci-local.sh`, `.claude/tests/ci-local.test.sh`, `.claude/tests/sigpipe.test.sh` (R-1: one line-number pin)
 
 - `scripts/ci-local.sh` gains a function `triggers_on_pull_request <file>`
   (bash + awk, no python) that exits 0 when the workflow's top-level `on:`
@@ -239,6 +239,29 @@ arrival, because today includes everything. They are earned by DV-1.
   --dry-run` MUST list its `supabase` steps; unmutated, it MUST list none and
   print the `not running deploy.yml` note. Owner: GATES. Needs CAL-030's
   `deploy.yml` on `main`; this branch is rebased onto it before GATES.
+
+
+  Result (GATES, 2026-10-29, after rebasing onto `main` at e1b3400, which carries CAL-030's `deploy.yml`). Unmutated, no supabase step is listed and the note names the file. With `pull_request:` added to its `on:`, all three deploy steps are listed. Restore verified:
+
+    $ bash scripts/ci-local.sh --dry-run   # unmutated
+    note: not running deploy.yml: it does not trigger on pull_request
+    bash scripts/selftest.sh
+    FORCE_COLOR=1 CLICOLOR_FORCE=1 GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=color.ui GIT_CONFIG_VALUE_0=always bash scripts/selftest.sh
+    bash scripts/check-boundaries.sh origin/main
+    supabase deploy lines listed: 0
+    
+    $ bash scripts/mutate.sh .github/workflows/deploy.yml 's/^on:$/on:\n  pull_request:/' -- bash scripts/ci-local.sh --dry-run
+    === mutate: .github/workflows/deploy.yml (1 line(s) changed by s/^on:$/on:\n  pull_request:/) ===
+      9 +   pull_request:
+    
+    === mutate: running bash -c bash scripts/ci-local.sh --dry-run 2>&1 | grep -E "supabase (link|db push|functions)|not running" ===
+    pnpm exec supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
+    pnpm exec supabase db push --linked --password "$SUPABASE_DB_PASSWORD"
+    pnpm exec supabase functions deploy --project-ref "$SUPABASE_PROJECT_REF" --use-api
+    
+    === mutate: command exited 0; restored (verified byte-for-byte against /d/clean_calendar/.claude/worktrees/bold-tu-6494dc/.claude/state/mutations/.github_workflows_deploy.yml.20261029T201254Z.1982.bak) ===
+    
+    mutate: no stranded mutation; nothing of a previous run is in the tree.
 
 ## Amendments
 
@@ -370,25 +393,53 @@ Shape the tests pin: only stdout lines, stderr note text, marker files. They do 
        * whether GREEN was a no-op, and the command output proving the source
          was untouched and still passes -->
 
+
+### R-1 - GATES back to RED: a line-number pin in `sigpipe.test.sh` went stale
+
+- **Which test.** `.claude/tests/sigpipe.test.sh`, block "C-5: the twelve status-discarded lines in this tree are excluded by the rule, not by markers". Its `DISCARDED` list pins `scripts/ci-local.sh:169:dirty="$(git status`, and its freshness assertion checks that the named line still holds that text.
+- **What was wrong.** Nothing in its logic. GREEN added `triggers_on_pull_request` and a longer `workflow_files()` above that line, moving it from 169 to 208. The pin is a test file, frozen in GATES, so the one legal fix was a return to RED.
+- **How it was found.** The full `bash scripts/selftest.sh` in GATES, after rebasing onto `main` at e1b3400:
+
+      FAIL C-5 freshness: all twelve status-discarded lines are still where this suite says they are
+             scripts/ci-local.sh:169 no longer holds [dirty="$(git status] - it holds:       *'${{'*) printf 'note: skipping a %s step ...
+      FAIL sigpipe  did 81 units of work, below the floor of 82 in .claude/tests/floors.conf
+
+- **What it asserts now.** The same thing at `scripts/ci-local.sh:208`. That is a one-line change; no other assertion was touched. `bash scripts/selftest.sh sigpipe` then gives `sigpipe: 82 passed, 0 failed`.
+- **What earns it.** A corrected pin passes on its first run, so line 208 was mutated so that it no longer holds the needle, and the freshness assertion went red:
+
+    === mutate: scripts/ci-local.sh (1 line(s) changed by 208s/^dirty="\$(git status/dirty="$(git  status/) ===
+      208 - dirty="$(git status --porcelain 2>/dev/null | grep -vE '^\?\?' | head -1)"
+      208 + dirty="$(git  status --porcelain 2>/dev/null | grep -vE '^\?\?' | head -1)"
+    
+    === mutate: running bash -c bash scripts/selftest.sh sigpipe 2>&1 | grep -E "FAIL C-5|ci-local.sh:208|^sigpipe:" ===
+        FAIL C-5 freshness: all twelve status-discarded lines are still where this suite says they are
+               scripts/ci-local.sh:208 no longer holds [dirty="$(git status] - it holds: dirty="$(git  status --porcelain 2>/dev/null | grep -vE '^\?\?' | head -1)"
+    sigpipe: 81 passed, 1 failed
+    
+    === mutate: command exited 0; restored (verified byte-for-byte against /d/clean_calendar/.claude/worktrees/bold-tu-6494dc/.claude/state/mutations/scripts_ci-local.sh.20261029T213738Z.1669.bak) ===
+      208: dirty="$(git status --porcelain 2>/dev/null | grep -vE '^\?\?' | head -1)"
+
+- **GREEN after the return was a no-op.** `scripts/ci-local.sh` was not edited again, and `git diff HEAD~1 -- scripts/` on the R-1 commit is empty. The full self-test and gates were rerun in GATES; their records follow.
+
 ## Gate results
 
 <!-- gates.sh: written by bash scripts/gates.sh; do not edit or paste by hand -->
 
-    run:    2026-10-29T19:00:11Z
-    commit: e7b5b9a
-    tree:   5afb7ab423f831db2a9cf73ccedefbf4f7207afb
+    run:    2026-10-29T21:31:46Z
+    commit: 9c93fd5
+    tree:   867cb5379a96ac10b358eb3b33a44330c3655f37
     result: pass (10 ran, 0 unconfigured, 0 known)
 
-    PASS         format (2s, observed 200)
-    PASS         lint (1s, observed 201)
-    PASS         typecheck (6s)
-    PASS         unit (36s, observed 2288, floor 2)
-    PASS         coverage (32s, observed 2288, floor 2)
-    PASS         deno-check (3s, observed 10, floor 10)
-    PASS         deno-test (3s, observed 145, floor 145)
-    WARN         db (9s, could not launch: is the local stack running, optional) -> .claude/state/gate-logs/db.log
-    PASS         build (5s, observed 2)
-    PASS         integration (10s, observed 11)
+    PASS         format (2s, observed 204)
+    PASS         lint (1s, observed 205)
+    PASS         typecheck (4s)
+    PASS         unit (25s, observed 2380, floor 2)
+    PASS         coverage (25s, observed 2380, floor 2)
+    PASS         deno-check (1s, observed 10, floor 10)
+    PASS         deno-test (2s, observed 145, floor 145)
+    WARN         db (7s, could not launch: is the local stack running, optional) -> .claude/state/gate-logs/db.log
+    PASS         build (4s, observed 2)
+    PASS         integration (7s, observed 11)
     ON REQUEST   mutation (not run: per-story cost the user declined (HARNESS-015); run it with /audit-mutations; bash scripts/gates.sh --gate mutation)
 
 ## Gate probes

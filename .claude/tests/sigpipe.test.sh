@@ -561,7 +561,7 @@ describe "C-5: the twelve status-discarded lines in this tree are excluded by th
 DISCARDED='scripts/check-boundaries.sh:395:res=$(printf
 scripts/check-boundaries.sh:434:rec=$(printf
 scripts/check-boundaries.sh:614:ph_at="$(git show
-scripts/ci-local.sh:169:dirty="$(git status
+scripts/ci-local.sh:208:dirty="$(git status
 scripts/doctor.sh:68:v="$(grep
 scripts/doctor.sh:140:BOOTSTRAPPED="$(grep
 scripts/gates.sh:74:BOOTSTRAPPED="$(grep
