@@ -5,7 +5,7 @@ slug: ci-local-runs-only-workflows-that-trigge
 epic: 
 type: fix
 status: in-progress
-phase: RED
+phase: GATES
 branch: story/HARNESS-052-ci-local-runs-only-workflows-that-trigge
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
@@ -181,10 +181,58 @@ arrival, because today includes everything. They are earned by DV-1.
   (the predicate made to succeed for every file), AC-1, AC-2, AC-5 and AC-6's
   assertions MUST go red in the `ci-local` suite. RED cannot run this: the
   call it would remove does not exist yet. Owner: GATES.
+
+  Result (GATES, 2026-10-29):
+
+    === mutate: scripts/ci-local.sh (1 line(s) changed by s/if triggers_on_pull_request "\$f"; then/if true; then/) ===
+    === mutate: running bash scripts/selftest.sh ci-local ===
+    FAIL AC-1: a push-only workflow's step is not listed
+    FAIL AC-5: pull_request mentioned outside on: does not count
+    FAIL AC-6: an excluded workflow is named on stderr
+    FAIL AC-6: so is the one that only mentions pull_request
+    FAIL AC-2: the push-only workflow's step did not run
+    FAIL AC-6: a real run names the excluded workflow too
+    ci-local: 34 passed, 6 failed
+    1 of 1 harness suite(s) FAILED.
+    === mutate: command exited 1; restored (verified byte-for-byte against /d/clean_calendar/.claude/worktrees/bold-tu-6494dc/.claude/state/mutations/scripts_ci-local.sh.20261029T185554Z.137054.bak) ===
+
 - **DV-2 (earns AC-3 and AC-4)** — Both pass on arrival, because today's
   script includes everything. With the predicate's inline-value branch (the
   `on:` key's own line) made to never match, AC-3's and AC-4's assertions
   MUST go red while AC-1 stays green. Owner: GATES.
+
+  Result (GATES, 2026-10-29). AC-3 and AC-4 red; AC-1's positive and negative assertions are not in the failure list. The other reds are the older fixtures, which all spell `on: [pull_request]` inline - expected collateral of the same branch:
+
+    === mutate: scripts/ci-local.sh (1 line(s) changed by s/found = (v ~/found = 0 \&\& (v ~/) ===
+    === mutate: running bash scripts/selftest.sh ci-local ===
+    FAIL a project's install step is run
+    FAIL and its browser install
+    FAIL alongside the harness's own
+    FAIL the base ref expression is resolved
+    FAIL a block scalar's first line
+    FAIL and its second
+    FAIL a failing first step fails the run
+    FAIL and says which step failed
+    FAIL the failing step's output is shown
+    FAIL the first ci-local: line names the commit being judged
+    FAIL and says it before running anything
+    FAIL so one grep returns both the subject and the verdict
+    FAIL and a dirty tree says so under the same prefix
+    FAIL a step that prints the old shape is not mistaken for the script
+    FAIL while its output is still shown in full
+    FAIL an unresolvable expression is skipped OUT LOUD
+    FAIL and the note quotes what it could not resolve
+    FAIL while the steps it CAN resolve still run
+    FAIL a folded scalar's body is emitted
+    FAIL and so is its continuation
+    FAIL gates.yml runs first even when another workflow sorts before it
+    FAIL AC-3: on: [push, pull_request] is listed
+    FAIL AC-4: a bare on: pull_request is listed
+    ci-local: 17 passed, 23 failed
+    FAIL ci-local  did 17 units of work, below the floor of 28 in .claude/tests/floors.conf
+    1 of 1 harness suite(s) FAILED.
+    === mutate: command exited 1; restored (verified byte-for-byte against /d/clean_calendar/.claude/worktrees/bold-tu-6494dc/.claude/state/mutations/scripts_ci-local.sh.20261029T185632Z.138316.bak) ===
+
 - **DV-3 (probe against the real tree)** — A rule over the tree is probed
   against a real line of it. With `scripts/mutate.sh` adding `pull_request:`
   to the real `.github/workflows/deploy.yml`'s `on:` block, `ci-local.sh
