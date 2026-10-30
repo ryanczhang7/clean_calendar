@@ -4,8 +4,8 @@ title: ci-local runs only workflows that trigger on pull_request
 slug: ci-local-runs-only-workflows-that-trigge
 epic: 
 type: fix
-status: in-review
-phase: REVIEW
+status: done
+phase: DONE
 branch: story/HARNESS-052-ci-local-runs-only-workflows-that-trigge
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [scripts/ci-local.sh, .claude/tests/ci-local.test.sh, .claude/tests/sigpipe.test.sh]  # files this story expects to write; `plan.sh conflicts` reads it
@@ -483,3 +483,13 @@ Shape the tests pin: only stdout lines, stderr note text, marker files. They do 
   model) rather than a `fable` `lead-po` dispatch. The story is a small,
   fully specified harness fix handed over with its design; RED and GREEN run
   in the same session, on Opus 5.5, which matches their planned rows.
+- PR #26, first CI runs both passed. `gates` run
+  https://github.com/ryanczhang7/clean_calendar/actions/runs/40965691921
+  (job 123769488652), 9m36s: `All required gates passed (10 ran, 0
+  unconfigured, 0 known)`, with `db` PASS on CI (139), where the local stack
+  that WARNed in GATES exists, and harness self-test `26 harness suite(s)
+  passed.` Timings: unit 82 s, coverage 100 s, integration 12 s, and no gate
+  timeout is configured. The two new ci-local cases are fixture-only bash, so
+  nothing is near a limit. `boundaries` run
+  https://github.com/ryanczhang7/clean_calendar/actions/runs/40965691960, 6 s, pass.
+- PR #26 merged 2026-10-30T04:18Z as `2fb628b`.
