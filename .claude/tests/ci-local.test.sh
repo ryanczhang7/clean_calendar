@@ -369,4 +369,131 @@ else
 fi
 rm -rf "$OFIX"
 
+# ---------------------------------------------------------------------------
+describe "only workflows CI runs on a pull request"
+
+# HARNESS-052. The script's claim is "what PR CI runs", and it read every
+# *.yml. A deploy workflow - push to main, workflow_dispatch, plain-shell
+# `supabase db push` steps - would then be RUN from a developer's machine. So
+# a workflow contributes steps only when its `on:` names `pull_request`.
+#
+# Each step touches its own marker, so the dry listing and the real run are
+# checked against the same names. Matched as WHOLE lines, not substrings: the
+# listing is one command per line, and `touch .m-both` floating inside a longer
+# line is not a step being listed.
+has_line() { # <exact line> <haystack>
+  awk 'BEGIN { n = ARGV[1]; ARGV[1] = "" } $0 == n { h = 1 } END { exit !h }' "$1" <<<"$2"
+}
+has_text() { # <substring> <haystack>
+  awk 'BEGIN { n = ARGV[1]; ARGV[1] = "" } index($0, n) { h = 1 } END { exit !h }' "$1" <<<"$2"
+}
+
+TFIX="$(make_project_fixture)"
+mkdir -p "$TFIX/.github/workflows"
+# The real gates.yml's shape: a block mapping, pull_request among other events.
+cat > "$TFIX/.github/workflows/gates.yml" <<'YML'
+name: gates
+on:
+  pull_request:
+  # a comment between the events
+  schedule:
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - run: touch .m-gates
+YML
+# CAL-030's deploy.yml's shape: push to main and a manual trigger, nothing else.
+cat > "$TFIX/.github/workflows/deploy.yml" <<'YML'
+name: deploy
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - run: touch .m-deploy
+YML
+cat > "$TFIX/.github/workflows/both.yml" <<'YML'
+name: both
+on: [push, pull_request]
+jobs:
+  both:
+    runs-on: ubuntu-latest
+    steps:
+      - run: touch .m-both
+YML
+cat > "$TFIX/.github/workflows/bare.yml" <<'YML'
+name: bare
+on: pull_request
+jobs:
+  bare:
+    runs-on: ubuntu-latest
+    steps:
+      - run: touch .m-bare
+YML
+# The negative control for a filter that greps the file for the word: every
+# mention of pull_request here is outside `on:`.
+cat > "$TFIX/.github/workflows/release.yml" <<'YML'
+name: release
+# Not run on pull_request: releases happen from main only.
+on:
+  push:
+    branches: [main]
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Only when not a pull_request
+        if: github.event_name != 'pull_request'
+        run: touch .m-release
+YML
+
+tout="$( cd "$TFIX" && bash scripts/ci-local.sh --dry-run 2>/dev/null )"
+terr="$( cd "$TFIX" && bash scripts/ci-local.sh --dry-run 2>&1 >/dev/null )"
+
+# AC-1
+if has_line "touch .m-gates" "$tout"; then _ok "AC-1: a block on: with pull_request among other events is listed"
+else _bad "AC-1: a block on: with pull_request among other events is listed" "stdout: $tout"; fi
+if has_text "m-deploy" "$tout"; then _bad "AC-1: a push-only workflow's step is not listed" "stdout: $tout"
+else _ok "AC-1: a push-only workflow's step is not listed"; fi
+# AC-3
+if has_line "touch .m-both" "$tout"; then _ok "AC-3: on: [push, pull_request] is listed"
+else _bad "AC-3: on: [push, pull_request] is listed" "stdout: $tout"; fi
+# AC-4
+if has_line "touch .m-bare" "$tout"; then _ok "AC-4: a bare on: pull_request is listed"
+else _bad "AC-4: a bare on: pull_request is listed" "stdout: $tout"; fi
+# AC-5
+if has_text "m-release" "$tout"; then _bad "AC-5: pull_request mentioned outside on: does not count" "stdout: $tout"
+else _ok "AC-5: pull_request mentioned outside on: does not count"; fi
+# AC-6
+if has_line "note: not running deploy.yml: it does not trigger on pull_request" "$terr"; then
+  _ok "AC-6: an excluded workflow is named on stderr"
+else _bad "AC-6: an excluded workflow is named on stderr" "stderr: $terr"; fi
+if has_line "note: not running release.yml: it does not trigger on pull_request" "$terr"; then
+  _ok "AC-6: so is the one that only mentions pull_request"
+else _bad "AC-6: so is the one that only mentions pull_request" "stderr: $terr"; fi
+if has_text "not running gates.yml" "$terr"; then _bad "AC-6: an included workflow is not reported excluded" "stderr: $terr"
+else _ok "AC-6: an included workflow is not reported excluded"; fi
+
+# AC-2: a real run. The positive marker is the control that the run happened
+# at all - without it, "no deploy marker" is equally true of a run that
+# executed nothing.
+rm -f "$TFIX"/.m-*
+rout="$( cd "$TFIX" && bash scripts/ci-local.sh 2>&1 )"; rrc=$?
+assert_eq "AC-2: the real run succeeds" 0 "$rrc"
+if [ -f "$TFIX/.m-gates" ]; then _ok "AC-2: the pull_request workflow's step ran"
+else _bad "AC-2: the pull_request workflow's step ran" "no .m-gates; output: $rout"; fi
+if [ -f "$TFIX/.m-deploy" ]; then _bad "AC-2: the push-only workflow's step did not run" "a .m-deploy marker was written"
+else _ok "AC-2: the push-only workflow's step did not run"; fi
+if has_line "note: not running deploy.yml: it does not trigger on pull_request" "$rout"; then
+  _ok "AC-6: a real run names the excluded workflow too"
+else _bad "AC-6: a real run names the excluded workflow too" "output: $rout"; fi
+rm -rf "$TFIX"
+
 summary "ci-local"

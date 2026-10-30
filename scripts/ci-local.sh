@@ -80,14 +80,53 @@ export PR_HEAD_SHA
 # anything about it. gates.yml goes first where it exists, because it carries the
 # selftest and the fast checks and there is no sense discovering a broken harness
 # after a full build; everything else follows in name order.
+#
+# ONLY WORKFLOWS A PULL REQUEST TRIGGERS. The script's claim is "what PR CI
+# runs", and it read every *.yml - so a deploy workflow on `push` to main, whose
+# steps are plain `supabase db push` and `functions deploy`, would have been run
+# from a developer's machine (HARNESS-052). A workflow whose `on:` does not name
+# `pull_request` is dropped, and said so, in the same voice as a skipped step.
 workflow_files() {
-  local first="$WFDIR/gates.yml" f
-  [ -f "$first" ] && printf '%s\n' "$first"
-  for f in "$WFDIR"/*.yml; do
+  local first="$WFDIR/gates.yml" f n=0
+  for f in "$first" "$WFDIR"/*.yml; do
+    n=$((n + 1))
     [ -e "$f" ] || continue
-    [ "$f" = "$first" ] && continue
-    printf '%s\n' "$f"
+    [ "$n" -gt 1 ] && [ "$f" = "$first" ] && continue
+    if triggers_on_pull_request "$f"; then
+      printf '%s\n' "$f"
+    else
+      printf 'note: not running %s: it does not trigger on pull_request\n' "$(basename "$f")" >&2
+    fi
   done
+}
+
+# Does the workflow's top-level `on:` name the pull_request event? Only `on:`
+# is read - a comment or an `if: github.event_name == 'pull_request'` elsewhere
+# says nothing about when the workflow runs. Three spellings: the scalar or flow
+# sequence on the key's own line (`on: pull_request`, `on: [push, pull_request]`),
+# or the first level of the block below it (`pull_request:` or `- pull_request`).
+# `pull_request_target` is a different event: it runs the BASE branch's code.
+triggers_on_pull_request() { # <workflow file>
+  awk '
+    inon {
+      if ($0 ~ /^[[:space:]]*(#|$)/) next
+      match($0, /^[[:space:]]*/); this = RLENGTH
+      if (this == 0) exit
+      if (ind < 0) ind = this
+      if (this != ind) next
+      line = $0; sub(/^[[:space:]]*(-[[:space:]]+)?/, "", line)
+      if (line ~ /^["\047]?pull_request["\047]?[[:space:]]*(:|#|$)/) { found = 1; exit }
+      next
+    }
+    /^["\047]?on["\047]?[[:space:]]*:/ {
+      v = $0
+      sub(/^["\047]?on["\047]?[[:space:]]*:[[:space:]]*/, "", v)
+      sub(/[[:space:]]*#.*$/, "", v)
+      if (v != "") { found = (v ~ /(^|[^A-Za-z0-9_])pull_request([^A-Za-z0-9_]|$)/); exit }
+      inon = 1; ind = -1
+    }
+    END { exit !found }
+  ' "$1"
 }
 
 # `run:` steps in file order. A block scalar (`run: |`) is one step whose body
