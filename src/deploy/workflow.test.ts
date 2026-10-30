@@ -110,7 +110,14 @@ function supabaseArgs(run: string, sub: string[]): string[] | null {
 }
 
 /** Supabase CLI 2.120.0 flags that take a value (`--help`, Block 1). */
-const VALUED_FLAGS = new Set(["--project-ref", "--password"]);
+const VALUED_FLAGS = new Set(["--project-ref", "--password", "--db-url"]);
+
+/**
+ * Block 1, amended 2026-10-30 (Return 1): the session pooler, port 5432, user
+ * `postgres.<ref>`, and NO password in the URL - it arrives as PGPASSWORD.
+ */
+const DB_URL =
+  "postgresql://postgres.$SUPABASE_PROJECT_REF@$SUPABASE_POOLER_HOST:5432/postgres";
 
 type Role =
   | "checkout"
@@ -160,7 +167,6 @@ const CONTRACT_ORDER: Role[] = [
   "install",
   "gates",
   "build",
-  "supabase-link",
   "supabase-db-push",
   "supabase-functions-deploy",
   "pages-deploy",
@@ -175,6 +181,7 @@ const SECRETS = [
 ];
 const VARS = [
   "SUPABASE_PROJECT_REF",
+  "SUPABASE_POOLER_HOST",
   "CLOUDFLARE_PAGES_PROJECT",
   "VITE_SUPABASE_URL",
   "VITE_SUPABASE_ANON_KEY",
@@ -208,15 +215,13 @@ const ALLOWED_REFS: Record<Role, string[]> = {
     "vars.VITE_SUPABASE_ANON_KEY",
     "vars.VITE_OWNER_EMAIL",
   ],
-  "supabase-link": [
-    "secrets.SUPABASE_ACCESS_TOKEN",
-    "secrets.SUPABASE_DB_PASSWORD",
-    "vars.SUPABASE_PROJECT_REF",
-  ],
+  // Recognised only so a `supabase link` step is named, never allowed: it is
+  // not in the contract (Return 1), so any reference it makes is a leak.
+  "supabase-link": [],
   "supabase-db-push": [
-    "secrets.SUPABASE_ACCESS_TOKEN",
     "secrets.SUPABASE_DB_PASSWORD",
     "vars.SUPABASE_PROJECT_REF",
+    "vars.SUPABASE_POOLER_HOST",
   ],
   "supabase-functions-deploy": [
     "secrets.SUPABASE_ACCESS_TOKEN",
@@ -305,8 +310,15 @@ describe("deploy.yml: the job and its environment (AC-1)", () => {
 });
 
 describe("deploy.yml: the steps (AC-1, AC-2)", () => {
-  test("the steps run in exactly the contracted order: toolchain, install, gates, build, Supabase link, db push, functions deploy, Pages deploy", () => {
+  test("the steps run in exactly the contracted order: toolchain, install, gates, build, db push, functions deploy, Pages deploy", () => {
     expect(steps().map(roleOf)).toEqual(CONTRACT_ORDER);
+  });
+
+  test("no step runs `supabase link`, which a scoped access token cannot pass (Return 1)", () => {
+    const linking = steps()
+      .map((s) => oneLine(s.run ?? ""))
+      .filter((run) => /\bsupabase\s+link\b/.test(run));
+    expect(linking).toEqual([]);
   });
 
   test("the toolchain matches gates.yml: Node from .nvmrc with the pnpm cache, and the same Deno", () => {
@@ -355,19 +367,51 @@ describe("deploy.yml: the steps (AC-1, AC-2)", () => {
     }
   });
 
-  test("Supabase is linked to the project in vars.SUPABASE_PROJECT_REF with the database password", () => {
-    expect(supabaseArgs(stepFor("supabase-link").run ?? "", ["link"])).toEqual(
-      [
-        "--password=$SUPABASE_DB_PASSWORD",
-        "--project-ref=$SUPABASE_PROJECT_REF",
-      ].sort(),
-    );
+  test("migrations are pushed with `db push --db-url` to the session pooler as postgres.<ref>, and with nothing else: not --linked, not --password, not a dry run", () => {
+    const args = supabaseArgs(stepFor("supabase-db-push").run ?? "", [
+      "db",
+      "push",
+    ]);
+    const flags = (args ?? []).map((a) => a.split("=")[0]);
+    expect(flags, "db push --linked").not.toContain("--linked");
+    expect(flags, "db push --password").not.toContain("--password");
+    expect(flags, "db push --dry-run").not.toContain("--dry-run");
+    expect(args).toEqual([`--db-url=${DB_URL}`]);
   });
 
-  test("migrations are pushed to the linked project with `db push --linked --password`, not a dry run", () => {
+  test("the db push URL carries no password: only the user postgres.$SUPABASE_PROJECT_REF stands before the @", () => {
+    const args =
+      supabaseArgs(stepFor("supabase-db-push").run ?? "", ["db", "push"]) ?? [];
+    const url = args
+      .find((a) => a.startsWith("--db-url="))
+      ?.slice("--db-url=".length);
+    expect(url, "no --db-url").toBeDefined();
+    const userinfo = /^postgresql:\/\/([^@]*)@/.exec(url ?? "")?.[1];
+    expect(userinfo).toBe("postgres.$SUPABASE_PROJECT_REF");
+  });
+
+  test("db push gets the password as PGPASSWORD, the ref and the pooler host from the environment's variables, and no access token", () => {
+    const env = stepFor("supabase-db-push").env ?? {};
+    expect(Object.keys(env), "db push env").not.toContain(
+      "SUPABASE_ACCESS_TOKEN",
+    );
+    expect(Object.keys(env).sort()).toEqual([
+      "PGPASSWORD",
+      "SUPABASE_POOLER_HOST",
+      "SUPABASE_PROJECT_REF",
+    ]);
     expect(
-      supabaseArgs(stepFor("supabase-db-push").run ?? "", ["db", "push"]),
-    ).toEqual(["--linked", "--password=$SUPABASE_DB_PASSWORD"].sort());
+      isExpr(env.PGPASSWORD, "secrets", "SUPABASE_DB_PASSWORD"),
+      `PGPASSWORD = ${String(env.PGPASSWORD)}`,
+    ).toBe(true);
+    expect(
+      isExpr(env.SUPABASE_PROJECT_REF, "vars", "SUPABASE_PROJECT_REF"),
+      `SUPABASE_PROJECT_REF = ${String(env.SUPABASE_PROJECT_REF)}`,
+    ).toBe(true);
+    expect(
+      isExpr(env.SUPABASE_POOLER_HOST, "vars", "SUPABASE_POOLER_HOST"),
+      `SUPABASE_POOLER_HOST = ${String(env.SUPABASE_POOLER_HOST)}`,
+    ).toBe(true);
   });
 
   test("every function is deployed: `functions deploy` names no function, uses the API bundler and the project ref", () => {
@@ -379,12 +423,8 @@ describe("deploy.yml: the steps (AC-1, AC-2)", () => {
     ).toEqual(["--project-ref=$SUPABASE_PROJECT_REF", "--use-api"].sort());
   });
 
-  test("each Supabase step maps the access token, and every name it expands, from the right secret or variable on the step itself", () => {
-    for (const role of [
-      "supabase-link",
-      "supabase-db-push",
-      "supabase-functions-deploy",
-    ] as const) {
+  test("functions deploy maps the access token, and every name it expands, from the right secret or variable on the step itself", () => {
+    for (const role of ["supabase-functions-deploy"] as const) {
       const step = stepFor(role);
       const env = step.env ?? {};
       const needed = new Set([
@@ -428,7 +468,7 @@ describe("deploy.yml: the steps (AC-1, AC-2)", () => {
     expect(leaks).toEqual([]);
   });
 
-  test("exactly the four settled secrets and five settled variables are referenced", () => {
+  test("exactly the four settled secrets and six settled variables are referenced", () => {
     const refs = new Set(contextRefs(workflow()));
     expect([...refs].filter((r) => r.startsWith("secrets.")).sort()).toEqual(
       SECRETS.map((s) => `secrets.${s}`).sort(),
