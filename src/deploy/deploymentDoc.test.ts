@@ -121,22 +121,20 @@ describe("docs/wiki/deployment.md: the one-time steps, in order (AC-4)", () => {
     expect(step(4)).toContain(GEMINI);
   });
 
-  test.each([
-    ["Migrations", "read-write"],
-    ["Edge Functions", "read-write"],
-    ["Connection Pooling", "read"],
-    ["Project Settings", "read"],
-  ])("step 5 grants the scoped token %s: %s", (scope, level) => {
-    const lines = linesWith(step(5), scope);
-    expect(lines.length, `no line names ${scope}`).toBeGreaterThan(0);
-    const readWrite = /read[- ]write/i;
-    if (level === "read-write") {
-      expect(lines.some((l) => readWrite.test(l))).toBe(true);
-    } else {
-      expect(lines.some((l) => /\bread\b/i.test(l) && !readWrite.test(l))).toBe(
-        true,
-      );
-    }
+  // Block 3, amended 2026-10-30 (Return 1): with `supabase link` gone the
+  // token serves `functions deploy` only, so Edge Functions read-write is the
+  // one permission pinned. Migrations, Connection Pooling and Project Settings
+  // were pinned for `link`/`db push --linked` and are no longer asserted
+  // either way: the full measured list is the first green deploy's to give.
+  test("step 5 grants the scoped token Edge Functions: read-write", () => {
+    const lines = linesWith(step(5), "Edge Functions");
+    expect(lines.length, "no line names Edge Functions").toBeGreaterThan(0);
+    expect(lines.some((l) => /read[- ]write/i.test(l))).toBe(true);
+  });
+
+  test("no numbered step tells the owner the deploy runs `supabase link` (Return 1)", () => {
+    const offenders = STEPS.filter((h) => /supabase link/i.test(section(h)));
+    expect(offenders).toEqual([]);
   });
 
   test("step 5 scopes the token to one project and grants nothing else", () => {
@@ -152,7 +150,7 @@ describe("docs/wiki/deployment.md: the one-time steps, in order (AC-4)", () => {
     expect(s).toMatch(/account id/i);
   });
 
-  test("step 7 gives the `production` environment (its pinned heading) a `main` branch rule, the four secrets and the five variables", () => {
+  test("step 7 gives the `production` environment (its pinned heading) a `main` branch rule, the four secrets and the six variables", () => {
     const s = step(7);
     expect(s).toMatch(/\bbranch/i);
     expect(s).toMatch(/\bmain\b/);
@@ -162,6 +160,7 @@ describe("docs/wiki/deployment.md: the one-time steps, in order (AC-4)", () => {
       n("SUPABASE", "ACCESS", "TOKEN"),
       n("SUPABASE", "DB", "PASSWORD"),
       "SUPABASE_PROJECT_REF",
+      "SUPABASE_POOLER_HOST",
       "CLOUDFLARE_PAGES_PROJECT",
       "VITE_SUPABASE_URL",
       "VITE_SUPABASE_ANON_KEY",
@@ -169,6 +168,14 @@ describe("docs/wiki/deployment.md: the one-time steps, in order (AC-4)", () => {
     ]) {
       expect(s, `step 7 does not name ${name}`).toContain(name);
     }
+  });
+
+  test("step 7 says the pooler host comes from the dashboard's Session pooler, on the line that names SUPABASE_POOLER_HOST", () => {
+    const lines = linesWith(step(7), "SUPABASE_POOLER_HOST");
+    expect(lines.length, "no line names SUPABASE_POOLER_HOST").toBeGreaterThan(
+      0,
+    );
+    expect(lines.some((l) => /session pooler/i.test(l))).toBe(true);
   });
 
   test("step 8 sets app_config.owner_email with SQL in the SQL editor, the email as a placeholder", () => {

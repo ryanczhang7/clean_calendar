@@ -60,18 +60,18 @@ jobs:
       # against a schema older than it expects, and a failed migration stops
       # the job before the client changes. Credentials are mapped per step,
       # never at job level, so no other step can see them.
-      - name: Link Supabase
-        run: pnpm exec supabase link --project-ref "$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD"
-        env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
-          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
-
+      #
+      # Migrations go straight to Postgres through the session pooler (port
+      # 5432; GitHub's runners have no IPv6 and the free plan's direct host is
+      # IPv6-only), so no access token and no project link is involved. The
+      # password is never in the URL: it arrives as PGPASSWORD, so a password
+      # with URL-special characters needs no encoding.
       - name: Push migrations
-        run: pnpm exec supabase db push --linked --password "$SUPABASE_DB_PASSWORD"
+        run: pnpm exec supabase db push --db-url "postgresql://postgres.$SUPABASE_PROJECT_REF@$SUPABASE_POOLER_HOST:5432/postgres"
         env:
-          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
-          SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          PGPASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_POOLER_HOST: ${{ vars.SUPABASE_POOLER_HOST }}
 
       # No function names: the CLI deploys every function under
       # supabase/functions when none is given. `--use-api` bundles server-side,
