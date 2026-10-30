@@ -3,6 +3,8 @@
 // caller is the owner is asked of `public.is_owner()`, the one predicate RLS
 // uses, through PostgREST with the caller's own JWT. Nothing here decodes it.
 
+import { CORS_HEADERS } from "./cors.ts";
+
 export type OwnerDeps = {
   fetch: typeof fetch;
   env: (name: string) => string | undefined;
@@ -11,7 +13,7 @@ export type OwnerDeps = {
 export function jsonResponse(body: unknown, status: number): Response {
   return new Response(JSON.stringify(body), {
     status,
-    headers: { "content-type": "application/json" },
+    headers: { ...CORS_HEADERS, "content-type": "application/json" },
   });
 }
 
