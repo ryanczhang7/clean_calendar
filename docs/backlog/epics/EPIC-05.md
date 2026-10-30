@@ -2,7 +2,7 @@
 id: EPIC-05
 title: A booking e-mail becomes an event
 status: todo
-stories: [CAL-018, CAL-019, CAL-020, CAL-021, CAL-022]
+stories: [CAL-018, CAL-019, CAL-020, CAL-021, CAL-022, CAL-047]
 ---
 
 ## Goal
@@ -32,6 +32,9 @@ and what it could not find; confirming writes a normal event with
 3. CAL-020 — in-app capture screen: paste or pick, confirm, save
 4. CAL-021 — confidence and missing fields are shown, never guessed silently
 5. CAL-022 — Android share target delivers text and images to the capture screen
+6. CAL-047 — fix: the capture function answers the browser's CORS preflight and
+   every reply carries `Access-Control-Allow-Origin` (found on the owner's first
+   use, CAL-030 notes)
 
 ## Deliberately not in this epic
 
