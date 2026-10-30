@@ -158,6 +158,12 @@ async function run(w: ReturnType<typeof world>, req: Request) {
     (res.headers.get("content-type") ?? "").startsWith("application/json"),
     `response ${res.status} has content-type ${res.headers.get("content-type")}`,
   );
+  // CAL-047 AC-2: every reply the handler produces is readable cross-origin.
+  assertEquals(
+    res.headers.get("access-control-allow-origin"),
+    "*",
+    `response ${res.status} has no Access-Control-Allow-Origin: *, so the browser cannot read it`,
+  );
   const body = await res.json();
   assertEquals(w.unexpected, [], "the handler fetched a URL nobody expected");
   return { status: res.status, body };
@@ -192,7 +198,72 @@ Deno.test("a GET is 405 and fetches nothing", async () => {
   assert(
     (res.headers.get("content-type") ?? "").startsWith("application/json"),
   );
+  // CAL-047 AC-2: this test bypasses run(), so it asserts the header itself.
+  assertEquals(
+    res.headers.get("access-control-allow-origin"),
+    "*",
+    "response 405 has no Access-Control-Allow-Origin: *, so the browser cannot read it",
+  );
   assertEquals(w.keys(), []);
+});
+
+// ---------------------------------------------------------------- CAL-047 AC-1
+
+/** The CAL-047 Contract Block 1 ALLOWED_HEADERS, read out of the contract. */
+const CORS_ALLOWED_HEADERS = [
+  "authorization",
+  "x-client-info",
+  "apikey",
+  "content-type",
+  "x-retry-count",
+  "traceparent",
+  "tracestate",
+  "baggage",
+];
+
+Deno.test("CAL-047 AC-1: the browser's CORS preflight is 204 with allow-origin *, every allowed header and POST, and fetches nothing", async () => {
+  const w = world();
+  const res = await handleCapture(
+    new Request(`${SUPABASE_URL}/functions/v1/capture`, {
+      method: "OPTIONS",
+      headers: {
+        origin: "https://clean-calendar.pages.dev",
+        "access-control-request-method": "POST",
+        "access-control-request-headers":
+          "authorization,apikey,content-type,x-client-info",
+      },
+    }),
+    w.deps,
+  );
+  assertEquals(
+    res.status,
+    204,
+    `the preflight was refused with ${res.status}; the browser will never send the POST`,
+  );
+  assertEquals(res.headers.get("access-control-allow-origin"), "*");
+  const allowHeaders = (res.headers.get("access-control-allow-headers") ?? "")
+    .split(",")
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => h !== "");
+  const notAllowed = CORS_ALLOWED_HEADERS.filter(
+    (h) => !allowHeaders.includes(h),
+  );
+  assertEquals(
+    notAllowed,
+    [],
+    `the preflight does not allow ${notAllowed.join(", ")}`,
+  );
+  const allowMethods = (res.headers.get("access-control-allow-methods") ?? "")
+    .split(",")
+    .map((m) => m.trim().toUpperCase());
+  assert(
+    allowMethods.includes("POST"),
+    `the preflight's allow-methods is ${
+      res.headers.get("access-control-allow-methods")
+    }, which does not name POST`,
+  );
+  assertEquals(w.keys(), [], "the preflight fetched something");
+  assertEquals(w.unexpected, []);
 });
 
 // ---------------------------------------------------------------- AC-4, 401
@@ -436,6 +507,14 @@ Deno.test("AC-5: the job row is posted with the anon key, the caller's JWT and P
 
 Deno.test("a job row insert that fails is 502 upstream", async () => {
   const w = world({ jobs: () => json({ message: "denied" }, 403) });
+  const { status, body } = await run(w, post({ text: TEXT }));
+  assertEquals(status, 502);
+  assertEquals(body, { error: "upstream" });
+  assertEquals(w.keys(), [OWNER, KINDS, GEMINI, JOBS]);
+});
+
+Deno.test("a job row insert that succeeds but returns no id is 502 upstream", async () => {
+  const w = world({ jobs: () => json([{}], 201) });
   const { status, body } = await run(w, post({ text: TEXT }));
   assertEquals(status, 502);
   assertEquals(body, { error: "upstream" });

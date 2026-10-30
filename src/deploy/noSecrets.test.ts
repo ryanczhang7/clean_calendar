@@ -10,8 +10,9 @@ import { describe, expect, test } from "vitest";
 //
 // ORACLE-FREE, so the rule carries controls on both sides:
 //   * fixtures fed to the pure matcher, positive and negative, per pattern;
-//   * the REAL reference lines of the tree (handler_test.ts 96 and 361,
-//     handler.ts 246, the names in docs/wiki) must NOT be reported;
+//   * the REAL reference lines of the tree (every line of handler_test.ts
+//     and handler.ts that names the key, found by content since CAL-047, and
+//     the names in docs/wiki) must NOT be reported;
 //   * the probe on a real line (story, Deferred verification 2): through
 //     scripts/mutate.sh, handler_test.ts line 96 turned into a quoted literal
 //     must turn the whole-tree case red, naming that file and line.
@@ -178,8 +179,17 @@ const FILES = trackedFiles();
 const HANDLER_TEST = "supabase/functions/capture/handler_test.ts";
 const HANDLER = "supabase/functions/capture/handler.ts";
 
-function lineOf(path: string, line: number): string {
-  return (readText(path) ?? "").split(/\r?\n/)[line - 1] ?? "";
+/**
+ * Every line of `path` that names `name`, with its 1-based number. Found by
+ * content, not by a pinned line number: CAL-047 moved handler_test.ts and
+ * handler.ts lines, and a number-pinned control then points at the wrong
+ * line and fails its non-vacuity check for a reason that is not a secret.
+ */
+function linesNaming(path: string, name: string): [number, string][] {
+  return (readText(path) ?? "")
+    .split(/\r?\n/)
+    .map((text, i): [number, string] => [i + 1, text])
+    .filter(([, text]) => text.includes(name));
 }
 
 describe("the matcher: literals it must report (AC-5)", () => {
@@ -322,18 +332,23 @@ describe("the matcher: references and placeholders it must not report (AC-5)", (
 });
 
 describe("the real tree's reference lines are not reported (AC-5)", () => {
+  // Each file and the fewest lines in it that must name the key. The CAL-030
+  // lines were handler_test.ts 96 and 361 and handler.ts 246: two env
+  // tables in the test and one deps.env read in the handler.
   const real: [string, number][] = [
-    [HANDLER_TEST, 96],
-    [HANDLER_TEST, 361],
-    [HANDLER, 246],
+    [HANDLER_TEST, 2],
+    [HANDLER, 1],
   ];
   test.each(real)(
-    "%s line %i names the key and is not reported",
-    (path, line) => {
-      const text = lineOf(path, line);
-      // Non-vacuity: the control is pointed at a line that names the key.
-      expect(text).toContain(GEMINI);
-      expect(findLiteralAssignments(path, text)).toEqual([]);
+    "%s names the key on at least %i lines, and none of them is reported",
+    (path, atLeast) => {
+      const lines = linesNaming(path, GEMINI);
+      // Non-vacuity: the control is pointed at lines that name the key.
+      expect(lines.length).toBeGreaterThanOrEqual(atLeast);
+      const reported = lines.flatMap(([n, text]) =>
+        findLiteralAssignments(path, text).map((f) => `${path}:${n} ${f.name}`),
+      );
+      expect(reported).toEqual([]);
     },
   );
 
