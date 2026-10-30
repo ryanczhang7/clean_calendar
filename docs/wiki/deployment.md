@@ -24,8 +24,7 @@ Do the steps in order: later steps use values the earlier ones produce.
    on the free plan. Pick the region nearest you.
 2. Supabase asks for a **database password** at creation. Generate one and
    keep it in your password manager: it becomes the `SUPABASE_DB_PASSWORD`
-   secret in step 7, and the deploy needs it for `supabase link` and
-   `supabase db push`.
+   secret in step 7, and the deploy needs it for `supabase db push`.
 3. Note the **project ref**: the `<project-ref>` part of
    `https://<project-ref>.supabase.co`, also shown under Project Settings →
    General. It becomes the `SUPABASE_PROJECT_REF` variable.
@@ -33,7 +32,7 @@ Do the steps in order: later steps use values the earlier ones produce.
 To reset the database password later: **Database → Settings** (Database
 password → Reset), or press Ctrl+K in the dashboard and search
 "reset database password". After a reset, update the `SUPABASE_DB_PASSWORD`
-secret in step 7 too, or the next deploy fails at `supabase link`.
+secret in step 7 too, or the next deploy fails at the Push migrations step.
 
 ## 2. Create the Cloudflare Pages project by direct upload
 
@@ -108,17 +107,17 @@ the least the workflow needs.
    token, choosing the scoped (fine-grained) kind.
 2. Limit it to **one project**: the project from step 1.
 3. Grant exactly these permissions:
-   - Migrations: **read-write** (`supabase db push`)
    - Edge Functions: **read-write** (`supabase functions deploy`)
-   - Connection Pooling: **read** (`supabase link`)
-   - Project Settings: **read** (`supabase link`)
    - everything else: **none**
 4. Copy the token once; Supabase will not show it again. It becomes the
    `SUPABASE_ACCESS_TOKEN` secret in step 7.
 
-Unverified until the first deploy: that this permission set is enough for
-`supabase link`. If the first run fails at the Link step with a permission
-error, its log names what was refused.
+The token needs no database permission: migrations are pushed over a direct
+Postgres connection (the session pooler) using the database password from
+step 1, not through the Supabase API. That `supabase functions deploy
+--project-ref` succeeds with this token alone is measured by the first
+deploy; if it fails at the Deploy functions step with a permission error, its
+log names what was refused.
 
 ## 6. Create the Cloudflare API token and find the account ID
 
@@ -148,11 +147,12 @@ named `production`.
    | `SUPABASE_ACCESS_TOKEN` | step 5 |
    | `SUPABASE_DB_PASSWORD` | step 1 |
 
-3. **Environment variables** (five):
+3. **Environment variables** (six):
 
    | Name | Value |
    |---|---|
    | `SUPABASE_PROJECT_REF` | `<project-ref>` from step 1 |
+   | `SUPABASE_POOLER_HOST` | the host from Supabase **Connect → Session pooler** (e.g. `aws-0-<region>.pooler.supabase.com`, host only, no password or port) |
    | `CLOUDFLARE_PAGES_PROJECT` | `<pages-project>` from step 2 |
    | `VITE_SUPABASE_URL` | `https://<project-ref>.supabase.co` |
    | `VITE_SUPABASE_ANON_KEY` | the project's anon (public) key |
@@ -191,7 +191,7 @@ same address as the `VITE_OWNER_EMAIL` variable in step 7. Then open
 ## 9. Restore a paused free-tier project
 
 Supabase pauses a free-tier project after a period of inactivity. While it is
-paused the app cannot sign in or sync, and a deploy fails at the Link step.
+paused the app cannot sign in or sync, and a deploy fails at the Push migrations step.
 
 To restore it: Supabase dashboard → open the project → **Restore** (the
 paused project's page offers it). Restoring takes a few minutes; nothing needs
