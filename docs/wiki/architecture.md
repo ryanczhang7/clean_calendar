@@ -158,7 +158,7 @@ transaction - and prefills the capture screen (CAL-022).
 |---|---|---|
 | Backend | Supabase (brief's decision) | Firebase: push + functions are fine but Firestore makes the recurrence/overrides query model awkward and RLS-equivalent rules are less testable. Self-hosted: not $0, and the owner wanted simple. |
 | Single-account enforcement | RLS on `auth.jwt() ->> 'email'` vs `app_config.owner_email` | Supabase "before sign-up" hook: not on the free tier's hook set at planning time; a client-side check alone is not security. The RLS form is one predicate, testable in the `db` project. |
-| Gemini model | `gemini-2.5-flash`, REST, JSON schema | Pro: ~10x cost for an easy task. `-latest` aliases: move under you. SDK: one more dep to track in Deno for a single POST. |
+| Gemini model | `gemini-3.8-flash`, REST, JSON schema (CAL-048: 2.5 Flash retired, changelog 2026-09-18, hosted captures `upstream 404` on 2026-10-31; endpoint and request shape kept) | Pro: ~10x cost for an easy task. `-latest` aliases: move under you, which is why the retirement was a deliberate pin change. SDK: one more dep to track in Deno for a single POST. |
 | Gemini key | Function secret, browser never sees it (brief's decision) | — |
 | Offline store | Dexie (IndexedDB) | TanStack Query persister: a cache, not a store; offline edits need an outbox anyway. localStorage: too small for images in the inbox. |
 | Sync | Full-copy cache + outbox + Realtime, server LWW | CRDT/op-log: a one-user product does not need it. Polling: Realtime is free and "within seconds" is a success criterion. |

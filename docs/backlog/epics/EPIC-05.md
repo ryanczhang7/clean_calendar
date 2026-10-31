@@ -2,7 +2,7 @@
 id: EPIC-05
 title: A booking e-mail becomes an event
 status: todo
-stories: [CAL-018, CAL-019, CAL-020, CAL-021, CAL-022, CAL-047]
+stories: [CAL-018, CAL-019, CAL-020, CAL-021, CAL-022, CAL-047, CAL-048]
 ---
 
 ## Goal
@@ -35,6 +35,8 @@ and what it could not find; confirming writes a normal event with
 6. CAL-047 — fix: the capture function answers the browser's CORS preflight and
    every reply carries `Access-Control-Allow-Origin` (found on the owner's first
    use, CAL-030 notes)
+7. CAL-048 — fix: the capture function calls `gemini-3.8-flash`; 2.5 Flash is
+   retired and every hosted capture failed `upstream 404` (CAL-047 notes)
 
 ## Deliberately not in this epic
 
