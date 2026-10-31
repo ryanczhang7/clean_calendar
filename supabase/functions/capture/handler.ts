@@ -7,6 +7,7 @@ import {
   type GeminiReply,
   geminiReplySchema,
 } from "../../../shared/captureSchema.ts";
+import { preflight } from "../_shared/cors.ts";
 import { bearer, jsonResponse, requireOwner } from "../_shared/owner.ts";
 import { callGemini, DEFAULT_GEMINI_API_BASE, GEMINI_MODEL } from "./gemini.ts";
 import { buildImagePrompt, buildPrompt } from "./prompt.ts";
@@ -189,6 +190,9 @@ export async function handleCapture(
   req: Request,
   deps: CaptureDeps,
 ): Promise<Response> {
+  // 0. The browser's CORS preflight, before anything else is read.
+  const pre = preflight(req);
+  if (pre !== null) return pre;
   // 1. Method.
   if (req.method !== "POST") {
     return jsonResponse({ error: "method_not_allowed" }, 405);

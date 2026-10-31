@@ -47,6 +47,15 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** CAL-047 AC-3: a refusal the browser can read, so it is not mistaken for "offline". */
+function assertCors(res: Response) {
+  assertEquals(
+    res.headers.get("access-control-allow-origin"),
+    "*",
+    `requireOwner's ${res.status} has no Access-Control-Allow-Origin: *, so the browser cannot read it`,
+  );
+}
+
 function request(authorization?: string): Request {
   const headers = new Headers({ "content-type": "application/json" });
   if (authorization !== undefined) headers.set("authorization", authorization);
@@ -62,6 +71,7 @@ Deno.test("no Authorization header is 401 unauthorized, and nothing is fetched",
   const res = await requireOwner(request(), { fetch, env });
   assert(res !== null, "expected a 401 Response, got null (owner)");
   assertEquals(res.status, 401);
+  assertCors(res);
   assertEquals(await res.json(), { error: "unauthorized" });
   assertEquals(seen.length, 0);
 });
@@ -74,6 +84,7 @@ Deno.test("an Authorization header that is not a Bearer token is 401, and nothin
   });
   assert(res !== null, "expected a 401 Response, got null (owner)");
   assertEquals(res.status, 401);
+  assertCors(res);
   assertEquals(await res.json(), { error: "unauthorized" });
   assertEquals(seen.length, 0);
 });
@@ -109,6 +120,7 @@ Deno.test("is_owner() answering false is 403 forbidden", async () => {
   });
   assert(res !== null, "a non-owner was admitted");
   assertEquals(res.status, 403);
+  assertCors(res);
   assertEquals(await res.json(), { error: "forbidden" });
 });
 
@@ -120,6 +132,7 @@ Deno.test("is_owner() answering null is 403 forbidden", async () => {
   });
   assert(res !== null, "a null answer admitted the caller");
   assertEquals(res.status, 403);
+  assertCors(res);
   assertEquals(await res.json(), { error: "forbidden" });
 });
 
@@ -131,6 +144,7 @@ Deno.test('is_owner() answering the string "true" is 403: only the literal boole
   });
   assert(res !== null, 'the string "true" admitted the caller');
   assertEquals(res.status, 403);
+  assertCors(res);
 });
 
 Deno.test("a non-2xx from PostgREST is 403 even when its body says true", async () => {
@@ -138,6 +152,7 @@ Deno.test("a non-2xx from PostgREST is 403 even when its body says true", async 
   const res = await requireOwner(request("Bearer owner-jwt"), { fetch, env });
   assert(res !== null, "a 500 admitted the caller");
   assertEquals(res.status, 403);
+  assertCors(res);
   assertEquals(await res.json(), { error: "forbidden" });
 });
 
@@ -151,6 +166,7 @@ Deno.test("a 401 from PostgREST (a JWT it will not accept) is 403 forbidden", as
   });
   assert(res !== null, "a rejected JWT admitted the caller");
   assertEquals(res.status, 403);
+  assertCors(res);
 });
 
 Deno.test("the 401 and 403 responses are application/json", async () => {
@@ -167,4 +183,15 @@ Deno.test("the 401 and 403 responses are application/json", async () => {
       `content-type was ${res.headers.get("content-type")}`,
     );
   }
+});
+
+Deno.test("an owner check whose fetch throws (network failure) is 403 forbidden, readable cross-origin", async () => {
+  const fetch = (() => {
+    throw new TypeError("connection refused");
+  }) as typeof globalThis.fetch;
+  const res = await requireOwner(request("Bearer owner-jwt"), { fetch, env });
+  assert(res !== null, "a network failure admitted the caller");
+  assertEquals(res.status, 403);
+  assertCors(res);
+  assertEquals(await res.json(), { error: "forbidden" });
 });
