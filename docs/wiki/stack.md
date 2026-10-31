@@ -15,7 +15,7 @@ in `docs/wiki/environment.md`._
 2. **Backend:** Supabase free tier — Postgres with row-level security, Google
    sign-in through Supabase Auth, Realtime for cross-device sync, `pg_cron` +
    `pg_net` calling Deno edge functions on a schedule.
-3. **AI:** Gemini (`gemini-2.5-flash`) called only from the `capture` edge
+3. **AI:** Gemini (`gemini-3.8-flash`) called only from the `capture` edge
    function, with the API key held as a Supabase function secret.
 
 Two profiles apply: `node-typescript` (`.claude/skills/stack-profiles/reference/node-typescript.md`)
@@ -57,7 +57,7 @@ for `supabase/functions/**`. The gates below are the union, with distinct ids.
 | Realtime | `postgres_changes` on `events`, `kinds`, `event_overrides` | Brief §4.4 "within seconds". |
 | Edge functions | Deno 2 runtime, TypeScript | `capture` (Gemini call), `send-reminders` (web push). Secrets: `GEMINI_API_KEY`, `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY`, `VAPID_SUBJECT`. |
 | web-push | `npm:web-push@3.6.x` from Deno | Standard VAPID signing; Android Chrome delivers to the installed PWA with the app closed (brief §7.4). |
-| Gemini | `gemini-2.5-flash`, REST `generateContent` with `responseMimeType: application/json` and a response schema | **Decision on an open question:** Flash is the cheapest model with image input and structured JSON output, and booking e-mails are an easy extraction task; cost is well inside "fractions of a cent per capture". Pinned by name, not `-latest`, so a model retirement is a deliberate change here. Called with raw `fetch`, no SDK, so the edge function has one fewer dependency to keep current. |
+| Gemini | `gemini-3.8-flash`, REST `generateContent` with `responseMimeType: application/json` and a response schema | **Decision on an open question:** Flash is the cheapest model with image input and structured JSON output, and booking e-mails are an easy extraction task; cost is well inside "fractions of a cent per capture". Pinned by name, not `-latest`, so a model retirement is a deliberate change here. It happened: 2.5 Flash was retired (Gemini API changelog, 2026-09-18), every hosted capture failed `upstream 404` on 2026-10-31, and CAL-048 moved the pin to 3.8 Flash, keeping the `generateContent` endpoint and the request shape. The one request change is `temperature` 0 -> 1.0, the Gemini 3 guide's recommended default (below 1.0 "may lead to unexpected behavior, such as looping"; CAL-048 PO decision 1). Called with raw `fetch`, no SDK, so the edge function has one fewer dependency to keep current. |
 
 ## Hosting
 

@@ -2,7 +2,7 @@
 // JSON response schema, through an injected fetch. The key travels only in the
 // x-goog-api-key header - never in a URL, a log line, an error or a job row.
 
-export const GEMINI_MODEL = "gemini-2.5-flash";
+export const GEMINI_MODEL = "gemini-3.8-flash";
 export const DEFAULT_GEMINI_API_BASE =
   "https://generativelanguage.googleapis.com";
 
@@ -67,7 +67,7 @@ export type GeminiRequest = {
   generationConfig: {
     responseMimeType: "application/json";
     responseSchema: typeof geminiResponseSchema;
-    temperature: 0;
+    temperature: 1;
   };
 };
 
@@ -85,7 +85,7 @@ export function buildGeminiRequest(
     generationConfig: {
       responseMimeType: "application/json",
       responseSchema: geminiResponseSchema,
-      temperature: 0,
+      temperature: 1,
     },
   };
 }
