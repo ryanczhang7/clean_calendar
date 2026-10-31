@@ -23,7 +23,7 @@ const KIND_NAMES = ["Work", "Doctor", "Family"];
 const OWNER = `POST ${SUPABASE_URL}/rest/v1/rpc/is_owner`;
 const KINDS = `GET ${SUPABASE_URL}/rest/v1/kinds`;
 const GEMINI =
-  `POST ${GEMINI_BASE}/v1beta/models/gemini-2.5-flash:generateContent`;
+  `POST ${GEMINI_BASE}/v1beta/models/gemini-3.8-flash:generateContent`;
 const JOBS = `POST ${SUPABASE_URL}/rest/v1/capture_jobs`;
 
 const TEXT =
@@ -392,7 +392,7 @@ Deno.test("AC-1: the owner's capture returns 200 with the proposal, confidence, 
   assertEquals(w.keys(), [OWNER, KINDS, GEMINI, JOBS]);
 });
 
-Deno.test("AC-1: Gemini is called once, at {GEMINI_API_BASE}/v1beta/models/gemini-2.5-flash:generateContent, with the key in x-goog-api-key and not in the URL", async () => {
+Deno.test("AC-1: Gemini is called once, at {GEMINI_API_BASE}/v1beta/models/gemini-3.8-flash:generateContent, with the key in x-goog-api-key and not in the URL", async () => {
   const w = world();
   await run(w, post({ text: TEXT }));
   const call = w.call(GEMINI);
@@ -431,7 +431,7 @@ Deno.test("AC-1: without GEMINI_API_BASE the call goes to https://generativelang
   const w = world({
     env: { SUPABASE_URL, SUPABASE_ANON_KEY: ANON, GEMINI_API_KEY: GEMINI_KEY },
     geminiKey:
-      "POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+      "POST https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
   });
   const { status } = await run(w, post({ text: TEXT }));
   assertEquals(status, 200);
@@ -456,7 +456,7 @@ Deno.test("AC-5: a successful capture's job row is input_kind text, the SHA-256 
   assertEquals(jobBody(w), {
     input_kind: "text",
     input_hash: await sha256Hex(TEXT),
-    model: "gemini-2.5-flash",
+    model: "gemini-3.8-flash",
     proposal: GOOD_REPLY.proposal,
     confidence: GOOD_REPLY.confidence,
     status: "proposed",
@@ -594,7 +594,7 @@ async function unreadable(replyText: string) {
   const row = jobBody(w);
   assertEquals(row.input_kind, "text");
   assertEquals(row.input_hash, await sha256Hex(TEXT));
-  assertEquals(row.model, "gemini-2.5-flash");
+  assertEquals(row.model, "gemini-3.8-flash");
   assertEquals(row.status, "discarded");
   assertEquals(row.proposal, null);
   assertEquals(row.confidence, null);
@@ -665,6 +665,7 @@ Deno.test("a Gemini 500 is 502 upstream, with a discarded job row recording 'ups
   const row = jobBody(w);
   assertEquals(row.status, "discarded");
   assertEquals(row.error, "upstream 500");
+  assertEquals(row.model, "gemini-3.8-flash");
   assertEquals(row.confidence, null);
   assertEquals(row.proposal, null);
   assertEquals(row.input_hash, await sha256Hex(TEXT));
@@ -821,7 +822,7 @@ for (const mime of ["image/png", "image/jpeg", "image/webp"]) {
   });
 }
 
-Deno.test("CAL-019 AC-1: the image request asks for application/json against the same responseSchema at temperature 0 as a text request", async () => {
+Deno.test("CAL-019 AC-1: the image request asks for application/json against the same responseSchema at temperature 1 as a text request", async () => {
   const wi = world();
   await run(wi, post({ image: ABC_B64, mime: PNG }));
   const wt = world();
@@ -931,7 +932,7 @@ Deno.test("CAL-019 AC-4: an image capture's job row is input_kind image, the SHA
   assertEquals(jobBody(w), {
     input_kind: "image",
     input_hash: ABC_BYTES_SHA256,
-    model: "gemini-2.5-flash",
+    model: "gemini-3.8-flash",
     proposal: GOOD_REPLY.proposal,
     confidence: GOOD_REPLY.confidence,
     status: "proposed",

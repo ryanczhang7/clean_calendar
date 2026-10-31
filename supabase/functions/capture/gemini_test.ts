@@ -15,7 +15,7 @@ import { buildPrompt } from "./prompt.ts";
 
 const BASE = "http://127.0.0.1:9999";
 const KEY = "gem-key-test-5f3a9c";
-const URL_ = `${BASE}/v1beta/models/gemini-2.5-flash:generateContent`;
+const URL_ = `${BASE}/v1beta/models/gemini-3.8-flash:generateContent`;
 const FIELDS = ["title", "startsAt", "endsAt", "location", "kind"];
 
 type Seen = { method: string; url: string; headers: Headers; body: string };
@@ -49,19 +49,19 @@ function lower(v: unknown): string {
   return String(v).toLowerCase();
 }
 
-Deno.test("the model is gemini-2.5-flash and the default base is Google's API host", () => {
-  assertEquals(GEMINI_MODEL, "gemini-2.5-flash");
+Deno.test("the model is gemini-3.8-flash and the default base is Google's API host", () => {
+  assertEquals(GEMINI_MODEL, "gemini-3.8-flash");
   assertEquals(
     DEFAULT_GEMINI_API_BASE,
     "https://generativelanguage.googleapis.com",
   );
 });
 
-Deno.test("geminiUrl is {base}/v1beta/models/gemini-2.5-flash:generateContent", () => {
+Deno.test("geminiUrl is {base}/v1beta/models/gemini-3.8-flash:generateContent", () => {
   assertEquals(geminiUrl(BASE), URL_);
   assertEquals(
     geminiUrl("https://generativelanguage.googleapis.com"),
-    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent",
+    "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent",
   );
 });
 
@@ -69,13 +69,13 @@ Deno.test("geminiUrl drops a trailing slash on the base rather than doubling it"
   assertEquals(geminiUrl(`${BASE}/`), URL_);
 });
 
-Deno.test("the request is one user turn carrying the prompt, asking for JSON against the schema at temperature 0", () => {
+Deno.test("the request is one user turn carrying the prompt, asking for JSON against the schema at temperature 1", () => {
   const req = buildGeminiRequest("PROMPT TEXT");
   assertEquals(req.contents, [
     { role: "user", parts: [{ text: "PROMPT TEXT" }] },
   ]);
   assertEquals(req.generationConfig.responseMimeType, "application/json");
-  assertEquals(req.generationConfig.temperature, 0);
+  assertEquals(req.generationConfig.temperature, 1);
   assertEquals(req.generationConfig.responseSchema, geminiResponseSchema);
 });
 
