@@ -55,6 +55,12 @@
     var(--shadow-1);
 }
 
+/* CAL-024 Block 6: a recurring chip's repeat glyph, after the title; it
+   inherits the chip's text colour and never shrinks. */
+.repeat {
+  flex: none;
+}
+
 .badge {
   flex: none;
   width: 14px;

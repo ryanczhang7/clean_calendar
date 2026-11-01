@@ -763,3 +763,288 @@ describe("the sync marker (CAL-015 AC-1, AC-5, Block 6)", () => {
     expect(failed).toContain("var(--color-danger)");
   });
 });
+
+// CAL-024 Contract, Block 6 (AC-4; components.md "Event chip", Recurring;
+// accessibility.md's name order). MECHANICAL: ", repeats {freq}" comes after
+// the time (or ", kind removed") part and before the sync marker; both
+// variants render <svg data-glyph="repeat" aria-hidden="true" width="12"
+// height="12"> after the title text when the event recurs, and nothing when
+// it does not. The glyph's path is not pinned.
+
+describe("a recurring event's chip (CAL-024 AC-4, Block 6)", () => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const WEEKLY = ev({ recurrence: { freq: "weekly", until: null, tz } });
+  const DAILY = ev({ recurrence: { freq: "daily", until: "2026-11-30", tz } });
+  const YEARLY_ALL_DAY = {
+    ...ALL_DAY,
+    recurrence: { freq: "yearly" as const, until: null, tz },
+  };
+
+  it.each([
+    [WEEKLY, LIVE, "Dentist, Gym, 09:00 to 10:30, repeats weekly"],
+    [DAILY, LIVE, "Dentist, Gym, 09:00 to 10:30, repeats daily"],
+    [YEARLY_ALL_DAY, LIVE, "Hotel, Gym, all day, repeats yearly"],
+    [WEEKLY, REMOVED, "Dentist, 09:00 to 10:30, kind removed, repeats weekly"],
+    [
+      { ...WEEKLY, sync: "saving" as const },
+      LIVE,
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly, saving",
+    ],
+    [
+      { ...YEARLY_ALL_DAY, sync: "failed" as const },
+      REMOVED,
+      "Hotel, all day, kind removed, repeats yearly, not synced",
+    ],
+  ])(
+    "chipName puts the repeat after the time or kind-removed part and before the sync marker: %#",
+    (event, kind, name) => {
+      expect(chipName(event, kind)).toBe(name);
+    },
+  );
+
+  it("an occurrence (occurrenceDate set) is named the same way", () => {
+    expect(chipName({ ...WEEKLY, occurrenceDate: "2026-11-18" }, LIVE)).toBe(
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly",
+    );
+  });
+
+  it("a non-recurring event's name has no repeat part", () => {
+    expect(chipName(TIMED, LIVE)).toBe("Dentist, Gym, 09:00 to 10:30");
+    expect(chipName(TIMED, LIVE)).not.toContain("repeats");
+  });
+
+  it.each([
+    ["chip", undefined, "09:00 Dentist"],
+    ["block", "block", "Dentist"],
+  ] as const)(
+    'the %s carries one <svg data-glyph="repeat" aria-hidden="true" width="12" height="12"> after the title, and the name says so',
+    (_label, variant, titleText) => {
+      const chip =
+        variant === undefined
+          ? renderChip(WEEKLY, LIVE)
+          : renderBlock(WEEKLY, LIVE, 60);
+      const glyphs = chip.querySelectorAll('[data-glyph="repeat"]');
+      expect(glyphs).toHaveLength(1);
+      const glyph = glyphs[0] as Element;
+      expect(glyph.tagName.toLowerCase()).toBe("svg");
+      expect(glyph).toHaveAttribute("aria-hidden", "true");
+      expect(glyph).toHaveAttribute("width", "12");
+      expect(glyph).toHaveAttribute("height", "12");
+      const title = hiddenText(chip, titleText);
+      expect(
+        title.compareDocumentPosition(glyph) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(chip).toHaveAccessibleName(
+        "Dentist, Gym, 09:00 to 10:30, repeats weekly",
+      );
+    },
+  );
+
+  it("an all-day recurring chip carries the glyph too", () => {
+    const chip = renderChip(YEARLY_ALL_DAY, LIVE);
+    expect(chip.querySelectorAll('svg[data-glyph="repeat"]')).toHaveLength(1);
+    expect(chip).toHaveAccessibleName("Hotel, Gym, all day, repeats yearly");
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)("a non-recurring %s has no repeat glyph", (_label, variant) => {
+    const chip =
+      variant === undefined
+        ? renderChip(TIMED, LIVE)
+        : renderBlock(TIMED, LIVE, 60);
+    expect(chip.querySelector('[data-glyph="repeat"]')).toBeNull();
+  });
+});
+
+// CAL-024 Contract, Block 11 (PO decision 5): until CAL-025 adds "this event
+// only", an occurrence - an Event with occurrenceDate set - can be opened
+// but not moved or deleted. For an occurrence chip the button gets no key
+// command handler (no mapped key calls onCommand, none is preventDefault-ed,
+// each reaches the parent) and no drag handlers (dragProps' onPointerDown and
+// onClickCapture are not attached); click, Enter and Space still call
+// onActivate. Every case renders the occurrence and, in the same case, the
+// plain event it stands beside with the same props, so a chip that disables
+// everything, or nothing, fails here. Block 11's predicate is occurrenceDate,
+// not recurrence: a series row with no occurrenceDate keeps every path.
+
+describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 11)", () => {
+  type OnCommand = (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  type Keys = { key: string } & Partial<
+    Pick<KeyboardEvent, "ctrlKey" | "metaKey" | "shiftKey" | "altKey">
+  >;
+
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const SERIES = ev({ recurrence: { freq: "weekly", until: null, tz } });
+  const OCCURRENCE: Event = {
+    ...SERIES,
+    startsAt: new Date(2026, 10, 18, 9, 0),
+    endsAt: new Date(2026, 10, 18, 10, 30),
+    occurrenceDate: "2026-11-18",
+  };
+
+  /** Every handler the chip can take, all spies, around a key-observing parent. */
+  function renderWired(event: Event, variant?: "block") {
+    media = installMatchMedia({ colorScheme: "light", width: 1280 });
+    const user = userEvent.setup();
+    const onCommand = vi.fn<OnCommand>();
+    const onActivate = vi.fn<(event: Event) => void>();
+    const onPointerDown = vi.fn();
+    const onClickCapture = vi.fn();
+    const onParentKey = vi.fn<(key: string) => void>();
+    render(
+      <MemoryRouter>
+        {/* biome-ignore lint/a11y/noStaticElementInteractions: a stand-in for the grid, observed for keys only */}
+        <div data-testid="parent" onKeyDown={(e) => onParentKey(e.key)}>
+          <EventChip
+            event={event}
+            kind={LIVE}
+            {...(variant === undefined ? {} : { variant, height: 72 })}
+            onActivate={onActivate}
+            onCommand={onCommand}
+            dragProps={{ onPointerDown, onClickCapture }}
+          />
+        </div>
+      </MemoryRouter>,
+    );
+    return {
+      user,
+      onCommand,
+      onActivate,
+      onPointerDown,
+      onClickCapture,
+      onParentKey,
+      chip: screen.getByRole("button"),
+    };
+  }
+
+  /** keydown on the chip; true when it was preventDefault-ed. */
+  const press = (chip: HTMLElement, init: Keys) =>
+    !fireEvent.keyDown(chip, init);
+
+  const MAPPED: [string, ChipCommand, Keys][] = [
+    ["Delete", "delete", { key: "Delete" }],
+    ["Backspace", "delete", { key: "Backspace" }],
+    ["Alt+ArrowLeft", "left", { key: "ArrowLeft", altKey: true }],
+    ["Alt+ArrowRight", "right", { key: "ArrowRight", altKey: true }],
+    ["Alt+ArrowUp", "up", { key: "ArrowUp", altKey: true }],
+    ["Alt+ArrowDown", "down", { key: "ArrowDown", altKey: true }],
+    [
+      "Alt+Shift+ArrowDown",
+      "lengthen",
+      { key: "ArrowDown", altKey: true, shiftKey: true },
+    ],
+    [
+      "Alt+Shift+ArrowUp",
+      "shorten",
+      { key: "ArrowUp", altKey: true, shiftKey: true },
+    ],
+  ];
+
+  // The plain twin runs FIRST in each case, so in RED it is observed to pass
+  // before the occurrence half fails.
+  it.each(MAPPED)(
+    "%s on a plain event is still %j; on an occurrence chip it does nothing - no onCommand, not prevented, it reaches the parent",
+    (_label, command, init) => {
+      const plain = renderWired(TIMED);
+      expect(press(plain.chip, init)).toBe(true);
+      expect(plain.onCommand).toHaveBeenCalledTimes(1);
+      expect(plain.onCommand).toHaveBeenCalledWith(TIMED, command, plain.chip);
+      expect(plain.onParentKey).not.toHaveBeenCalled();
+      cleanupChip();
+      const occurrence = renderWired(OCCURRENCE);
+      expect(press(occurrence.chip, init), "occurrence keydown prevented").toBe(
+        false,
+      );
+      expect(occurrence.onCommand).not.toHaveBeenCalled();
+      expect(occurrence.onParentKey).toHaveBeenCalledWith(init.key);
+    },
+  );
+
+  it("the plain block (week/day) still deletes; the occurrence block ignores Delete and Alt+Shift+ArrowDown", () => {
+    const plain = renderWired(TIMED, "block");
+    expect(press(plain.chip, { key: "Delete" })).toBe(true);
+    expect(plain.onCommand).toHaveBeenCalledWith(TIMED, "delete", plain.chip);
+    cleanupChip();
+    const occurrence = renderWired(OCCURRENCE, "block");
+    expect(press(occurrence.chip, { key: "Delete" })).toBe(false);
+    expect(
+      press(occurrence.chip, {
+        key: "ArrowDown",
+        altKey: true,
+        shiftKey: true,
+      }),
+    ).toBe(false);
+    expect(occurrence.onCommand).not.toHaveBeenCalled();
+  });
+
+  it("a series row with no occurrenceDate keeps its commands: Delete is still delete", () => {
+    const series = renderWired(SERIES);
+    expect(press(series.chip, { key: "Delete" })).toBe(true);
+    expect(series.onCommand).toHaveBeenCalledWith(
+      SERIES,
+      "delete",
+      series.chip,
+    );
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "a pointerdown on a plain %s reaches dragProps; on an occurrence it never does (no drag starts)",
+    (_label, variant) => {
+      const plain = renderWired(TIMED, variant);
+      fireEvent.pointerDown(plain.chip, { button: 0, clientX: 5, clientY: 5 });
+      fireEvent.click(plain.chip);
+      expect(plain.onPointerDown).toHaveBeenCalledTimes(1);
+      expect(plain.onClickCapture).toHaveBeenCalledTimes(1);
+      cleanupChip();
+      const occurrence = renderWired(OCCURRENCE, variant);
+      fireEvent.pointerDown(occurrence.chip, {
+        button: 0,
+        clientX: 5,
+        clientY: 5,
+      });
+      fireEvent.click(occurrence.chip);
+      expect(
+        occurrence.onPointerDown,
+        "occurrence reached dragProps.onPointerDown",
+      ).not.toHaveBeenCalled();
+      expect(
+        occurrence.onClickCapture,
+        "occurrence reached dragProps.onClickCapture",
+      ).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)(
+    "a click on an occurrence %s still opens it: onActivate(the occurrence) once",
+    async (_label, variant) => {
+      const { user, chip, onActivate } = renderWired(OCCURRENCE, variant);
+      await user.click(chip);
+      expect(onActivate).toHaveBeenCalledTimes(1);
+      expect(onActivate).toHaveBeenCalledWith(OCCURRENCE);
+    },
+  );
+
+  it.each(["{Enter}", " "])(
+    "%j on a focused occurrence chip still calls onActivate(the occurrence)",
+    async (key) => {
+      const { user, chip, onActivate, onCommand } = renderWired(OCCURRENCE);
+      chip.focus();
+      await user.keyboard(key);
+      expect(onActivate).toHaveBeenCalledTimes(1);
+      expect(onActivate).toHaveBeenCalledWith(OCCURRENCE);
+      expect(onCommand).not.toHaveBeenCalled();
+    },
+  );
+});

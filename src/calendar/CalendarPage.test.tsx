@@ -21,7 +21,7 @@ import {
 } from "vitest";
 import type { EventsRepo } from "../data/events";
 import type { ListResult, Result } from "../data/result";
-import type { Event, Kind, NewEvent } from "../data/rows";
+import type { Event, EventOverride, Kind, NewEvent } from "../data/rows";
 import type { EventActions } from "../sync/eventActions";
 import type { SeedRepo } from "../kinds/seedKinds";
 import {
@@ -30,6 +30,7 @@ import {
   type EventsStore,
 } from "../sync/eventsStore";
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
+import type { OverridesSnapshot, OverridesStore } from "../sync/overridesStore";
 import { RouteFocus } from "../app/routes";
 import { installMatchMedia } from "../test/media";
 import { ToastHost, ToastProvider } from "../ui/Toast";
@@ -104,6 +105,8 @@ type FakeEvents = { listLive: Mock<EventsReader["listLive"]> };
 
 let kindsRepo: FakeKinds;
 let eventsRepo: FakeEvents;
+/** CAL-024: what the injected overrides store loads; [] unless a test says. */
+let overrideRows: EventOverride[];
 let media: ReturnType<typeof installMatchMedia>;
 
 beforeEach(() => {
@@ -114,6 +117,7 @@ beforeEach(() => {
   kindsRepo.listAll.mockResolvedValue({ status: "ok", rows: [GYM] });
   eventsRepo = { listLive: vi.fn<EventsReader["listLive"]>() };
   eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [] });
+  overrideRows = [];
   media = installMatchMedia({ width: 1280, colorScheme: "light" });
   localStorage.clear();
   act(() => setSelected(null));
@@ -138,6 +142,30 @@ function held(): {
   return { promise, release };
 }
 
+/**
+ * CAL-024 Block 5: the page reads overrides through an injected store, so no
+ * case reaches the app's cached overridesStore. Loading until refresh(),
+ * then ready with `overrideRows` as they are at that moment - the
+ * discipline of the real store, without IndexedDB or a sync.
+ */
+function overridesStoreOf(): OverridesStore {
+  let snapshot: OverridesSnapshot = { status: "loading", overrides: [] };
+  const listeners = new Set<() => void>();
+  return {
+    refresh: async () => {
+      snapshot = { status: "ready", overrides: [...overrideRows] };
+      for (const listener of listeners) listener();
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    getSnapshot: () => snapshot,
+  };
+}
+
 function Where(): JSX.Element {
   const { pathname } = useLocation();
   return <p>at {pathname}</p>;
@@ -151,7 +179,14 @@ function renderPage(
   const user = userEvent.setup();
   const kinds: KindsStore = createKindsStore(kindsRepo);
   const events: EventsStore = createEventsStore(eventsRepo);
-  const page = <CalendarPage kinds={kinds} events={events} now={() => now} />;
+  const page = (
+    <CalendarPage
+      kinds={kinds}
+      events={events}
+      overrides={overridesStoreOf()}
+      now={() => now}
+    />
+  );
   render(
     <MemoryRouter initialEntries={[path]}>
       {options.toolbar !== false && (
@@ -786,6 +821,7 @@ function renderSheetPage(path: string, now: Date = NOW) {
     <CalendarPage
       kinds={kinds}
       events={events}
+      overrides={overridesStoreOf()}
       now={() => now}
       actions={actionsOver(events)}
     />
@@ -1209,7 +1245,12 @@ function useMoves(initial: Event[]): void {
   writes.update.mockImplementation(async (id, patch) => stampRow(id, patch));
 }
 
-function renderUndoPage(path: string, now: Date = NOW) {
+function renderUndoPage(
+  path: string,
+  now: Date = NOW,
+  /** CAL-024 Block 11: lets a case wrap the actions in spies. */
+  wrap: (actions: EventActions) => EventActions = (a) => a,
+) {
   const user = userEvent.setup();
   const kinds: KindsStore = createKindsStore(kindsRepo);
   const events: EventsStore = createEventsStore(eventsRepo);
@@ -1217,8 +1258,9 @@ function renderUndoPage(path: string, now: Date = NOW) {
     <CalendarPage
       kinds={kinds}
       events={events}
+      overrides={overridesStoreOf()}
       now={() => now}
-      actions={actionsOver(events)}
+      actions={wrap(actionsOver(events))}
     />
   );
   render(
@@ -1833,7 +1875,14 @@ describe("focusEventId in router state focuses the new chip once (CAL-020 AC-5, 
     const user = userEvent.setup();
     const kinds: KindsStore = createKindsStore(kindsRepo);
     const events: EventsStore = createEventsStore(eventsRepo);
-    const page = <CalendarPage kinds={kinds} events={events} now={() => NOW} />;
+    const page = (
+      <CalendarPage
+        kinds={kinds}
+        events={events}
+        overrides={overridesStoreOf()}
+        now={() => NOW}
+      />
+    );
     render(
       <MemoryRouter
         initialEntries={[{ pathname: path, state: { focusEventId } }]}
@@ -1928,4 +1977,249 @@ describe("focusEventId in router state focuses the new chip once (CAL-020 AC-5, 
   async function settledToolbar(): Promise<void> {
     await screen.findByRole("heading", { level: 1 });
   }
+});
+
+// CAL-024 Contract, Blocks 4, 5 and 7 (AC-3, AC-5, AC-6). The page over the
+// same hand-written stores, now with an injected overrides store; the
+// expansion is CAL-023's real expander behind useOccurrences. A weekly
+// series "Spin", Wednesdays 09:00 - 10:00 from Wednesday 14 October 2026, in
+// the device's own zone (read from Intl, never a literal). November 2026's
+// grid runs Monday 26 October to Sunday 6 December, so its Wednesdays are
+// the six named below - counted by hand, including the leading and the
+// trailing month. MECHANICAL: chips are found by accessible name inside the
+// named grid cell; the name carries ", repeats weekly" (Block 6).
+
+const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+const SPIN_NAME = "Spin, Gym, 09:00 to 10:00, repeats weekly";
+const NOVEMBER_GRID_WEDNESDAYS = [
+  "Wednesday 28 October",
+  "Wednesday 4 November",
+  "Wednesday 11 November",
+  "Wednesday 18 November",
+  "Wednesday 25 November",
+  "Wednesday 2 December",
+];
+
+function spinSeries(): Event {
+  return {
+    ...timed("Spin", new Date(2026, 9, 14, 9, 0), new Date(2026, 9, 14, 10, 0)),
+    recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+  };
+}
+
+function cancelled(eventId: string, occurrenceDate: string): EventOverride {
+  return {
+    id: "20000000-0000-4000-8000-000000000001",
+    eventId,
+    occurrenceDate,
+    cancelled: true,
+    title: null,
+    kindId: null,
+    startsAt: null,
+    endsAt: null,
+    allDay: null,
+    location: null,
+    notes: null,
+    createdAt: STAMP,
+    updatedAt: STAMP,
+  };
+}
+
+const spinChipsIn = (el: HTMLElement) =>
+  within(el).queryAllByRole("button", { name: SPIN_NAME });
+
+describe("a weekly series in the month (CAL-024 AC-3, Blocks 4 and 5)", () => {
+  it("November 2026: a Spin chip on each of the grid's six Wednesdays, 28 October to 2 December, and nowhere else", async () => {
+    const spin = spinSeries();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [spin] });
+    renderPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
+    for (const day of NOVEMBER_GRID_WEDNESDAYS) {
+      const cell = monthCell(grid, day);
+      expect(spinChipsIn(cell), day).toHaveLength(1);
+      expect(cell).toHaveAccessibleName(`${day}, 1 event`);
+    }
+    // Every occurrence is the series' chip: data-event-id stays the series id.
+    for (const chip of spinChipsIn(grid)) {
+      expect(chip).toHaveAttribute("data-event-id", spin.id);
+    }
+  });
+
+  it("October 2026 (28 September - 8 November): from the series' start on - 14, 21 and 28 October and 4 November, not 30 September or 7 October", async () => {
+    eventsRepo.listLive.mockResolvedValue({
+      status: "ok",
+      rows: [spinSeries()],
+    });
+    renderPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(4));
+    for (const day of [
+      "Wednesday 14 October",
+      "Wednesday 21 October",
+      "Wednesday 28 October",
+      "Wednesday 4 November",
+    ]) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    for (const day of ["Wednesday 30 September", "Wednesday 7 October"]) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(0);
+    }
+  });
+
+  it("a series ending 11 November shows 28 October, 4 and 11 November only", async () => {
+    const spin = spinSeries();
+    eventsRepo.listLive.mockResolvedValue({
+      status: "ok",
+      rows: [
+        {
+          ...spin,
+          recurrence: { freq: "weekly", until: "2026-11-11", tz: DEVICE_TZ },
+        },
+      ],
+    });
+    renderPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(3));
+    for (const day of NOVEMBER_GRID_WEDNESDAYS.slice(3)) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(0);
+    }
+  });
+});
+
+describe("a cancelled occurrence (CAL-024 AC-5, Blocks 4 and 5)", () => {
+  it("cancelled on 11 November: no chip that day, a chip on the other five Wednesdays", async () => {
+    const spin = spinSeries();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [spin] });
+    overrideRows = [cancelled(spin.id, "2026-11-11")];
+    renderPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(5));
+    const eleventh = monthCell(grid, "Wednesday 11 November");
+    expect(spinChipsIn(eleventh)).toHaveLength(0);
+    expect(eleventh).toHaveAccessibleName("Wednesday 11 November, no events");
+    for (const day of NOVEMBER_GRID_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 11 November",
+    )) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+  });
+
+  it("an override for another series' 11 November leaves Spin's chip there", async () => {
+    const spin = spinSeries();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [spin] });
+    overrideRows = [
+      cancelled("10000000-0000-4000-8000-0000000fffff", "2026-11-11"),
+    ];
+    renderPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
+    expect(spinChipsIn(monthCell(grid, "Wednesday 11 November"))).toHaveLength(
+      1,
+    );
+  });
+
+  it("in the day view of 11 November there is no Spin; in 18 November's there is one", async () => {
+    const spin = spinSeries();
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [spin] });
+    overrideRows = [cancelled(spin.id, "2026-11-11")];
+    renderPage("/day/2026-11-18");
+    expect(
+      await screen.findAllByRole("button", { name: SPIN_NAME }),
+    ).toHaveLength(1);
+    cleanup();
+    renderPage("/day/2026-11-11");
+    await screen.findByRole("grid");
+    await settle();
+    expect(screen.queryAllByRole("button", { name: SPIN_NAME })).toHaveLength(
+      0,
+    );
+  });
+});
+
+describe("occurrences in the week view (CAL-024 Block 5)", () => {
+  it("the week of 16 November shows Spin once, on Wednesday the 18th", async () => {
+    eventsRepo.listLive.mockResolvedValue({
+      status: "ok",
+      rows: [spinSeries()],
+    });
+    renderPage("/week/2026-11-18");
+    expect(
+      await screen.findAllByRole("button", { name: SPIN_NAME }),
+    ).toHaveLength(1);
+  });
+});
+
+describe("opening an occurrence (CAL-024 AC-6, Block 7)", () => {
+  it("the 18 November chip opens the sheet on 18 November 09:00 - 10:00 with Repeat Weekly, Ends Never", async () => {
+    const spin = spinSeries();
+    useWrites([spin]);
+    const { user } = renderSheetPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
+    const [chip] = spinChipsIn(monthCell(grid, "Wednesday 18 November"));
+    await user.click(chip as HTMLElement);
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    expect(dateField("Start date")).toHaveValue("2026-11-18");
+    expect(dateField("Start time")).toHaveValue("09:00");
+    expect(dateField("End date")).toHaveValue("2026-11-18");
+    expect(dateField("End time")).toHaveValue("10:00");
+    const repeat = screen.getByRole("combobox", { name: "Repeat" });
+    expect(repeat).toHaveValue("weekly");
+    expect(repeat).toHaveAccessibleDescription("Every Wednesday");
+    expect(screen.getByRole("radio", { name: "Never" })).toBeChecked();
+    expect(at()).toBe("at /month/2026-11");
+  });
+
+  it("a series with an end date opens with Ends On date and that date", async () => {
+    const spin = {
+      ...spinSeries(),
+      recurrence: {
+        freq: "weekly" as const,
+        until: "2026-11-30",
+        tz: DEVICE_TZ,
+      },
+    };
+    useWrites([spin]);
+    const { user } = renderSheetPage("/month/2026-11");
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(5));
+    const [chip] = spinChipsIn(monthCell(grid, "Wednesday 25 November"));
+    await user.click(chip as HTMLElement);
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    expect(dateField("Start date")).toHaveValue("2026-11-25");
+    expect(screen.getByRole("radio", { name: "On date" })).toBeChecked();
+    expect(dateField("Repeat until")).toHaveValue("2026-11-30");
+  });
+});
+
+// CAL-024 Contract, Block 11 (PO decision 5), end to end: an occurrence's id
+// is the series id, so a Delete reaching the page would remove the whole
+// series. The guard is the chip's; the page's onChipCommand is unchanged.
+// The injected actions' removeEvent is a spy over actionsOver's, so a call
+// is seen even if a refresh later puts the chips back.
+
+describe("an occurrence cannot be deleted from the page (CAL-024 Block 11)", () => {
+  it("Delete on the focused 18 November Spin chip calls no removeEvent, and all six chips stay", async () => {
+    const spin = spinSeries();
+    useMoves([spin]);
+    let removeEvent: Mock<EventActions["removeEvent"]> | null = null;
+    const { user } = renderUndoPage("/month/2026-11", NOW, (actions) => {
+      removeEvent = vi.fn(actions.removeEvent);
+      return { ...actions, removeEvent };
+    });
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
+    const [chip] = spinChipsIn(monthCell(grid, "Wednesday 18 November"));
+    (chip as HTMLElement).focus();
+    await user.keyboard("{Delete}");
+    await settle();
+    expect(removeEvent).not.toBeNull();
+    expect(removeEvent).not.toHaveBeenCalled();
+    expect(writes.remove).not.toHaveBeenCalled();
+    expect(spinChipsIn(grid)).toHaveLength(6);
+    for (const day of NOVEMBER_GRID_WEDNESDAYS) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+  });
 });

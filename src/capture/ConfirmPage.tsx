@@ -258,11 +258,14 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
   };
 
   const focusField = (found: FormErrors) => {
+    // Title, else End date, else Repeat until (CAL-024 Block 7).
     const target =
       found.title !== undefined
         ? document.getElementById(titleId)
         : root.current?.querySelector<HTMLElement>(
-            'input[aria-label="End date"]',
+            found.end !== undefined
+              ? 'input[aria-label="End date"]'
+              : 'input[aria-label="Repeat until"]',
           );
     target?.focus();
   };
@@ -275,7 +278,7 @@ function ConfirmForm(props: Props & { handoff: CaptureHandoff }): JSX.Element {
     const found = validate(filled);
     setErrors(found);
     setFailed(false);
-    if (found.title !== undefined || found.end !== undefined) {
+    if (Object.keys(found).length > 0) {
       focusField(found);
       return;
     }

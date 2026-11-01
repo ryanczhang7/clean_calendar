@@ -819,7 +819,9 @@ describe("an event whose kind is gone (AC-7, Block 5)", () => {
       screen.getByRole("button", { name: "Kind, Kind removed" }),
     );
     expect(screen.queryByRole("option", { name: "Gardening" })).toBeNull();
-    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(
+      within(screen.getByRole("listbox")).getAllByRole("option"),
+    ).toHaveLength(3);
   });
 
   it("saving a title change sends a patch without kindId", async () => {
@@ -982,5 +984,153 @@ describe("the Delete button (CAL-013 AC-4, Block 7)", () => {
     cleanup();
     await openDeleting(edit(DENTIST));
     expect(deleteButton()).toBeInTheDocument();
+  });
+
+  // CAL-024 Contract, Block 11 (PO decision 5): an occurrence (occurrenceDate
+  // set) cannot be deleted until CAL-025, so its sheet renders no Delete
+  // button even with onDelete. The plain event in the same case, and the
+  // series row without occurrenceDate, still get theirs.
+  describe("an occurrence's sheet (CAL-024 Block 11)", () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const SERIES = event({
+      recurrence: { freq: "weekly", until: null, tz },
+    });
+    const OCCURRENCE: Event = {
+      ...SERIES,
+      startsAt: new Date(2026, 10, 18, 9, 0),
+      endsAt: new Date(2026, 10, 18, 10, 30),
+      occurrenceDate: "2026-11-18",
+    };
+
+    // The plain twin runs first, so in RED it is seen to pass before the
+    // occurrence half fails.
+    it("a plain event with onDelete has its Delete button; an occurrence with onDelete has none, though the sheet and its Save are there", async () => {
+      await openDeleting(edit(DENTIST));
+      expect(deleteButton("Delete Dentist")).toBeInTheDocument();
+      cleanup();
+      await openDeleting(edit(OCCURRENCE));
+      const dialog = sheet("Edit event: Dentist");
+      expect(
+        within(dialog).getByRole("button", { name: "Save" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+    });
+
+    it("the series row itself (recurrence set, no occurrenceDate) keeps its Delete button", async () => {
+      await openDeleting(edit(SERIES));
+      expect(deleteButton("Delete Dentist")).toBeInTheDocument();
+    });
+  });
+});
+
+// CAL-024 Contract, Blocks 1, 2 and 7 as amended by RED (AC-2): the sheet
+// saves the recurrence the form holds, and refuses a series that ends before
+// it starts - the message on Repeat until, focus there, nothing written. The
+// device zone is read from Intl, never written as a literal.
+
+describe("repeating events through the sheet (CAL-024 AC-2)", () => {
+  const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const repeatSelect = () => screen.getByRole("combobox", { name: "Repeat" });
+
+  it("Weekly, Ends on 30 November 2026: createEvent stores recurrence { weekly, 2026-11-30, the device zone }", async () => {
+    const { user, actions } = await openSheet(
+      createTimed(oct(14, 9), oct(14, 10)),
+    );
+    await user.type(title(), "Spin");
+    await user.selectOptions(repeatSelect(), "weekly");
+    expect(repeatSelect()).toHaveAccessibleDescription("Every Wednesday");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    setField("Repeat until", "2026-11-30");
+    await user.click(save());
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+    expect(actions.createEvent.mock.calls[0]?.[0]).toStrictEqual({
+      title: "Spin",
+      kindId: GYM.id,
+      startsAt: oct(14, 9),
+      endsAt: oct(14, 10),
+      allDay: false,
+      location: null,
+      notes: null,
+      origin: "manual",
+      recurrence: { freq: "weekly", until: "2026-11-30", tz: DEVICE_TZ },
+      captureJobId: null,
+    });
+  });
+
+  it('"Does not repeat" saves recurrence null', async () => {
+    const { user, actions } = await openSheet(
+      createTimed(oct(14, 9), oct(14, 10)),
+    );
+    await user.type(title(), "Spin");
+    expect(repeatSelect()).toHaveValue("none");
+    await user.click(save());
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+    expect(actions.createEvent.mock.calls[0]?.[0]?.recurrence).toBeNull();
+  });
+
+  it('Ends on a date before the start: "The series must end after it starts." on Repeat until, aria-invalid, focus there, nothing saved', async () => {
+    const { user, actions, onClose } = await openSheet(
+      createTimed(oct(15, 14), oct(15, 15)),
+    );
+    await user.type(title(), "Spin");
+    await user.selectOptions(repeatSelect(), "weekly");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    setField("Repeat until", "2026-10-14");
+    await user.click(save());
+    expect(
+      screen.getByText("The series must end after it starts."),
+    ).toBeInTheDocument();
+    expect(field("Repeat until")).toHaveAttribute("aria-invalid", "true");
+    expect(field("Repeat until")).toHaveAccessibleDescription(
+      "The series must end after it starts.",
+    );
+    await waitFor(() => expect(field("Repeat until")).toHaveFocus());
+    expect(actions.createEvent).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(sheet("New event")).toBeInTheDocument();
+  });
+
+  it("Ends On date with no date given is refused the same way", async () => {
+    const { user, actions } = await openSheet(
+      createTimed(oct(15, 14), oct(15, 15)),
+    );
+    await user.type(title(), "Spin");
+    await user.selectOptions(repeatSelect(), "daily");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    await user.click(save());
+    expect(
+      screen.getByText("The series must end after it starts."),
+    ).toBeInTheDocument();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+
+  it("an edit that moves a series' end before its start is refused: updateEvent not called", async () => {
+    const series = event({
+      recurrence: { freq: "weekly", until: "2026-11-30", tz: DEVICE_TZ },
+    });
+    const { user, actions } = await openSheet(edit(series));
+    expect(field("Repeat until")).toHaveValue("2026-11-30");
+    setField("Repeat until", "2026-10-01");
+    await user.click(save());
+    expect(
+      screen.getByText("The series must end after it starts."),
+    ).toBeInTheDocument();
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("an empty title and an early series end: both messages, focus on Title", async () => {
+    const { user, actions } = await openSheet(
+      createTimed(oct(15, 14), oct(15, 15)),
+    );
+    await user.selectOptions(repeatSelect(), "weekly");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    setField("Repeat until", "2026-10-14");
+    await user.click(save());
+    expect(screen.getByText("Give the event a title.")).toBeInTheDocument();
+    expect(
+      screen.getByText("The series must end after it starts."),
+    ).toBeInTheDocument();
+    await waitFor(() => expect(title()).toHaveFocus());
+    expect(actions.createEvent).not.toHaveBeenCalled();
   });
 });

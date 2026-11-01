@@ -52,6 +52,9 @@ const FULL: EventFormValue = {
   endTime: "20:30",
   location: "Lupa, Via Roma 1",
   notes: "Window table",
+  repeat: "none",
+  repeatEnds: "never",
+  repeatUntil: "",
 };
 
 describe("the constants (Block 1; components.md, voice.md)", () => {
@@ -296,6 +299,9 @@ describe("blankMissing: a missing field is empty, never a guess (AC-2)", () => {
       endTime: "",
       location: "",
       notes: "Window table",
+      repeat: "none",
+      repeatEnds: "never",
+      repeatUntil: "",
     });
   });
 });

@@ -22,6 +22,7 @@ import {
   overlapColumns,
 } from "../domain/timeGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import { chipKey } from "../sync/useOccurrences";
 import {
   type ChipCommand,
   type ChipKind,
@@ -246,7 +247,7 @@ export function TimeGrid(props: {
               >
                 {allDay.slice(0, ALL_DAY_MAX_CHIPS).map((e) => (
                   <EventChip
-                    key={e.id}
+                    key={chipKey(e)}
                     event={e}
                     kind={chipKind(e)}
                     onActivate={chips.onActivate}
@@ -302,7 +303,11 @@ export function TimeGrid(props: {
             {columns.map(({ key, blocks }) => (
               <div key={key} className={styles.column} data-day={key}>
                 {blocks.map(({ event, style, height }) => (
-                  <div key={event.id} className={styles.block} style={style}>
+                  <div
+                    key={chipKey(event)}
+                    className={styles.block}
+                    style={style}
+                  >
                     <EventChip
                       event={event}
                       kind={chipKind(event)}

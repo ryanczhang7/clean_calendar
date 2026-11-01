@@ -11,6 +11,7 @@ import type { Event } from "../data/rows";
 import { kindInitials } from "../domain/kindInitials";
 import { dayKey, monthGrid } from "../domain/monthGrid";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import { chipKey } from "../sync/useOccurrences";
 import { EmptyMonth } from "./EmptyMonth";
 import {
   type ChipCommand,
@@ -199,10 +200,14 @@ export function MonthView(props: {
   const dot = (event: Event) => {
     const k = chipKind(event);
     if (k.status === "removed") {
-      return <i key={event.id} className={styles.dot} data-neutral="true" />;
+      return (
+        <i key={chipKey(event)} className={styles.dot} data-neutral="true" />
+      );
     }
     const background = dark ? k.kind.colorDark : k.kind.colorLight;
-    return <i key={event.id} className={styles.dot} style={{ background }} />;
+    return (
+      <i key={chipKey(event)} className={styles.dot} style={{ background }} />
+    );
   };
 
   return (
@@ -273,7 +278,7 @@ export function MonthView(props: {
                     <>
                       {dayEvents.slice(0, shown).map((e) => (
                         <EventChip
-                          key={e.id}
+                          key={chipKey(e)}
                           event={e}
                           kind={chipKind(e)}
                           tabIndex={-1}

@@ -8,7 +8,9 @@ import {
   moveStart,
   newEventValue,
   patchOf,
+  REPEAT_UNTIL_ERROR,
   readLastKind,
+  repeatHelper,
   setAllDay,
   storeLastKind,
   TITLE_ERROR,
@@ -84,6 +86,9 @@ function timedValue(extra: Partial<EventFormValue> = {}): EventFormValue {
     endTime: "10:30",
     location: "Clinic",
     notes: "",
+    repeat: "none",
+    repeatEnds: "never",
+    repeatUntil: "",
     ...extra,
   };
 }
@@ -251,6 +256,9 @@ describe("valueFromEvent (AC-3, AC-5, Block 1)", () => {
       endTime: "10:30",
       location: "",
       notes: "",
+      repeat: "none",
+      repeatEnds: "never",
+      repeatUntil: "",
     });
   });
 
@@ -314,6 +322,9 @@ describe("newEventValue (AC-1, Block 1)", () => {
       endTime: "10:00",
       location: "",
       notes: "",
+      repeat: "none",
+      repeatEnds: "never",
+      repeatUntil: "",
     });
   });
 
@@ -336,6 +347,9 @@ describe("newEventValue (AC-1, Block 1)", () => {
       endTime: "15:00",
       location: "",
       notes: "",
+      repeat: "none",
+      repeatEnds: "never",
+      repeatUntil: "",
     });
   });
 
@@ -703,4 +717,395 @@ describe("moveStart and setAllDay from an empty start (CAL-021 Block 3, AC-2)", 
     expect(setAllDay(value, true)).toStrictEqual({ ...value, allDay: true });
     expect(setAllDay(setAllDay(value, true), false)).toStrictEqual(value);
   });
+});
+
+// CAL-024 Contract, Block 1 (AC-1, AC-2). MECHANICAL: the helper copy is
+// components.md's ("Every Tuesday") with date-fns' English names, the error
+// is voice.md's "Event form" line, and the stored recurrence is rows.ts's
+// shape. The device zone is read from the same Intl expression the Contract
+// names, never written as a literal, so the suite holds in any zone.
+
+const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+/** A zone guaranteed not to be the device's, for "stored elsewhere" cases. */
+const OTHER_TZ =
+  DEVICE_TZ === "Pacific/Auckland" ? "Europe/Oslo" : "Pacific/Auckland";
+
+/** Weekly, ending on the given date (or never). */
+const weekly = (until: string | null): Partial<EventFormValue> =>
+  until === null
+    ? { repeat: "weekly", repeatEnds: "never", repeatUntil: "" }
+    : { repeat: "weekly", repeatEnds: "on", repeatUntil: until };
+
+describe("REPEAT_UNTIL_ERROR (CAL-024 AC-2, voice.md)", () => {
+  it('reads "The series must end after it starts."', () => {
+    expect(REPEAT_UNTIL_ERROR).toBe("The series must end after it starts.");
+  });
+});
+
+describe("repeatHelper - the Repeat field's helper text (CAL-024 AC-1, Block 1)", () => {
+  it('weekly on a start of Wednesday 14 October 2026 reads "Every Wednesday"', () => {
+    expect(repeatHelper(timedValue({ repeat: "weekly" }))).toBe(
+      "Every Wednesday",
+    );
+  });
+
+  it('weekly takes the weekday of the START date: Tuesday 13 October reads "Every Tuesday"', () => {
+    expect(
+      repeatHelper(
+        timedValue({
+          repeat: "weekly",
+          startDate: "2026-10-13",
+          endDate: "2026-10-20",
+        }),
+      ),
+    ).toBe("Every Tuesday");
+  });
+
+  it('yearly on 14 October reads "Every year on 14 October"', () => {
+    expect(repeatHelper(timedValue({ repeat: "yearly" }))).toBe(
+      "Every year on 14 October",
+    );
+  });
+
+  it('yearly on 1 March writes the day unpadded: "Every year on 1 March"', () => {
+    expect(
+      repeatHelper(
+        allDayValue({
+          repeat: "yearly",
+          startDate: "2026-03-01",
+          endDate: "2026-03-01",
+        }),
+      ),
+    ).toBe("Every year on 1 March");
+  });
+
+  it('daily reads "Every day"', () => {
+    expect(repeatHelper(timedValue({ repeat: "daily" }))).toBe("Every day");
+  });
+
+  it('"none" (Does not repeat) has no helper: null', () => {
+    expect(repeatHelper(timedValue())).toBeNull();
+    expect(
+      repeatHelper(
+        timedValue({
+          repeat: "none",
+          repeatEnds: "on",
+          repeatUntil: "2026-11-30",
+        }),
+      ),
+    ).toBeNull();
+  });
+});
+
+describe("validate: the series' end (CAL-024 AC-2, Block 1)", () => {
+  it("Ends on a date before the start date is the repeat-until error, and only that", () => {
+    expect(validate(timedValue(weekly("2026-10-13")))).toStrictEqual({
+      repeatUntil: REPEAT_UNTIL_ERROR,
+    });
+  });
+
+  it('Ends "On date" with no date given is the repeat-until error', () => {
+    expect(validate(timedValue(weekly("")))).toStrictEqual({
+      repeatUntil: REPEAT_UNTIL_ERROR,
+    });
+  });
+
+  it("Ends on the start date itself is valid: a series of one", () => {
+    expect(validate(timedValue(weekly("2026-10-14")))).toStrictEqual({});
+  });
+
+  it("Ends on 30 November 2026 is valid", () => {
+    expect(validate(timedValue(weekly("2026-11-30")))).toStrictEqual({});
+  });
+
+  it('Ends "Never" ignores whatever date is held', () => {
+    expect(
+      validate(
+        timedValue({
+          repeat: "weekly",
+          repeatEnds: "never",
+          repeatUntil: "2026-01-01",
+        }),
+      ),
+    ).toStrictEqual({});
+  });
+
+  it('"Does not repeat" ignores a stale Ends-on date entirely', () => {
+    expect(
+      validate(
+        timedValue({
+          repeat: "none",
+          repeatEnds: "on",
+          repeatUntil: "2026-01-01",
+        }),
+      ),
+    ).toStrictEqual({});
+    expect(
+      validate(timedValue({ repeat: "none", repeatEnds: "on" })),
+    ).toStrictEqual({});
+  });
+
+  it("compares against the start date for an all-day event too: before is refused, the same day is not", () => {
+    // allDayValue starts 12 Oct.
+    expect(
+      validate(allDayValue({ ...weekly("2026-10-11"), repeat: "yearly" })),
+    ).toStrictEqual({ repeatUntil: REPEAT_UNTIL_ERROR });
+    expect(
+      validate(allDayValue({ ...weekly("2026-10-12"), repeat: "daily" })),
+    ).toStrictEqual({});
+  });
+
+  it("sits beside the other errors: an empty title, an end before the start and an early series end at once", () => {
+    expect(
+      validate(
+        timedValue({
+          title: "",
+          endTime: "08:00",
+          ...weekly("2026-10-01"),
+        }),
+      ),
+    ).toStrictEqual({
+      title: TITLE_ERROR,
+      end: END_ERROR,
+      repeatUntil: REPEAT_UNTIL_ERROR,
+    });
+  });
+});
+
+describe("toNewEvent: the stored recurrence (CAL-024 AC-2, Block 1)", () => {
+  it("Weekly, Ends on 30 November 2026: { freq: weekly, until: 2026-11-30, tz: the device zone }", () => {
+    expect(
+      toNewEvent(timedValue(weekly("2026-11-30")), GYM.id).recurrence,
+    ).toStrictEqual({ freq: "weekly", until: "2026-11-30", tz: DEVICE_TZ });
+  });
+
+  it("the rest of the NewEvent is what it was: only recurrence is new", () => {
+    expect(
+      toNewEvent(timedValue({ title: "Swim", ...weekly(null) }), MOVIES.id),
+    ).toStrictEqual({
+      title: "Swim",
+      kindId: MOVIES.id,
+      startsAt: oct(14, 9, 0),
+      endsAt: oct(14, 10, 30),
+      allDay: false,
+      location: "Clinic",
+      notes: null,
+      origin: "manual",
+      recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+      captureJobId: null,
+    });
+  });
+
+  it('Ends "Never" stores until null, whatever date is held', () => {
+    expect(
+      toNewEvent(
+        timedValue({
+          repeat: "daily",
+          repeatEnds: "never",
+          repeatUntil: "2026-11-30",
+        }),
+        GYM.id,
+      ).recurrence,
+    ).toStrictEqual({ freq: "daily", until: null, tz: DEVICE_TZ });
+  });
+
+  it("Yearly carries its freq through", () => {
+    expect(
+      toNewEvent(allDayValue({ repeat: "yearly" }), GYM.id).recurrence,
+    ).toStrictEqual({ freq: "yearly", until: null, tz: DEVICE_TZ });
+  });
+
+  it('"Does not repeat" stores null, even with an Ends-on date held', () => {
+    expect(toNewEvent(timedValue(), GYM.id).recurrence).toBeNull();
+    expect(
+      toNewEvent(
+        timedValue({
+          repeat: "none",
+          repeatEnds: "on",
+          repeatUntil: "2026-11-30",
+        }),
+        GYM.id,
+      ).recurrence,
+    ).toBeNull();
+  });
+});
+
+describe("valueFromEvent: the series' repeat settings (CAL-024 AC-6, Block 1)", () => {
+  it("a weekly series ending 30 November: Weekly, Ends on, 2026-11-30", () => {
+    const value = valueFromEvent(
+      event({
+        recurrence: { freq: "weekly", until: "2026-11-30", tz: DEVICE_TZ },
+      }),
+    );
+    expect([value.repeat, value.repeatEnds, value.repeatUntil]).toStrictEqual([
+      "weekly",
+      "on",
+      "2026-11-30",
+    ]);
+  });
+
+  it('a yearly series with no end: Yearly, Ends "never", repeatUntil ""', () => {
+    const value = valueFromEvent(
+      event({ recurrence: { freq: "yearly", until: null, tz: OTHER_TZ } }),
+    );
+    expect([value.repeat, value.repeatEnds, value.repeatUntil]).toStrictEqual([
+      "yearly",
+      "never",
+      "",
+    ]);
+  });
+
+  it("a daily series keeps every other field as before", () => {
+    expect(
+      valueFromEvent(
+        event({
+          location: null,
+          recurrence: { freq: "daily", until: null, tz: DEVICE_TZ },
+        }),
+      ),
+    ).toStrictEqual({
+      title: "Dentist",
+      kindId: GYM.id,
+      allDay: false,
+      startDate: "2026-10-14",
+      startTime: "09:00",
+      endDate: "2026-10-14",
+      endTime: "10:30",
+      location: "",
+      notes: "",
+      repeat: "daily",
+      repeatEnds: "never",
+      repeatUntil: "",
+    });
+  });
+
+  it("an occurrence shows its own date and time with the series' repeat settings (Blocks 3 and 7)", () => {
+    const value = valueFromEvent(
+      event({
+        startsAt: new Date(2026, 10, 18, 9, 0),
+        endsAt: new Date(2026, 10, 18, 10, 30),
+        recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+        occurrenceDate: "2026-11-18",
+      }),
+    );
+    expect(value.startDate).toBe("2026-11-18");
+    expect(value.startTime).toBe("09:00");
+    expect(value.repeat).toBe("weekly");
+    expect(value.repeatEnds).toBe("never");
+  });
+
+  it("round trip: toNewEvent of a device-zone series' value stores its recurrence back", () => {
+    const recurrence = {
+      freq: "weekly" as const,
+      until: "2026-11-30",
+      tz: DEVICE_TZ,
+    };
+    expect(
+      toNewEvent(valueFromEvent(event({ recurrence })), GYM.id).recurrence,
+    ).toStrictEqual(recurrence);
+  });
+});
+
+describe("patchOf: recurrence only when it changed (CAL-024 AC-2, Block 1)", () => {
+  const SERIES = event({
+    location: null,
+    notes: null,
+    recurrence: { freq: "weekly", until: "2026-11-30", tz: DEVICE_TZ },
+  });
+  const opened = () => valueFromEvent(SERIES);
+
+  it("a series opened and not changed: {} - an equal recurrence is not a change", () => {
+    expect(patchOf(SERIES, opened())).toStrictEqual({});
+  });
+
+  it("a series with a title change: { title } alone", () => {
+    expect(patchOf(SERIES, { ...opened(), title: "Swim" })).toStrictEqual({
+      title: "Swim",
+    });
+  });
+
+  it('a series set to "Does not repeat": { recurrence: null }', () => {
+    expect(patchOf(SERIES, { ...opened(), repeat: "none" })).toStrictEqual({
+      recurrence: null,
+    });
+  });
+
+  it("a series' end moved: the whole new recurrence", () => {
+    expect(
+      patchOf(SERIES, { ...opened(), repeatUntil: "2026-12-31" }),
+    ).toStrictEqual({
+      recurrence: { freq: "weekly", until: "2026-12-31", tz: DEVICE_TZ },
+    });
+  });
+
+  it('a series set to end "Never": until null', () => {
+    expect(patchOf(SERIES, { ...opened(), repeatEnds: "never" })).toStrictEqual(
+      {
+        recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+      },
+    );
+  });
+
+  it("a series' freq changed: the new freq", () => {
+    expect(patchOf(SERIES, { ...opened(), repeat: "daily" })).toStrictEqual({
+      recurrence: { freq: "daily", until: "2026-11-30", tz: DEVICE_TZ },
+    });
+  });
+
+  it("a series stored in another zone, opened and not changed: tz is compared too, so the patch re-zones it to the device's", () => {
+    const elsewhere = event({
+      location: null,
+      notes: null,
+      recurrence: { freq: "weekly", until: null, tz: OTHER_TZ },
+    });
+    expect(patchOf(elsewhere, valueFromEvent(elsewhere))).toStrictEqual({
+      recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+    });
+  });
+
+  it("a one-off event made weekly: { recurrence }", () => {
+    const original = event({ location: null, notes: null });
+    expect(
+      patchOf(original, { ...valueFromEvent(original), ...weekly(null) }),
+    ).toStrictEqual({
+      recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+    });
+  });
+
+  it("a one-off event left one-off: no recurrence key at all", () => {
+    const original = event({ location: null, notes: null });
+    const patch = patchOf(original, {
+      ...valueFromEvent(original),
+      title: "Swim",
+    });
+    expect("recurrence" in patch).toBe(false);
+  });
+});
+
+describe("the stored zone is the device's at the time of saving (CAL-024 AC-2, Block 1)", () => {
+  // Restored to the zone NAME in force before, never by deleting TZ (see
+  // ConfirmPage.test.tsx's inZone: deleting leaves the last zone cached).
+  function inZone<T>(tz: string, fn: () => T): T {
+    const before =
+      process.env.TZ ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+    process.env.TZ = tz;
+    try {
+      return fn();
+    } finally {
+      process.env.TZ = before;
+    }
+  }
+
+  it.each(["Pacific/Auckland", "Europe/Rome"])(
+    "with the device in %s, toNewEvent stores that zone - so no fixed zone can pass in both",
+    (zone) => {
+      const [device, stored] = inZone(zone, () => [
+        Intl.DateTimeFormat().resolvedOptions().timeZone,
+        toNewEvent(timedValue(weekly(null)), GYM.id).recurrence?.tz,
+      ]);
+      // The instrument first: the zone switch took effect.
+      expect(device).toBe(zone);
+      expect(stored).toBe(device);
+    },
+  );
 });

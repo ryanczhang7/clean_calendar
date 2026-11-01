@@ -8,6 +8,7 @@ import {
   END_ERROR,
   type EventFormValue,
   type FormErrors,
+  REPEAT_UNTIL_ERROR,
   TITLE_ERROR,
 } from "../domain/eventForm";
 import { EventForm } from "./EventForm";
@@ -56,6 +57,9 @@ const TIMED: EventFormValue = {
   endTime: "10:30",
   location: "",
   notes: "",
+  repeat: "none",
+  repeatEnds: "never",
+  repeatUntil: "",
 };
 
 function Host(props: {
@@ -109,7 +113,7 @@ const lastValue = (onChange: Mock<(value: EventFormValue) => void>) =>
   onChange.mock.lastCall?.[0];
 
 describe("the fields, in components.md's order (Block 4)", () => {
-  it("Title, Kind, All day, Start date, Start time, End date, End time, Location, Notes - in that document order", () => {
+  it("Title, Kind, All day, Start date, Start time, End date, End time, Location, Notes, Repeat - in that document order (CAL-024 Block 2: Repeat after Notes)", () => {
     renderForm();
     const order = [
       title(),
@@ -121,6 +125,7 @@ describe("the fields, in components.md's order (Block 4)", () => {
       field("End time"),
       screen.getByRole("textbox", { name: "Location" }),
       screen.getByRole("textbox", { name: "Notes" }),
+      screen.getByRole("combobox", { name: "Repeat" }),
     ];
     for (let i = 1; i < order.length; i += 1) {
       const before = order[i - 1] as HTMLElement;
@@ -187,9 +192,9 @@ describe("the fields, in components.md's order (Block 4)", () => {
     expect(allDaySwitch()).toHaveAttribute("type", "button");
   });
 
-  it("has no Repeat and no Reminder field, and no <form> of its own", () => {
+  // CAL-024 Block 2 adds Repeat after Notes; Reminder is a later epic.
+  it("has no Reminder field, and no <form> of its own", () => {
     const { container } = renderForm();
-    expect(screen.queryByLabelText(/Repeat/)).toBeNull();
     expect(screen.queryByLabelText(/Reminder/)).toBeNull();
     expect(container.querySelector("form")).toBeNull();
   });
@@ -666,5 +671,72 @@ describe("per-field confirm state (CAL-021 Block 2, AC-1, AC-2)", () => {
       "missing",
     );
     expect(title()).toHaveAccessibleDescription(MISSING);
+  });
+});
+
+// CAL-024 Contract, Block 2: EventForm renders <RepeatField> after Notes and
+// before nothing else, passing errors.repeatUntil; its changes go out
+// through the form's own onChange. RepeatField's markup is pinned in
+// RepeatField.test.tsx; here only the wiring.
+
+describe("the Repeat field inside the form (CAL-024 AC-1, AC-2, Block 2)", () => {
+  it('a group named "Repeat" is the form\'s last field, after Notes', () => {
+    const { container } = renderForm();
+    const repeat = screen.getByRole("group", { name: "Repeat" });
+    const form = container.firstElementChild as HTMLElement;
+    expect(form.lastElementChild?.contains(repeat)).toBe(true);
+    const notes = screen.getByRole("textbox", { name: "Notes" });
+    expect(
+      notes.compareDocumentPosition(repeat) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('choosing Weekly goes out through onChange as { ...value, repeat: "weekly" } and shows "Every Wednesday"', async () => {
+    const { user, onChange } = renderForm();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Repeat" }),
+      "weekly",
+    );
+    expect(lastValue(onChange)).toStrictEqual({ ...TIMED, repeat: "weekly" });
+    expect(
+      screen.getByRole("combobox", { name: "Repeat" }),
+    ).toHaveAccessibleDescription("Every Wednesday");
+    expect(
+      screen.getByRole("group", { name: "Repeat ends" }),
+    ).toBeInTheDocument();
+  });
+
+  it("errors.repeatUntil reaches the Repeat until input: aria-invalid and the copy as its description", () => {
+    renderForm({
+      value: {
+        ...TIMED,
+        repeat: "weekly",
+        repeatEnds: "on",
+        repeatUntil: "2026-10-01",
+      },
+      errors: { repeatUntil: REPEAT_UNTIL_ERROR },
+    });
+    const until = field("Repeat until");
+    expect(until).toHaveAttribute("aria-invalid", "true");
+    expect(until).toHaveAccessibleDescription(
+      "The series must end after it starts.",
+    );
+    expect(field("End date")).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("the end error does not mark Repeat until, and no repeat error shows without one", () => {
+    renderForm({
+      value: {
+        ...TIMED,
+        repeat: "weekly",
+        repeatEnds: "on",
+        repeatUntil: "2026-11-30",
+      },
+      errors: { end: END_ERROR },
+    });
+    expect(field("Repeat until")).not.toHaveAttribute("aria-invalid");
+    expect(
+      screen.queryByText("The series must end after it starts."),
+    ).toBeNull();
   });
 });

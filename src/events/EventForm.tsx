@@ -15,6 +15,7 @@ import {
 } from "../domain/eventForm";
 import styles from "./EventForm.module.css";
 import { KindPicker } from "./KindPicker";
+import { RepeatField } from "./RepeatField";
 
 // CAL-012 Contract, Block 4 (components.md "Event sheet", fields in order).
 // Controlled, with no <form> of its own: the sheet owns submit, and the
@@ -263,6 +264,12 @@ export function EventForm(props: {
           onChange={(e) => set({ notes: e.target.value })}
         />
       </div>
+
+      <RepeatField
+        value={value}
+        onChange={onChange}
+        error={errors.repeatUntil}
+      />
     </div>
   );
 }

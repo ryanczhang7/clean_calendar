@@ -146,11 +146,14 @@ function OpenSheet(props: {
   };
 
   const focusField = (found: FormErrors) => {
+    // Title, else End date, else Repeat until (CAL-024 Block 7).
     const target =
       found.title !== undefined
         ? document.getElementById(titleId)
         : root.current?.querySelector<HTMLElement>(
-            'input[aria-label="End date"]',
+            found.end !== undefined
+              ? 'input[aria-label="End date"]'
+              : 'input[aria-label="Repeat until"]',
           );
     target?.focus();
   };
@@ -161,7 +164,7 @@ function OpenSheet(props: {
     const found = validate(value);
     setErrors(found);
     setFailed(false);
-    if (found.title !== undefined || found.end !== undefined) {
+    if (Object.keys(found).length > 0) {
       focusField(found);
       return;
     }
@@ -235,7 +238,10 @@ function OpenSheet(props: {
               <p className={styles.captured}>{captured}</p>
             )}
           </div>
-          {request.mode === "edit" && onDelete !== undefined ? (
+          {request.mode === "edit" &&
+          onDelete !== undefined &&
+          // An occurrence cannot be deleted until CAL-025 (Block 11).
+          request.event.occurrenceDate === undefined ? (
             <button
               type="button"
               aria-label={`Delete ${request.event.title}`}
