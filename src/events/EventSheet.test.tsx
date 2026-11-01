@@ -819,7 +819,9 @@ describe("an event whose kind is gone (AC-7, Block 5)", () => {
       screen.getByRole("button", { name: "Kind, Kind removed" }),
     );
     expect(screen.queryByRole("option", { name: "Gardening" })).toBeNull();
-    expect(screen.getAllByRole("option")).toHaveLength(3);
+    expect(
+      within(screen.getByRole("listbox")).getAllByRole("option"),
+    ).toHaveLength(3);
   });
 
   it("saving a title change sends a patch without kindId", async () => {

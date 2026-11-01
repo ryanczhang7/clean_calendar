@@ -28,12 +28,10 @@ import {
   type SheetRequest,
 } from "../events/EventSheet";
 import { type EventActions, eventActions } from "../sync/eventActions";
-import {
-  type EventsStore,
-  eventsStore,
-  useEventsInRange,
-} from "../sync/eventsStore";
+import { type EventsStore, eventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
+import type { OverridesStore } from "../sync/overridesStore";
+import { useOccurrences } from "../sync/useOccurrences";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
 import { useBreakpoint } from "./media";
@@ -58,7 +56,12 @@ import { WeekView } from "./WeekView";
 // CAL-013 Contract, Block 8: the page owns moves, resizes and deletes - from a
 // drop, a chip's keys or the sheet's Delete - and their undo toasts.
 
-type Stores = { kinds?: KindsStore; events?: EventsStore };
+type Stores = {
+  kinds?: KindsStore;
+  events?: EventsStore;
+  /** CAL-024 Block 5: the overrides the views expand series with. */
+  overrides?: OverridesStore;
+};
 
 type OnChipCommand = (
   event: Event,
@@ -322,7 +325,10 @@ function MonthPage(
   const grid = monthGrid(year, month);
   const from = grid[0]?.date ?? first;
   const to = grid[grid.length - 1]?.date ?? first;
-  const events = useEventsInRange(from, nextMidnight(to), props.events);
+  const events = useOccurrences(from, nextMidnight(to), {
+    events: props.events,
+    overrides: props.overrides,
+  });
   const kinds = useKinds(props.kinds);
 
   // A key or a click that leaves the month moves the page after it, keeping
@@ -450,7 +456,11 @@ export function CalendarPage(
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const stores = { kinds: props.kinds, events: props.events };
+  const stores = {
+    kinds: props.kinds,
+    events: props.events,
+    overrides: props.overrides,
+  };
   const opens = {
     onSlotActivate,
     onOpenEvent,

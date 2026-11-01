@@ -63,15 +63,45 @@ function commandFor(e: KeyboardEvent<HTMLElement>): ChipCommand | null {
   }
 }
 
+/** CAL-024 Block 6: a 12px loop of two arrows; aria-hidden, because the name says "repeats". */
+function RepeatGlyph(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      data-glyph="repeat"
+      className={styles.repeat}
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      focusable="false"
+    >
+      <path
+        d="M2 5.5V5a2 2 0 0 1 2-2h5.5M8 1l1.5 2L8 5M10 6.5V7a2 2 0 0 1-2 2H2.5M4 11 2.5 9 4 7"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** The accessible name, exactly as Block 5's table. */
 export function chipName(event: Event, kind: ChipKind): string {
   const when = event.allDay
     ? "all day"
     : `${hhmm(event.startsAt)} to ${hhmm(event.endsAt)}`;
-  const name =
+  const base =
     kind.status === "live"
       ? `${event.title}, ${kind.kind.name}, ${when}`
       : `${event.title}, ${when}, kind removed`;
+  // CAL-024 Block 6: the repeat after the time or kind-removed part, before
+  // the sync marker.
+  const name =
+    event.recurrence === null
+      ? base
+      : `${base}, repeats ${event.recurrence.freq}`;
   // CAL-015 Block 6: the sync marker comes last (accessibility.md order).
   if (event.sync === "saving") return `${name}, saving`;
   if (event.sync === "failed") return `${name}, not synced`;
@@ -97,9 +127,14 @@ export function EventChip(props: {
     onClickCapture?: MouseEventHandler<HTMLElement>;
   };
 }): JSX.Element {
-  const { event, kind, tabIndex, onActivate, onCommand, dragProps } = props;
+  const { event, kind, tabIndex, onActivate, onCommand } = props;
+  // CAL-024 Block 11: an occurrence cannot be moved or deleted until CAL-025,
+  // so its chip has no command keys and no drag. Click, Enter and Space
+  // still open it. Keyed on occurrenceDate: a series row keeps every path.
+  const occurrence = event.occurrenceDate !== undefined;
+  const dragProps = occurrence ? undefined : props.dragProps;
   const onKeyDown =
-    onCommand === undefined
+    onCommand === undefined || occurrence
       ? undefined
       : (e: KeyboardEvent<HTMLButtonElement>) => {
           const command = commandFor(e);
@@ -122,6 +157,7 @@ export function EventChip(props: {
         !
       </span>
     ) : null;
+  const repeatGlyph = event.recurrence === null ? null : <RepeatGlyph />;
   const dark = useColorScheme() === "dark";
   const live = kind.status === "live" ? kind.kind : null;
   const colour = live === null ? null : dark ? live.colorDark : live.colorLight;
@@ -156,6 +192,7 @@ export function EventChip(props: {
         <span aria-hidden="true" className={styles.title}>
           {event.title}
         </span>
+        {repeatGlyph}
         {badge}
         {(props.height ?? 0) >= 2 * MIN_BLOCK_HEIGHT && (
           <span aria-hidden="true" className={styles.time}>
@@ -201,6 +238,7 @@ export function EventChip(props: {
           </span>
         </>
       )}
+      {repeatGlyph}
       {badge}
     </button>
   );

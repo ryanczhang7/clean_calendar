@@ -1,8 +1,10 @@
 import { format } from "date-fns";
 import { type JSX, useMemo } from "react";
 import type { Event } from "../data/rows";
-import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
+import type { EventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
+import type { OverridesStore } from "../sync/overridesStore";
+import { useOccurrences } from "../sync/useOccurrences";
 import type { ChipCommand } from "./EventChip";
 import { TimeGrid } from "./TimeGrid";
 import type { DropTarget } from "./useChipDrag";
@@ -16,6 +18,7 @@ export function DayView(props: {
   now: Date;
   kinds?: KindsStore;
   events?: EventsStore;
+  overrides?: OverridesStore;
   /** CAL-012 Block 6: passed through to the grid. */
   onSlotActivate?: (start: Date, cell: HTMLElement) => void;
   /** CAL-012 Block 6: passed through to the grid. */
@@ -35,7 +38,10 @@ export function DayView(props: {
   const d = selected.getDate();
   const days = useMemo(() => [new Date(y, m, d)], [y, m, d]);
   const day = days[0] as Date;
-  const events = useEventsInRange(day, new Date(y, m, d + 1), props.events);
+  const events = useOccurrences(day, new Date(y, m, d + 1), {
+    events: props.events,
+    overrides: props.overrides,
+  });
   const kinds = useKinds(props.kinds);
   return (
     <TimeGrid

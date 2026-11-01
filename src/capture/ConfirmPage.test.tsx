@@ -527,7 +527,11 @@ describe("the confirm form (AC-7, Block 4)", () => {
     expect(
       await screen.findByRole("option", { name: "Dining" }),
     ).toHaveAttribute("aria-selected", "false");
-    expect(screen.queryAllByRole("option", { selected: true })).toHaveLength(0);
+    expect(
+      within(screen.getByRole("listbox")).queryAllByRole("option", {
+        selected: true,
+      }),
+    ).toHaveLength(0);
     expect(kindTrigger()).toHaveAccessibleName("Kind,");
   });
 

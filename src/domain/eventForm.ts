@@ -1,5 +1,11 @@
 import { addDays, differenceInCalendarDays, format } from "date-fns";
-import type { Event, EventPatch, Kind, NewEvent } from "../data/rows";
+import type {
+  Event,
+  EventPatch,
+  Kind,
+  NewEvent,
+  Recurrence,
+} from "../data/rows";
 
 // The event sheet's form model (CAL-012, Contract Block 1). Pure, apart from
 // the two localStorage helpers at the end. Form dates are `yyyy-MM-dd` and
@@ -20,12 +26,21 @@ export type EventFormValue = {
   endTime: string;
   location: string;
   notes: string;
+  /** CAL-024: "none" = Does not repeat. */
+  repeat: RepeatFreq;
+  /** Meaningful only while repeat !== "none". */
+  repeatEnds: "never" | "on";
+  /** yyyy-MM-dd; meaningful only while repeatEnds === "on". */
+  repeatUntil: string;
 };
 
-export type FormErrors = { title?: string; end?: string };
+export type RepeatFreq = "none" | "daily" | "weekly" | "yearly";
+
+export type FormErrors = { title?: string; end?: string; repeatUntil?: string };
 
 export const TITLE_ERROR = "Give the event a title.";
 export const END_ERROR = "End must be after start.";
+export const REPEAT_UNTIL_ERROR = "The series must end after it starts.";
 export const TITLE_MAX = 120;
 export const LAST_KIND_KEY = "cc.lastKind";
 
@@ -75,6 +90,14 @@ function local(date: string, time = "00:00"): Date {
 
 const valid = (d: Date) => !Number.isNaN(d.getTime());
 
+type RepeatPart = Pick<EventFormValue, "repeat" | "repeatEnds" | "repeatUntil">;
+
+const NO_REPEAT: RepeatPart = {
+  repeat: "none",
+  repeatEnds: "never",
+  repeatUntil: "",
+};
+
 /** A new event's value: all-day → the two dates equal, times "09:00"/"10:00"; timed → start and end as given. */
 export function newEventValue(
   start: Date,
@@ -82,7 +105,14 @@ export function newEventValue(
   allDay: boolean,
   kindId: string | null,
 ): EventFormValue {
-  const base = { title: "", kindId, allDay, location: "", notes: "" };
+  const base = {
+    title: "",
+    kindId,
+    allDay,
+    location: "",
+    notes: "",
+    ...NO_REPEAT,
+  };
   if (allDay) {
     const day = format(start, DATE);
     return {
@@ -115,7 +145,32 @@ export function valueFromEvent(event: Event): EventFormValue {
     endTime: format(event.endsAt, TIME),
     location: event.location ?? "",
     notes: event.notes ?? "",
+    ...repeatOf(event.recurrence),
   };
+}
+
+function repeatOf(recurrence: Recurrence | null): RepeatPart {
+  if (recurrence === null) return { ...NO_REPEAT };
+  return {
+    repeat: recurrence.freq,
+    repeatEnds: recurrence.until === null ? "never" : "on",
+    repeatUntil: recurrence.until ?? "",
+  };
+}
+
+/** The helper under the Repeat select (AC-1); null while it does not repeat. The weekday is the start date's, device zone. */
+export function repeatHelper(value: EventFormValue): string | null {
+  const start = local(value.startDate);
+  switch (value.repeat) {
+    case "none":
+      return null;
+    case "daily":
+      return "Every day";
+    case "weekly":
+      return `Every ${format(start, "EEEE")}`;
+    case "yearly":
+      return `Every year on ${format(start, "d MMMM")}`;
+  }
 }
 
 /**
@@ -170,6 +225,13 @@ export function validate(value: EventFormValue): FormErrors {
     const { startsAt, endsAt } = toInstants(value);
     if (!(endsAt.getTime() > startsAt.getTime())) errors.end = END_ERROR;
   }
+  // Ends on the start date itself is a series of one, and valid.
+  if (
+    value.repeat !== "none" &&
+    value.repeatEnds === "on" &&
+    (value.repeatUntil === "" || value.repeatUntil < value.startDate)
+  )
+    errors.repeatUntil = REPEAT_UNTIL_ERROR;
   return errors;
 }
 
@@ -192,7 +254,23 @@ export function toInstants(value: EventFormValue): {
 
 const blankToNull = (text: string) => (text.trim() === "" ? null : text);
 
-/** Requires a validated value and a kindId; blank location/notes → null; origin "manual", recurrence null, captureJobId null. */
+/** The stored recurrence (CAL-024 Block 1). The zone is read at call time: the device's when the event is saved. */
+function recurrenceOf(value: EventFormValue): Recurrence | null {
+  if (value.repeat === "none") return null;
+  return {
+    freq: value.repeat,
+    until: value.repeatEnds === "on" ? value.repeatUntil : null,
+    tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+}
+
+/** Field by field; both null is equal. */
+function sameRecurrence(a: Recurrence | null, b: Recurrence | null): boolean {
+  if (a === null || b === null) return a === b;
+  return a.freq === b.freq && a.until === b.until && a.tz === b.tz;
+}
+
+/** Requires a validated value and a kindId; blank location/notes → null; origin "manual", recurrence from Repeat, captureJobId null. */
 export function toNewEvent(value: EventFormValue, kindId: string): NewEvent {
   const { startsAt, endsAt } = toInstants(value);
   return {
@@ -204,7 +282,7 @@ export function toNewEvent(value: EventFormValue, kindId: string): NewEvent {
     location: blankToNull(value.location),
     notes: blankToNull(value.notes),
     origin: "manual",
-    recurrence: null,
+    recurrence: recurrenceOf(value),
     captureJobId: null,
   };
 }
@@ -224,5 +302,8 @@ export function patchOf(original: Event, value: EventFormValue): EventPatch {
   if (value.allDay !== original.allDay) patch.allDay = value.allDay;
   if (location !== original.location) patch.location = location;
   if (notes !== original.notes) patch.notes = notes;
+  const recurrence = recurrenceOf(value);
+  if (!sameRecurrence(recurrence, original.recurrence))
+    patch.recurrence = recurrence;
   return patch;
 }

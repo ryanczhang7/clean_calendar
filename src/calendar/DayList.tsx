@@ -2,6 +2,7 @@ import { format } from "date-fns";
 import { type JSX, useMemo } from "react";
 import type { Event } from "../data/rows";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import { chipKey } from "../sync/useOccurrences";
 import styles from "./DayList.module.css";
 import { EventChip, useChipOpener } from "./EventChip";
 import { eventsOnDay, useChipKind } from "./MonthView";
@@ -29,7 +30,7 @@ export function DayList(props: {
       {day.length > 0 ? (
         <ul className={styles.rows} onClickCapture={chips.onClickCapture}>
           {day.map((e) => (
-            <li key={e.id} className={styles.row}>
+            <li key={chipKey(e)} className={styles.row}>
               <EventChip
                 event={e}
                 kind={chipKind(e)}

@@ -49,6 +49,9 @@ export type Event = {
   /** CAL-015 Block 6: set only by the cached events store from the outbox;
    *  never stored, never sent. Absent (no key at all) when nothing is pending. */
   sync?: "saving" | "failed";
+  /** CAL-024 Block 3: set only on an expanded occurrence of a recurring
+   *  series; never stored, never sent. Absent (no key) on a stored row. */
+  occurrenceDate?: string;
 };
 
 export type EventOverride = {

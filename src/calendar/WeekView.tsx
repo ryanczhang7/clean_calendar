@@ -2,8 +2,10 @@ import { format } from "date-fns";
 import { type JSX, useMemo } from "react";
 import type { Event } from "../data/rows";
 import { daysFrom, weekStart } from "../domain/timeGrid";
-import { type EventsStore, useEventsInRange } from "../sync/eventsStore";
+import type { EventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
+import type { OverridesStore } from "../sync/overridesStore";
+import { useOccurrences } from "../sync/useOccurrences";
 import { useBreakpoint } from "./media";
 import type { ChipCommand } from "./EventChip";
 import { TimeGrid } from "./TimeGrid";
@@ -23,6 +25,7 @@ export function WeekView(props: {
   now: Date;
   kinds?: KindsStore;
   events?: EventsStore;
+  overrides?: OverridesStore;
   /** CAL-012 Block 6: passed through to the grid. */
   onSlotActivate?: (start: Date, cell: HTMLElement) => void;
   /** CAL-012 Block 6: passed through to the grid. */
@@ -53,7 +56,10 @@ export function WeekView(props: {
   const label = phone
     ? `${format(first, "EEEE d MMMM")} to ${format(last, "EEEE d MMMM yyyy")}`
     : `Week of ${format(first, "d MMMM yyyy")}`;
-  const events = useEventsInRange(first, nextMidnight(last), props.events);
+  const events = useOccurrences(first, nextMidnight(last), {
+    events: props.events,
+    overrides: props.overrides,
+  });
   const kinds = useKinds(props.kinds);
   return (
     <TimeGrid
