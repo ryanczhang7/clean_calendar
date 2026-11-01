@@ -2,7 +2,7 @@
 id: EPIC-06
 title: Recurring events
 status: todo
-stories: [CAL-023, CAL-024, CAL-025]
+stories: [CAL-023, CAL-024, CAL-056, CAL-025]
 ---
 
 ## Goal
