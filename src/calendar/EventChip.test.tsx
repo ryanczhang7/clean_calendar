@@ -763,3 +763,97 @@ describe("the sync marker (CAL-015 AC-1, AC-5, Block 6)", () => {
     expect(failed).toContain("var(--color-danger)");
   });
 });
+
+// CAL-024 Contract, Block 6 (AC-4; components.md "Event chip", Recurring;
+// accessibility.md's name order). MECHANICAL: ", repeats {freq}" comes after
+// the time (or ", kind removed") part and before the sync marker; both
+// variants render <svg data-glyph="repeat" aria-hidden="true" width="12"
+// height="12"> after the title text when the event recurs, and nothing when
+// it does not. The glyph's path is not pinned.
+
+describe("a recurring event's chip (CAL-024 AC-4, Block 6)", () => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const WEEKLY = ev({ recurrence: { freq: "weekly", until: null, tz } });
+  const DAILY = ev({ recurrence: { freq: "daily", until: "2026-11-30", tz } });
+  const YEARLY_ALL_DAY = {
+    ...ALL_DAY,
+    recurrence: { freq: "yearly" as const, until: null, tz },
+  };
+
+  it.each([
+    [WEEKLY, LIVE, "Dentist, Gym, 09:00 to 10:30, repeats weekly"],
+    [DAILY, LIVE, "Dentist, Gym, 09:00 to 10:30, repeats daily"],
+    [YEARLY_ALL_DAY, LIVE, "Hotel, Gym, all day, repeats yearly"],
+    [WEEKLY, REMOVED, "Dentist, 09:00 to 10:30, kind removed, repeats weekly"],
+    [
+      { ...WEEKLY, sync: "saving" as const },
+      LIVE,
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly, saving",
+    ],
+    [
+      { ...YEARLY_ALL_DAY, sync: "failed" as const },
+      REMOVED,
+      "Hotel, all day, kind removed, repeats yearly, not synced",
+    ],
+  ])(
+    "chipName puts the repeat after the time or kind-removed part and before the sync marker: %#",
+    (event, kind, name) => {
+      expect(chipName(event, kind)).toBe(name);
+    },
+  );
+
+  it("an occurrence (occurrenceDate set) is named the same way", () => {
+    expect(chipName({ ...WEEKLY, occurrenceDate: "2026-11-18" }, LIVE)).toBe(
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly",
+    );
+  });
+
+  it("a non-recurring event's name has no repeat part", () => {
+    expect(chipName(TIMED, LIVE)).toBe("Dentist, Gym, 09:00 to 10:30");
+    expect(chipName(TIMED, LIVE)).not.toContain("repeats");
+  });
+
+  it.each([
+    ["chip", undefined, "09:00 Dentist"],
+    ["block", "block", "Dentist"],
+  ] as const)(
+    'the %s carries one <svg data-glyph="repeat" aria-hidden="true" width="12" height="12"> after the title, and the name says so',
+    (_label, variant, titleText) => {
+      const chip =
+        variant === undefined
+          ? renderChip(WEEKLY, LIVE)
+          : renderBlock(WEEKLY, LIVE, 60);
+      const glyphs = chip.querySelectorAll('[data-glyph="repeat"]');
+      expect(glyphs).toHaveLength(1);
+      const glyph = glyphs[0] as Element;
+      expect(glyph.tagName.toLowerCase()).toBe("svg");
+      expect(glyph).toHaveAttribute("aria-hidden", "true");
+      expect(glyph).toHaveAttribute("width", "12");
+      expect(glyph).toHaveAttribute("height", "12");
+      const title = hiddenText(chip, titleText);
+      expect(
+        title.compareDocumentPosition(glyph) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+      expect(chip).toHaveAccessibleName(
+        "Dentist, Gym, 09:00 to 10:30, repeats weekly",
+      );
+    },
+  );
+
+  it("an all-day recurring chip carries the glyph too", () => {
+    const chip = renderChip(YEARLY_ALL_DAY, LIVE);
+    expect(chip.querySelectorAll('svg[data-glyph="repeat"]')).toHaveLength(1);
+    expect(chip).toHaveAccessibleName("Hotel, Gym, all day, repeats yearly");
+  });
+
+  it.each([
+    ["chip", undefined],
+    ["block", "block"],
+  ] as const)("a non-recurring %s has no repeat glyph", (_label, variant) => {
+    const chip =
+      variant === undefined
+        ? renderChip(TIMED, LIVE)
+        : renderBlock(TIMED, LIVE, 60);
+    expect(chip.querySelector('[data-glyph="repeat"]')).toBeNull();
+  });
+});

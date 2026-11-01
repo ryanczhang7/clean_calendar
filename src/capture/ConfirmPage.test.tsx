@@ -298,6 +298,9 @@ describe("proposalToFormValue: the form's first value (AC-7, Block 4)", () => {
       endTime: "21:00",
       location: "Lupa, Via Roma 1",
       notes: "",
+      repeat: "none",
+      repeatEnds: "never",
+      repeatUntil: "",
     });
   });
 
@@ -1352,5 +1355,46 @@ describe("an empty end is filled at Save (PO decision 3, Block 4)", () => {
       nov(5, 18, 0),
       nov(5, 19, 0),
     ]);
+  });
+});
+
+// CAL-024 (AC-2, Contract Block 7 as amended by RED): the confirm screen
+// renders the same EventForm, so it carries the Repeat field too, and its
+// "Save event" must refuse a series that ends before it starts exactly as
+// the sheet does. The proposal starts Tuesday 3 November 2026 19:30.
+
+describe("Repeat on the confirm screen (CAL-024 AC-2)", () => {
+  const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const repeatSelect = () => screen.getByRole("combobox", { name: "Repeat" });
+
+  it("Weekly, Ends Never: the event is created with recurrence { weekly, until null, the device zone }", async () => {
+    const { user, actions } = renderConfirm();
+    await formReady();
+    await user.selectOptions(repeatSelect(), "weekly");
+    expect(repeatSelect()).toHaveAccessibleDescription("Every Tuesday");
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    expect(actions.createEvent.mock.calls[0]?.[0]?.recurrence).toStrictEqual({
+      freq: "weekly",
+      until: null,
+      tz: DEVICE_TZ,
+    });
+  });
+
+  it('Ends on 2 November, before the start: "The series must end after it starts." and nothing is created', async () => {
+    const { user, actions } = renderConfirm();
+    await formReady();
+    await user.selectOptions(repeatSelect(), "weekly");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    fireEvent.change(field("Repeat until"), {
+      target: { value: "2026-11-02" },
+    });
+    await user.click(saveButton());
+    await settle();
+    expect(
+      screen.getByText("The series must end after it starts."),
+    ).toBeInTheDocument();
+    expect(field("Repeat until")).toHaveAttribute("aria-invalid", "true");
+    expect(actions.createEvent).not.toHaveBeenCalled();
   });
 });
