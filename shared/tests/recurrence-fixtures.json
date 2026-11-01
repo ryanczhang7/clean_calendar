@@ -1,0 +1,582 @@
+{
+  "cases": [
+    {
+      "name": "AC-1 weekly: a Monday 09:00 series gives every Monday of November at 09:00 local",
+      "series": {
+        "id": "s1",
+        "title": "Gym",
+        "kindId": "k1",
+        "startsAt": "2026-10-12T08:00:00.000Z",
+        "endsAt": "2026-10-12T09:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "weekly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-11-01T00:00:00.000Z",
+        "end": "2026-12-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-02",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-02T09:00:00.000Z",
+          "endsAt": "2026-11-02T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-09",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-09T09:00:00.000Z",
+          "endsAt": "2026-11-09T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-16",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-16T09:00:00.000Z",
+          "endsAt": "2026-11-16T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-23",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-23T09:00:00.000Z",
+          "endsAt": "2026-11-23T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-30",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-30T09:00:00.000Z",
+          "endsAt": "2026-11-30T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-1 daily: a daily 09:00 series gives one occurrence per day in the range, carrying every series field",
+      "series": {
+        "id": "s2",
+        "title": "Stand-up",
+        "kindId": "k2",
+        "startsAt": "2026-11-10T09:00:00.000Z",
+        "endsAt": "2026-11-10T09:15:00.000Z",
+        "allDay": false,
+        "location": "Kitchen",
+        "notes": "bring coffee",
+        "recurrence": { "freq": "daily", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-11-11T00:00:00.000Z",
+        "end": "2026-11-14T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s2",
+          "occurrenceDate": "2026-11-11",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-11-11T09:00:00.000Z",
+          "endsAt": "2026-11-11T09:15:00.000Z",
+          "allDay": false,
+          "location": "Kitchen",
+          "notes": "bring coffee"
+        },
+        {
+          "seriesId": "s2",
+          "occurrenceDate": "2026-11-12",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-11-12T09:00:00.000Z",
+          "endsAt": "2026-11-12T09:15:00.000Z",
+          "allDay": false,
+          "location": "Kitchen",
+          "notes": "bring coffee"
+        },
+        {
+          "seriesId": "s2",
+          "occurrenceDate": "2026-11-13",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-11-13T09:00:00.000Z",
+          "endsAt": "2026-11-13T09:15:00.000Z",
+          "allDay": false,
+          "location": "Kitchen",
+          "notes": "bring coffee"
+        }
+      ]
+    },
+    {
+      "name": "AC-1 and AC-3 daily: a daily 09:00 series keeps 09:00 local through the end of BST on 25 October",
+      "series": {
+        "id": "s2b",
+        "title": "Stand-up",
+        "kindId": "k2",
+        "startsAt": "2026-10-23T08:00:00.000Z",
+        "endsAt": "2026-10-23T08:15:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-10-23T00:00:00.000Z",
+        "end": "2026-10-28T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s2b",
+          "occurrenceDate": "2026-10-23",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-10-23T08:00:00.000Z",
+          "endsAt": "2026-10-23T08:15:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s2b",
+          "occurrenceDate": "2026-10-24",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-10-24T08:00:00.000Z",
+          "endsAt": "2026-10-24T08:15:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s2b",
+          "occurrenceDate": "2026-10-25",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-10-25T09:00:00.000Z",
+          "endsAt": "2026-10-25T09:15:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s2b",
+          "occurrenceDate": "2026-10-26",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-10-26T09:00:00.000Z",
+          "endsAt": "2026-10-26T09:15:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s2b",
+          "occurrenceDate": "2026-10-27",
+          "title": "Stand-up",
+          "kindId": "k2",
+          "startsAt": "2026-10-27T09:00:00.000Z",
+          "endsAt": "2026-10-27T09:15:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-1 yearly: a 15 June 18:00 series gives 15 June 18:00 local in each year of the range",
+      "series": {
+        "id": "s3",
+        "title": "Anniversary",
+        "kindId": "k3",
+        "startsAt": "2026-06-15T17:00:00.000Z",
+        "endsAt": "2026-06-15T18:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-01-01T00:00:00.000Z",
+        "end": "2030-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s3",
+          "occurrenceDate": "2027-06-15",
+          "title": "Anniversary",
+          "kindId": "k3",
+          "startsAt": "2027-06-15T17:00:00.000Z",
+          "endsAt": "2027-06-15T18:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s3",
+          "occurrenceDate": "2028-06-15",
+          "title": "Anniversary",
+          "kindId": "k3",
+          "startsAt": "2028-06-15T17:00:00.000Z",
+          "endsAt": "2028-06-15T18:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s3",
+          "occurrenceDate": "2029-06-15",
+          "title": "Anniversary",
+          "kindId": "k3",
+          "startsAt": "2029-06-15T17:00:00.000Z",
+          "endsAt": "2029-06-15T18:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-2 until is inclusive: until 2026-10-26 keeps Monday 26 October and nothing after it",
+      "series": {
+        "id": "s1",
+        "title": "Gym",
+        "kindId": "k1",
+        "startsAt": "2026-10-12T08:00:00.000Z",
+        "endsAt": "2026-10-12T09:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": {
+          "freq": "weekly",
+          "until": "2026-10-26",
+          "tz": "Europe/London"
+        }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-10-01T00:00:00.000Z",
+        "end": "2026-12-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-12",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-12T08:00:00.000Z",
+          "endsAt": "2026-10-12T09:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-19",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-19T08:00:00.000Z",
+          "endsAt": "2026-10-19T09:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-26",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-26T09:00:00.000Z",
+          "endsAt": "2026-10-26T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-3 DST: a weekly 09:00 London series is 08:00Z in BST and 09:00Z in GMT across 25 October 2026",
+      "series": {
+        "id": "s1",
+        "title": "Gym",
+        "kindId": "k1",
+        "startsAt": "2026-10-12T08:00:00.000Z",
+        "endsAt": "2026-10-12T09:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "weekly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-10-12T00:00:00.000Z",
+        "end": "2026-11-03T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-12",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-12T08:00:00.000Z",
+          "endsAt": "2026-10-12T09:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-19",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-19T08:00:00.000Z",
+          "endsAt": "2026-10-19T09:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-26",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-26T09:00:00.000Z",
+          "endsAt": "2026-10-26T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-02",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-02T09:00:00.000Z",
+          "endsAt": "2026-11-02T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-4 29 February: a yearly 29 February 2028 series occurs in 2028 and 2032 only, over 2028 to 2033",
+      "series": {
+        "id": "s4",
+        "title": "Leap day lunch",
+        "kindId": "k4",
+        "startsAt": "2028-02-29T12:00:00.000Z",
+        "endsAt": "2028-02-29T13:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2028-01-01T00:00:00.000Z",
+        "end": "2034-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s4",
+          "occurrenceDate": "2028-02-29",
+          "title": "Leap day lunch",
+          "kindId": "k4",
+          "startsAt": "2028-02-29T12:00:00.000Z",
+          "endsAt": "2028-02-29T13:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s4",
+          "occurrenceDate": "2032-02-29",
+          "title": "Leap day lunch",
+          "kindId": "k4",
+          "startsAt": "2032-02-29T12:00:00.000Z",
+          "endsAt": "2032-02-29T13:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-5 overrides: 19 October cancelled is absent; 2 November takes the new title and 10:00 start and keeps occurrenceDate 2026-11-02",
+      "series": {
+        "id": "s1",
+        "title": "Gym",
+        "kindId": "k1",
+        "startsAt": "2026-10-12T08:00:00.000Z",
+        "endsAt": "2026-10-12T09:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "weekly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [
+        {
+          "occurrenceDate": "2026-10-19",
+          "cancelled": true,
+          "title": null,
+          "kindId": null,
+          "startsAt": null,
+          "endsAt": null,
+          "allDay": null,
+          "location": null,
+          "notes": null
+        },
+        {
+          "occurrenceDate": "2026-11-02",
+          "cancelled": false,
+          "title": "Gym with Sam",
+          "kindId": null,
+          "startsAt": "2026-11-02T10:00:00.000Z",
+          "endsAt": "2026-11-02T11:00:00.000Z",
+          "allDay": null,
+          "location": null,
+          "notes": null
+        }
+      ],
+      "range": {
+        "start": "2026-10-01T00:00:00.000Z",
+        "end": "2026-11-10T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-12",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-12T08:00:00.000Z",
+          "endsAt": "2026-10-12T09:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-10-26",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-10-26T09:00:00.000Z",
+          "endsAt": "2026-10-26T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-02",
+          "title": "Gym with Sam",
+          "kindId": "k1",
+          "startsAt": "2026-11-02T10:00:00.000Z",
+          "endsAt": "2026-11-02T11:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s1",
+          "occurrenceDate": "2026-11-09",
+          "title": "Gym",
+          "kindId": "k1",
+          "startsAt": "2026-11-09T09:00:00.000Z",
+          "endsAt": "2026-11-09T10:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-6 straddle: a range starting inside a three-day yearly all-day event includes that occurrence",
+      "series": {
+        "id": "s5",
+        "title": "Festival",
+        "kindId": "k5",
+        "startsAt": "2026-07-29T23:00:00.000Z",
+        "endsAt": "2026-08-01T23:00:00.000Z",
+        "allDay": true,
+        "location": "Field",
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-08-01T00:00:00.000Z",
+        "end": "2027-09-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s5",
+          "occurrenceDate": "2027-07-30",
+          "title": "Festival",
+          "kindId": "k5",
+          "startsAt": "2027-07-29T23:00:00.000Z",
+          "endsAt": "2027-08-01T23:00:00.000Z",
+          "allDay": true,
+          "location": "Field",
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "AC-6 boundary: an occurrence ending exactly at range.start is excluded; the next one is included",
+      "series": {
+        "id": "s5",
+        "title": "Festival",
+        "kindId": "k5",
+        "startsAt": "2026-07-29T23:00:00.000Z",
+        "endsAt": "2026-08-01T23:00:00.000Z",
+        "allDay": true,
+        "location": "Field",
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-08-01T23:00:00.000Z",
+        "end": "2028-07-30T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s5",
+          "occurrenceDate": "2028-07-30",
+          "title": "Festival",
+          "kindId": "k5",
+          "startsAt": "2028-07-29T23:00:00.000Z",
+          "endsAt": "2028-08-01T23:00:00.000Z",
+          "allDay": true,
+          "location": "Field",
+          "notes": null
+        }
+      ]
+    }
+  ]
+}
