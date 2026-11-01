@@ -983,6 +983,42 @@ describe("the Delete button (CAL-013 AC-4, Block 7)", () => {
     await openDeleting(edit(DENTIST));
     expect(deleteButton()).toBeInTheDocument();
   });
+
+  // CAL-024 Contract, Block 11 (PO decision 5): an occurrence (occurrenceDate
+  // set) cannot be deleted until CAL-025, so its sheet renders no Delete
+  // button even with onDelete. The plain event in the same case, and the
+  // series row without occurrenceDate, still get theirs.
+  describe("an occurrence's sheet (CAL-024 Block 11)", () => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const SERIES = event({
+      recurrence: { freq: "weekly", until: null, tz },
+    });
+    const OCCURRENCE: Event = {
+      ...SERIES,
+      startsAt: new Date(2026, 10, 18, 9, 0),
+      endsAt: new Date(2026, 10, 18, 10, 30),
+      occurrenceDate: "2026-11-18",
+    };
+
+    // The plain twin runs first, so in RED it is seen to pass before the
+    // occurrence half fails.
+    it("a plain event with onDelete has its Delete button; an occurrence with onDelete has none, though the sheet and its Save are there", async () => {
+      await openDeleting(edit(DENTIST));
+      expect(deleteButton("Delete Dentist")).toBeInTheDocument();
+      cleanup();
+      await openDeleting(edit(OCCURRENCE));
+      const dialog = sheet("Edit event: Dentist");
+      expect(
+        within(dialog).getByRole("button", { name: "Save" }),
+      ).toBeVisible();
+      expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+    });
+
+    it("the series row itself (recurrence set, no occurrenceDate) keeps its Delete button", async () => {
+      await openDeleting(edit(SERIES));
+      expect(deleteButton("Delete Dentist")).toBeInTheDocument();
+    });
+  });
 });
 
 // CAL-024 Contract, Blocks 1, 2 and 7 as amended by RED (AC-2): the sheet

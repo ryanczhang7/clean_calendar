@@ -1245,7 +1245,12 @@ function useMoves(initial: Event[]): void {
   writes.update.mockImplementation(async (id, patch) => stampRow(id, patch));
 }
 
-function renderUndoPage(path: string, now: Date = NOW) {
+function renderUndoPage(
+  path: string,
+  now: Date = NOW,
+  /** CAL-024 Block 11: lets a case wrap the actions in spies. */
+  wrap: (actions: EventActions) => EventActions = (a) => a,
+) {
   const user = userEvent.setup();
   const kinds: KindsStore = createKindsStore(kindsRepo);
   const events: EventsStore = createEventsStore(eventsRepo);
@@ -1255,7 +1260,7 @@ function renderUndoPage(path: string, now: Date = NOW) {
       events={events}
       overrides={overridesStoreOf()}
       now={() => now}
-      actions={actionsOver(events)}
+      actions={wrap(actionsOver(events))}
     />
   );
   render(
@@ -2185,5 +2190,36 @@ describe("opening an occurrence (CAL-024 AC-6, Block 7)", () => {
     expect(dateField("Start date")).toHaveValue("2026-11-25");
     expect(screen.getByRole("radio", { name: "On date" })).toBeChecked();
     expect(dateField("Repeat until")).toHaveValue("2026-11-30");
+  });
+});
+
+// CAL-024 Contract, Block 11 (PO decision 5), end to end: an occurrence's id
+// is the series id, so a Delete reaching the page would remove the whole
+// series. The guard is the chip's; the page's onChipCommand is unchanged.
+// The injected actions' removeEvent is a spy over actionsOver's, so a call
+// is seen even if a refresh later puts the chips back.
+
+describe("an occurrence cannot be deleted from the page (CAL-024 Block 11)", () => {
+  it("Delete on the focused 18 November Spin chip calls no removeEvent, and all six chips stay", async () => {
+    const spin = spinSeries();
+    useMoves([spin]);
+    let removeEvent: Mock<EventActions["removeEvent"]> | null = null;
+    const { user } = renderUndoPage("/month/2026-11", NOW, (actions) => {
+      removeEvent = vi.fn(actions.removeEvent);
+      return { ...actions, removeEvent };
+    });
+    const grid = await settledGrid("November 2026");
+    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
+    const [chip] = spinChipsIn(monthCell(grid, "Wednesday 18 November"));
+    (chip as HTMLElement).focus();
+    await user.keyboard("{Delete}");
+    await settle();
+    expect(removeEvent).not.toBeNull();
+    expect(removeEvent).not.toHaveBeenCalled();
+    expect(writes.remove).not.toHaveBeenCalled();
+    expect(spinChipsIn(grid)).toHaveLength(6);
+    for (const day of NOVEMBER_GRID_WEDNESDAYS) {
+      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
   });
 });
