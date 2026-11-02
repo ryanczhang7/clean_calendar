@@ -14,17 +14,21 @@ import { createRealtime, type Realtime } from "./realtime";
 // CAL-015 Block 5 adds the app's drain: it runs before every pull, so the
 // pull sees our own rows with their server stamps (PO decision 6).
 
+/** One overrides repository for the pull and the drain (CAL-056 Block 4). */
+const overridesRepo = eventOverridesRepo(supabase);
+
 /** The app's sync over the real repositories and `db`. */
 export const appSync: Sync = createSync(db, {
   kinds: kindsRepo(supabase),
   events: eventsRepo(supabase),
-  overrides: eventOverridesRepo(supabase),
+  overrides: overridesRepo,
 });
 
 /** The repositories the app's drain and the sync problems dialog write through. */
 export const appRepos: Repos = {
   events: eventsRepo(supabase),
   kinds: kindsRepo(supabase),
+  overrides: overridesRepo,
 };
 
 /** The app's outbox drain over `db`; online is `navigator.onLine`. */

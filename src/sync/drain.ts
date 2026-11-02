@@ -1,5 +1,5 @@
 import type { Result } from "../data/result";
-import type { Event, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "./db";
 import {
   type CacheTable,
@@ -26,7 +26,7 @@ import {
 // Nothing throws. The drain knows nothing of React; SyncStatus turns the
 // notices into toasts (PO decision 7).
 
-type NoticeTable = "events" | "kinds";
+type NoticeTable = CacheTable;
 type OpError = { code: string; message: string; http?: number };
 
 export type DrainNotice =
@@ -65,18 +65,25 @@ export type Drain = {
   subscribe(listener: (n: DrainNotice) => void): () => void;
 };
 
-type Row = Event | Kind;
+type Row = Event | Kind | EventOverride;
 
-/** The members a pass calls, the same for both tables (kinds have no restore). */
+/** The members a pass calls, the same for every table (kinds have no restore, overrides no remove or restore). */
 type AnyRepo = {
   insert(input: never, id: string): Promise<Result<Row>>;
   update(id: string, patch: never, token: string): Promise<Result<Row>>;
-  remove(id: string, token: string): Promise<Result<Row>>;
+  /** Absent for overrides: an override op is never a delete (outbox.ts, Block 2). */
+  remove?(id: string, token: string): Promise<Result<Row>>;
   restore?(id: string, token: string): Promise<Result<Row>>;
   get(id: string): Promise<Result<Row>>;
 };
 
-const titleOf = (row: Row): string => ("title" in row ? row.title : row.name);
+/** A kind is named by its name; an override may carry no title (CAL-056 Block 3). */
+const titleOf = (row: Row): string =>
+  "name" in row ? row.name : (row.title ?? "");
+
+/** An override has no deleted_at column: it is always live. */
+const isLive = (row: Row): boolean =>
+  !("deletedAt" in row) || row.deletedAt === null;
 
 /** A title for a row the cache no longer holds: the op's own, if it names one. */
 function titleFromPatch(patch: unknown): string {
@@ -112,7 +119,11 @@ export function createDrain(
   let announce = false;
 
   const repoFor = (table: CacheTable): AnyRepo =>
-    table === "events" ? repos.events : repos.kinds;
+    table === "events"
+      ? repos.events
+      : table === "kinds"
+        ? repos.kinds
+        : repos.overrides;
 
   /** Sends one op. "offline" / "server" end the pass; anything else goes on. */
   async function send(
@@ -133,6 +144,7 @@ export function createDrain(
         result = await repo.update(op.id, op.patch as never, token);
         break;
       case "delete":
+        if (repo.remove === undefined) return "skipped";
         result = await repo.remove(op.id, token);
         break;
       case "restore":
@@ -142,10 +154,16 @@ export function createDrain(
     }
 
     if (result.status === "ok") {
-      const { updatedAt, createdAt, deletedAt } = result.row;
-      // The stamps only, so a later queued patch on the row stays visible.
+      const served = result.row;
+      const { updatedAt, createdAt } = served;
+      // The stamps only, so a later queued patch on the row stays visible. An
+      // override has no deletedAt, so it gains no such key (CAL-056 Block 3).
+      const stamps =
+        "deletedAt" in served
+          ? { updatedAt, createdAt, deletedAt: served.deletedAt }
+          : { updatedAt, createdAt };
       await db.transaction("rw", rows, db.outbox, async () => {
-        await rows.update(op.id, { updatedAt, createdAt, deletedAt });
+        await rows.update(op.id, stamps);
         await db.outbox.delete(op.seq);
       });
       return "sent";
@@ -167,11 +185,11 @@ export function createDrain(
         await rows.put(row);
         await db.outbox.delete(op.seq);
         // Deletes win (AC-4): ours goes again, over the fresh stamp.
-        if (row.deletedAt === null && op.op === "delete") {
+        if (isLive(row) && op.op === "delete" && table !== "event_overrides") {
           await enqueueDelete(db, table, op.id);
         }
       });
-      if (row.deletedAt === null && op.op !== "delete") {
+      if (isLive(row) && op.op !== "delete") {
         emit({
           kind: "conflict",
           table,
@@ -221,8 +239,8 @@ export function createDrain(
           .first();
         if (op === undefined || op.seq === undefined) break;
         last = op.seq;
-        // Override and reminder ops arrive with CAL-025 / CAL-026.
-        if (op.table !== "events" && op.table !== "kinds") continue;
+        // Reminder ops arrive with CAL-026.
+        if (op.table === "reminders") continue;
         const outcome = await send({ ...op, seq: op.seq, table: op.table });
         if (outcome === "sent") {
           sent += 1;
@@ -283,15 +301,28 @@ const KIND_FIELDS: [key: string, name: string][] = [
   ["colorDark", "colour"],
   ["sortOrder", "order"],
 ];
+/** CAL-056 Block 3: an override's fields, in this order. */
+const OVERRIDE_FIELDS: [key: string, name: string][] = [
+  ["title", "title"],
+  ["startsAt", "start time"],
+  ["endsAt", "end time"],
+  ["allDay", "all day"],
+  ["location", "location"],
+  ["notes", "notes"],
+  ["kindId", "kind"],
+  ["cancelled", "cancelled"],
+];
 
-/** Plain field names, voice.md: title, kind, start time, end time, all day, location, notes, repeat; kinds: name, colour, order. */
-export function fieldNames(
-  table: "events" | "kinds",
-  patch: unknown,
-): string[] {
+/** Plain field names, voice.md: title, kind, start time, end time, all day, location, notes, repeat; kinds: name, colour, order; overrides: OVERRIDE_FIELDS. */
+export function fieldNames(table: CacheTable, patch: unknown): string[] {
   if (typeof patch !== "object" || patch === null) return [];
   const keys = Object.keys(patch);
-  const known = table === "events" ? EVENT_FIELDS : KIND_FIELDS;
+  const known =
+    table === "events"
+      ? EVENT_FIELDS
+      : table === "kinds"
+        ? KIND_FIELDS
+        : OVERRIDE_FIELDS;
   const names: string[] = [];
   for (const [key, name] of known) {
     if (keys.includes(key) && !names.includes(name)) names.push(name);

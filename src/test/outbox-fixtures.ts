@@ -1,4 +1,5 @@
 import { type Mock, vi } from "vitest";
+import type { EventOverridesRepo } from "../data/eventOverrides";
 import type { EventsRepo } from "../data/events";
 import type { KindsRepo } from "../data/kinds";
 import type { Result } from "../data/result";
@@ -20,6 +21,8 @@ type EventsPick = Pick<
   "insert" | "update" | "remove" | "restore" | "get"
 >;
 type KindsPick = Pick<KindsRepo, "insert" | "update" | "remove" | "get">;
+/** CAL-056 Block 2: the override members the drain and `discardOp` need. */
+type OverridesPick = Pick<EventOverridesRepo, "insert" | "update" | "get">;
 
 export type FakeRepos = {
   events: {
@@ -34,6 +37,11 @@ export type FakeRepos = {
     update: Mock<KindsPick["update"]>;
     remove: Mock<KindsPick["remove"]>;
     get: Mock<KindsPick["get"]>;
+  };
+  overrides: {
+    insert: Mock<OverridesPick["insert"]>;
+    update: Mock<OverridesPick["update"]>;
+    get: Mock<OverridesPick["get"]>;
   };
 };
 
@@ -53,6 +61,11 @@ export function fakeRepos(): FakeRepos {
       update: vi.fn<KindsPick["update"]>(offline),
       remove: vi.fn<KindsPick["remove"]>(offline),
       get: vi.fn<KindsPick["get"]>(offline),
+    },
+    overrides: {
+      insert: vi.fn<OverridesPick["insert"]>(offline),
+      update: vi.fn<OverridesPick["update"]>(offline),
+      get: vi.fn<OverridesPick["get"]>(offline),
     },
   };
 }
