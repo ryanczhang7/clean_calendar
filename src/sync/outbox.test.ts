@@ -1,6 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Event, Kind } from "../data/rows";
-import { at, ev, freshDb, kind, T1, T2 } from "../test/cache-fixtures";
+import type { Event, EventOverride, Kind } from "../data/rows";
+import {
+  at,
+  ev,
+  freshDb,
+  kind,
+  override,
+  T1,
+  T2,
+} from "../test/cache-fixtures";
 import {
   asRepos,
   type FakeRepos,
@@ -414,5 +422,97 @@ describe("discardOp (AC-5, Block 4)", () => {
     expect(repos.kinds.get).toHaveBeenCalledWith(CACHED_KIND.id);
     expect(repos.events.get).not.toHaveBeenCalled();
     expect(await db.kinds.get(CACHED_KIND.id)).toStrictEqual(server);
+  });
+});
+
+// CAL-056 AC-5, Contract Block 2: the third table. An override op is only
+// ever an insert or an update (an override has no deleted_at), and discardOp
+// treats it exactly as the other two tables: an insert's cache row goes with
+// it, an update's row is replaced by the overrides repository's get(id).
+describe("discardOp on event_overrides (CAL-056 AC-5, Block 2)", () => {
+  const CACHED_OVERRIDE: EventOverride = override(1, "2026-10-27", {
+    title: "Mine",
+    updatedAt: T1,
+  });
+
+  it("an override insert: the op and the cached override are both removed, and nothing is fetched", async () => {
+    await db.overrides.put(CACHED_OVERRIDE);
+    const { id, createdAt: _c, updatedAt: _u, ...input } = CACHED_OVERRIDE;
+    const seq = await put(
+      queuedOp(id, {
+        op: "insert",
+        table: "event_overrides",
+        patch: input,
+        baseUpdatedAt: null,
+        status: "failed",
+        error: ERROR,
+      }),
+    );
+    await put(queuedOp("other"));
+    await discardOp(db, seq, asRepos(repos));
+    expect(await db.overrides.get(id)).toBeUndefined();
+    expect((await ops(db)).map((o) => o.id)).toStrictEqual(["other"]);
+    expect(repos.overrides.get).not.toHaveBeenCalled();
+    expect(repos.events.get).not.toHaveBeenCalled();
+    expect(repos.kinds.get).not.toHaveBeenCalled();
+  });
+
+  it("an override update: the op is removed and the overrides repository's copy, fetched once by id, replaces the cached override", async () => {
+    await db.overrides.put(CACHED_OVERRIDE);
+    const server: EventOverride = {
+      ...CACHED_OVERRIDE,
+      title: "Theirs",
+      cancelled: true,
+      updatedAt: S9,
+    };
+    repos.overrides.get.mockResolvedValue(okRow(server));
+    const seq = await put(
+      queuedOp(CACHED_OVERRIDE.id, {
+        table: "event_overrides",
+        patch: { title: "Mine" },
+        status: "failed",
+        error: ERROR,
+      }),
+    );
+    await discardOp(db, seq, asRepos(repos));
+    expect(repos.overrides.get.mock.calls).toStrictEqual([
+      [CACHED_OVERRIDE.id],
+    ]);
+    expect(repos.events.get).not.toHaveBeenCalled();
+    expect(repos.kinds.get).not.toHaveBeenCalled();
+    expect(await db.overrides.get(CACHED_OVERRIDE.id)).toStrictEqual(server);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("an override update whose fetch is not ok: the op is removed and the cached override is left as it is", async () => {
+    await db.overrides.put(CACHED_OVERRIDE);
+    const seq = await put(
+      queuedOp(CACHED_OVERRIDE.id, {
+        table: "event_overrides",
+        status: "failed",
+        error: ERROR,
+      }),
+    );
+    await discardOp(db, seq, asRepos(repos)); // get answers offline
+    expect(repos.overrides.get.mock.calls).toStrictEqual([
+      [CACHED_OVERRIDE.id],
+    ]);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.overrides.get(CACHED_OVERRIDE.id)).toStrictEqual(
+      CACHED_OVERRIDE,
+    );
+  });
+
+  it("an override can be neither deleted nor restored through the outbox: the third table is not in their table type", () => {
+    // Never called: the claim is the compile-time one. Each line below is a
+    // type error today and must stay one - widening enqueueDelete's or
+    // enqueueRestore's table type makes the directive unused, and tsc fails.
+    const attempts = () => [
+      // @ts-expect-error - Block 2: no delete op on event_overrides
+      enqueueDelete(db, "event_overrides", CACHED_OVERRIDE.id),
+      // @ts-expect-error - Block 2: no restore op on event_overrides
+      enqueueRestore(db, "event_overrides", CACHED_OVERRIDE.id),
+    ];
+    expect(typeof attempts).toBe("function");
   });
 });

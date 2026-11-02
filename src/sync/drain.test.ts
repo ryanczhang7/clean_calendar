@@ -1,7 +1,20 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Result } from "../data/result";
-import type { Event, Kind } from "../data/rows";
-import { at, ev, freshDb, kind, T1 } from "../test/cache-fixtures";
+import type {
+  Event,
+  EventOverride,
+  Kind,
+  NewEventOverride,
+} from "../data/rows";
+import {
+  at,
+  ev,
+  freshDb,
+  kind,
+  override,
+  T1,
+  T2,
+} from "../test/cache-fixtures";
 import {
   asRepos,
   type FakeRepos,
@@ -722,5 +735,230 @@ describe("conflictCopy(fields) - voice.md's conflict toast (AC-3)", () => {
     expect(conflictCopy(["title", "start time", "notes"])).toBe(
       "Edited elsewhere; your changes to title, start time and notes were not applied.",
     );
+  });
+});
+
+// CAL-056 AC-4, Contract Block 3: the drain sends event_overrides ops through
+// the overrides repository. The ops are put straight into the outbox, so these
+// cases depend on the drain alone and not on outbox.ts's enqueue overloads. An
+// override has no deleted_at: the ok branch copies createdAt and updatedAt only,
+// and a live fresh row on a conflict is announced like an event's.
+describe("event_overrides ops (CAL-056 AC-4, Block 3)", () => {
+  const OVR: EventOverride = override(1, "2026-10-27", {
+    title: "Review (moved)",
+    location: "Room 9",
+    updatedAt: T1,
+  });
+  const { id: _id, createdAt: _c, updatedAt: _u, ...OVR_INPUT } = OVR;
+  const NEW_OVR: NewEventOverride = OVR_INPUT;
+
+  const overrideOp = (extra: Partial<OutboxOp>): OutboxOp => ({
+    op: "update",
+    table: "event_overrides",
+    id: OVR.id,
+    patch: { cancelled: true },
+    baseUpdatedAt: T2,
+    clientTs: NOW_TS,
+    status: "queued",
+    ...extra,
+  });
+
+  it("an insert op calls the overrides repository's insert(patch, id), once, and no other repository", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(
+      overrideOp({ op: "insert", patch: NEW_OVR, baseUpdatedAt: null }),
+    );
+    repos.overrides.insert.mockResolvedValue(
+      okRow({ ...OVR, createdAt: SERVER_CREATED, updatedAt: S1 }),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.overrides.insert.mock.calls).toStrictEqual([
+      [NEW_OVR, OVR.id],
+    ]);
+    expect(repos.overrides.update).not.toHaveBeenCalled();
+    expect(repos.events.insert).not.toHaveBeenCalled();
+    expect(repos.kinds.insert).not.toHaveBeenCalled();
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("an update op calls update(id, patch, the cache row's updatedAt) - not the op's baseUpdatedAt", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(overrideOp({}));
+    repos.overrides.update.mockResolvedValue(
+      okRow({ ...OVR, cancelled: true, updatedAt: S1 }),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.overrides.update.mock.calls).toStrictEqual([
+      [OVR.id, { cancelled: true }, T1],
+    ]);
+    expect(repos.events.update).not.toHaveBeenCalled();
+    expect(repos.kinds.update).not.toHaveBeenCalled();
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("on ok the cached override takes the server's createdAt and updatedAt only, and gains no deletedAt key", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(overrideOp({}));
+    // The server's row differs in a field too: only the stamps are copied.
+    repos.overrides.update.mockResolvedValue(
+      okRow({
+        ...OVR,
+        title: "Server",
+        cancelled: true,
+        createdAt: SERVER_CREATED,
+        updatedAt: S1,
+      }),
+    );
+    await drain.run();
+    const row = await db.overrides.get(OVR.id);
+    expect(row).toStrictEqual({
+      ...OVR,
+      createdAt: SERVER_CREATED,
+      updatedAt: S1,
+    });
+    expect(Object.keys(row ?? {})).not.toContain("deletedAt");
+  });
+
+  it("an insert then an update of one override drain in seq order, the update sent with the stamp the insert returned", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(
+      overrideOp({ op: "insert", patch: NEW_OVR, baseUpdatedAt: null }),
+    );
+    await db.outbox.add(overrideOp({ baseUpdatedAt: OVR.updatedAt }));
+    repos.overrides.insert.mockResolvedValue(
+      okRow({ ...OVR, createdAt: SERVER_CREATED, updatedAt: S1 }),
+    );
+    repos.overrides.update.mockResolvedValue(
+      okRow({ ...OVR, cancelled: true, updatedAt: S2 }),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 2,
+      stoppedAt: "end",
+    });
+    expect(repos.overrides.update.mock.calls).toStrictEqual([
+      [OVR.id, { cancelled: true }, S1],
+    ]);
+    expect((await db.overrides.get(OVR.id))?.updatedAt).toBe(S2);
+  });
+
+  it("a conflict: the fresh server override replaces the cached one, the op is dropped, and a conflict notice names the fields in voice.md's words", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(
+      overrideOp({ patch: { cancelled: true, title: "Mine" } }),
+    );
+    const fresh: EventOverride = {
+      ...OVR,
+      title: "Theirs",
+      notes: "x",
+      updatedAt: S9,
+    };
+    repos.overrides.update.mockResolvedValue({ status: "conflict" });
+    repos.overrides.get.mockResolvedValue(okRow(fresh));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "end",
+    });
+    expect(repos.overrides.get.mock.calls).toStrictEqual([[OVR.id]]);
+    expect(repos.events.get).not.toHaveBeenCalled();
+    expect(await db.overrides.get(OVR.id)).toStrictEqual(fresh);
+    expect(await db.outbox.count()).toBe(0);
+    expect(of("conflict")).toStrictEqual([
+      {
+        kind: "conflict",
+        table: "event_overrides",
+        id: OVR.id,
+        title: "Theirs",
+        fields: ["title", "cancelled"],
+        patch: { cancelled: true, title: "Mine" },
+        freshUpdatedAt: S9,
+      },
+    ]);
+  });
+
+  it("a conflict over a fresh override with no title names an empty title (Block 3)", async () => {
+    await db.overrides.put(OVR);
+    await db.outbox.add(overrideOp({}));
+    repos.overrides.update.mockResolvedValue({ status: "conflict" });
+    repos.overrides.get.mockResolvedValue(
+      okRow({ ...OVR, title: null, updatedAt: S9 }),
+    );
+    await drain.run();
+    expect(of("conflict")).toStrictEqual([
+      {
+        kind: "conflict",
+        table: "event_overrides",
+        id: OVR.id,
+        title: "",
+        fields: ["cancelled"],
+        patch: { cancelled: true },
+        freshUpdatedAt: S9,
+      },
+    ]);
+  });
+
+  it("an override op queued between two event ops is sent in seq order, and the pass goes on to the event op after it", async () => {
+    await db.events.put(ROW);
+    await db.overrides.put(OVR);
+    await enqueueUpdate(db, "events", ROW.id, { title: "First" });
+    await db.outbox.add(overrideOp({}));
+    await enqueueUpdate(db, "events", ROW.id, { notes: "Third" });
+    repos.events.update.mockResolvedValue(okRow(server(ROW)));
+    repos.overrides.update.mockResolvedValue(
+      okRow({ ...OVR, cancelled: true, updatedAt: S2 }),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 3,
+      stoppedAt: "end",
+    });
+    const [firstAt, thirdAt] = repos.events.update.mock.invocationCallOrder;
+    const [overrideAt] = repos.overrides.update.mock.invocationCallOrder;
+    expect(firstAt).toBeLessThan(overrideAt ?? 0);
+    expect(overrideAt).toBeLessThan(thirdAt ?? 0);
+    expect(await db.outbox.count()).toBe(0);
+  });
+});
+
+describe("fieldNames for event_overrides - voice.md's plain field names (CAL-056 AC-4, Block 3)", () => {
+  it.each([
+    ["title", { title: "x" }],
+    ["start time", { startsAt: at(10, 1) }],
+    ["end time", { endsAt: at(10, 1) }],
+    ["all day", { allDay: true }],
+    ["location", { location: "x" }],
+    ["notes", { notes: "x" }],
+    ["kind", { kindId: "k" }],
+    ["cancelled", { cancelled: true }],
+  ])('an override patch naming one field reads "%s"', (name, patch) => {
+    expect(fieldNames("event_overrides", patch)).toStrictEqual([name]);
+  });
+
+  it("every override field at once, in Block 3's order whatever the key order", () => {
+    expect(
+      fieldNames("event_overrides", {
+        cancelled: false,
+        kindId: "k",
+        notes: "n",
+        location: "l",
+        allDay: false,
+        endsAt: at(10, 1),
+        startsAt: at(10, 1),
+        title: "t",
+      }),
+    ).toStrictEqual([
+      "title",
+      "start time",
+      "end time",
+      "all day",
+      "location",
+      "notes",
+      "kind",
+      "cancelled",
+    ]);
   });
 });

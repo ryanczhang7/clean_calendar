@@ -230,3 +230,98 @@ describe("eventOverrides failures resolve, never throw (AC-6)", () => {
     ).resolves.toStrictEqual({ status: "offline" });
   });
 });
+
+// CAL-056 Contract, Block 4: the drain needs what events.ts already offers
+// (CAL-015 Block 8) - the client names a new override, and `get` re-fetches
+// one override for the conflict path and for discardOp. Mirrors events.test.ts.
+describe("eventOverrides.insert with a client id (CAL-056 Block 4)", () => {
+  const input = {
+    eventId: EVENT_ID,
+    occurrenceDate: "2026-11-03",
+    cancelled: true,
+    title: null,
+    kindId: null,
+    startsAt: null,
+    endsAt: null,
+    allDay: null,
+    location: null,
+    notes: null,
+  };
+
+  test("POSTs the id the client chose beside the mapped columns", async () => {
+    const seen = onTable("event_overrides", () =>
+      HttpResponse.json([overrideRowNulls], { status: 201 }),
+    );
+    await eventOverridesRepo(testClient()).insert(input, OVERRIDE_ID);
+    expect(seen.map((r) => r.method)).toStrictEqual(["POST"]);
+    expect(seen[0]?.body).toStrictEqual({
+      id: OVERRIDE_ID,
+      event_id: EVENT_ID,
+      occurrence_date: "2026-11-03",
+      cancelled: true,
+      title: null,
+      kind_id: null,
+      starts_at: null,
+      ends_at: null,
+      all_day: null,
+      location: null,
+      notes: null,
+    });
+  });
+
+  test("without an id the body carries no id key", async () => {
+    const seen = onTable("event_overrides", () =>
+      HttpResponse.json([overrideRowNulls], { status: 201 }),
+    );
+    await eventOverridesRepo(testClient()).insert(input);
+    expect(Object.keys(seen[0]?.body as object)).not.toContain("id");
+  });
+});
+
+describe("eventOverrides.get (CAL-056 Block 4)", () => {
+  test("GETs the one override by id, select=*", async () => {
+    const seen = onTable("event_overrides", () =>
+      HttpResponse.json([overrideRowFull]),
+    );
+    await eventOverridesRepo(testClient()).get(OVERRIDE_ID);
+    expect(seen).toHaveLength(1);
+    const [req] = seen;
+    expect(req?.method).toBe("GET");
+    expect(req?.url.pathname).toBe("/rest/v1/event_overrides");
+    expect(req?.url.searchParams.get("id")).toBe(`eq.${OVERRIDE_ID}`);
+    expect(req?.url.searchParams.get("select")).toBe("*");
+  });
+
+  test("one row is ok with the row mapped to an EventOverride", async () => {
+    onTable("event_overrides", () => HttpResponse.json([overrideRowFull]));
+    await expect(
+      eventOverridesRepo(testClient()).get(OVERRIDE_ID),
+    ).resolves.toStrictEqual({ status: "ok", row: overrideFull });
+  });
+
+  test("zero rows is a conflict (the override is gone)", async () => {
+    onTable("event_overrides", () => HttpResponse.json([]));
+    await expect(
+      eventOverridesRepo(testClient()).get(OVERRIDE_ID),
+    ).resolves.toStrictEqual({ status: "conflict" });
+  });
+
+  test("a network failure is offline", async () => {
+    onTable("event_overrides", () => HttpResponse.error());
+    await expect(
+      eventOverridesRepo(testClient()).get(OVERRIDE_ID),
+    ).resolves.toStrictEqual({ status: "offline" });
+  });
+
+  test("a 404 is an error with http 404", async () => {
+    onTable("event_overrides", () => pgError(404, "PGRST205", "not found"));
+    await expect(
+      eventOverridesRepo(testClient()).get(OVERRIDE_ID),
+    ).resolves.toStrictEqual({
+      status: "error",
+      code: "PGRST205",
+      message: "not found",
+      http: 404,
+    });
+  });
+});
