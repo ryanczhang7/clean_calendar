@@ -31,6 +31,7 @@ all others; deleting one occurrence leaves the rest.
 
 ## Deliberately not in this epic
 
-Every-N-weeks, "second Tuesday", RRULE import/export, exceptions that move an
-occurrence to a different day while keeping the series (an override may change
-the time; moving the date is delete + create in v1).
+Every-N-weeks, "second Tuesday", RRULE import/export. (Moving one occurrence
+to a different day while keeping the series was listed here; the owner put it
+in scope on 2026-11-02 - CAL-025, PO decision 7: the override carries the new
+start and end, as it does for a time change.)

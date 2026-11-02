@@ -30,6 +30,7 @@ import {
   type EventsStore,
 } from "../sync/eventsStore";
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
+import type { OverrideActions } from "../sync/overrideActions";
 import type { OverridesSnapshot, OverridesStore } from "../sync/overridesStore";
 import { RouteFocus } from "../app/routes";
 import { installMatchMedia } from "../test/media";
@@ -2193,33 +2194,824 @@ describe("opening an occurrence (CAL-024 AC-6, Block 7)", () => {
   });
 });
 
-// CAL-024 Contract, Block 11 (PO decision 5), end to end: an occurrence's id
-// is the series id, so a Delete reaching the page would remove the whole
-// series. The guard is the chip's; the page's onChipCommand is unchanged.
-// The injected actions' removeEvent is a spy over actionsOver's, so a call
-// is seen even if a refresh later puts the chips back.
+// CAL-025 Contract, Blocks 4 and 6 (AC-1 to AC-6 through the page),
+// replacing CAL-024 Block 11's "an occurrence cannot be deleted from the
+// page". A drop, a chip command or the sheet's Delete on an OCCURRENCE opens
+// the edit-scope dialog instead of writing; its answer picks the write.
+// The page runs over the same hand-written stores as above, inside
+// <ToastProvider>, with two additions:
+//   * `overrideActions`: an in-memory OverrideActions whose members are
+//     vi.fn spies over an upsert into `overrideRows` keyed by (eventId,
+//     occurrenceDate), each write stamping a new token and then refreshing
+//     the injected overrides store - so a chip appearing, vanishing or
+//     changing proves the write reached the expansion through useOccurrences,
+//     as CAL-056's outbox facade does in the app;
+//   * `actions` wrapped in spies, so the exact (series row, patch, token)
+//     each EventActions call receives is observed, not only the repository's.
+// The series "Spin" is weekly from Wed 4 Nov 2026 10:00 - 11:00 in the
+// device's own zone. November 2026's grid runs Mon 26 October to Sun 6
+// December, so Spin has five chips there: 4, 11, 18 and 25 November and 2
+// December. MECHANICAL: chips are found by accessible name inside the named
+// cell, writes are pinned with toStrictEqual, toast copy is voice.md's.
 
-describe("an occurrence cannot be deleted from the page (CAL-024 Block 11)", () => {
-  it("Delete on the focused 18 November Spin chip calls no removeEvent, and all six chips stay", async () => {
-    const spin = spinSeries();
-    useMoves([spin]);
-    let removeEvent: Mock<EventActions["removeEvent"]> | null = null;
-    const { user } = renderUndoPage("/month/2026-11", NOW, (actions) => {
-      removeEvent = vi.fn(actions.removeEvent);
-      return { ...actions, removeEvent };
-    });
-    const grid = await settledGrid("November 2026");
-    await waitFor(() => expect(spinChipsIn(grid)).toHaveLength(6));
-    const [chip] = spinChipsIn(monthCell(grid, "Wednesday 18 November"));
-    (chip as HTMLElement).focus();
-    await user.keyboard("{Delete}");
-    await settle();
-    expect(removeEvent).not.toBeNull();
-    expect(removeEvent).not.toHaveBeenCalled();
-    expect(writes.remove).not.toHaveBeenCalled();
-    expect(spinChipsIn(grid)).toHaveLength(6);
-    for (const day of NOVEMBER_GRID_WEDNESDAYS) {
-      expect(spinChipsIn(monthCell(grid, day)), day).toHaveLength(1);
+/**
+ * CAL-025: the per-test budget of a scope-dialog flow - open, edit, confirm,
+ * write, re-render, Undo. Measured locally in RED (Windows, full unit
+ * project under --coverage, story Handoff): the slowest of these cases
+ * reached 3.2 s, about 1 s of it a findBy waiting out the dialog that does
+ * not exist yet; isolated, 1.4 s. GREEN adds the steps after the dialog. The
+ * framework default (5 s) is under 4x that, so the budget is 15 s - the
+ * same base the sheet suite uses. No CI figure exists yet.
+ */
+const SCOPE_FLOW_TIMEOUT_MS = 15_000;
+
+const SPIN_10_NAME = "Spin, Gym, 10:00 to 11:00, repeats weekly";
+const SPIN_WEDNESDAYS = [
+  "Wednesday 4 November",
+  "Wednesday 11 November",
+  "Wednesday 18 November",
+  "Wednesday 25 November",
+  "Wednesday 2 December",
+];
+const MOVE_HELPER =
+  "Moving the whole series moves every occurrence by the same amount.";
+
+/** Local time on a day of November 2026. */
+const nov = (date: number, hour = 0, minute = 0) =>
+  new Date(2026, 10, date, hour, minute);
+
+function spinFrom4Nov(): Event {
+  return {
+    ...timed("Spin", nov(4, 10), nov(4, 11)),
+    recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+  };
+}
+
+/** An override row for Spin's `occurrenceDate`, every field not given null. */
+function overrideOf(
+  eventId: string,
+  occurrenceDate: string,
+  fields: Partial<EventOverride>,
+): EventOverride {
+  return {
+    ...cancelled(eventId, occurrenceDate),
+    id: "30000000-0000-4000-8000-000000000099",
+    cancelled: false,
+    ...fields,
+  };
+}
+
+type FakeOverrideActions = {
+  setOverride: Mock<OverrideActions["setOverride"]>;
+  cancelOccurrence: Mock<OverrideActions["cancelOccurrence"]>;
+  restoreOccurrence: Mock<OverrideActions["restoreOccurrence"]>;
+};
+
+/** The in-memory facade over `overrideRows`, refreshing `store` after each write. */
+function overrideActionsOver(store: OverridesStore): FakeOverrideActions {
+  let made = 0;
+  const upsert = async (
+    eventId: string,
+    occurrenceDate: string,
+    fields: Partial<EventOverride>,
+  ): Promise<Result<EventOverride>> => {
+    const index = overrideRows.findIndex(
+      (o) => o.eventId === eventId && o.occurrenceDate === occurrenceDate,
+    );
+    let row: EventOverride;
+    if (index === -1) {
+      made += 1;
+      row = {
+        ...overrideOf(eventId, occurrenceDate, fields),
+        id: `30000000-0000-4000-8000-${String(made).padStart(12, "0")}`,
+        updatedAt: nextToken(),
+      };
+      overrideRows.push(row);
+    } else {
+      row = {
+        ...(overrideRows[index] as EventOverride),
+        ...fields,
+        updatedAt: nextToken(),
+      };
+      overrideRows[index] = row;
     }
+    await store.refresh();
+    return { status: "ok", row };
+  };
+  return {
+    setOverride: vi.fn<OverrideActions["setOverride"]>((id, date, fields) =>
+      upsert(id, date, fields as Partial<EventOverride>),
+    ),
+    cancelOccurrence: vi.fn<OverrideActions["cancelOccurrence"]>((id, date) =>
+      upsert(id, date, { cancelled: true }),
+    ),
+    restoreOccurrence: vi.fn<OverrideActions["restoreOccurrence"]>(
+      async (row) => {
+        const index = overrideRows.findIndex((o) => o.id === row.id);
+        const restored: EventOverride = {
+          ...(overrideRows[index] as EventOverride),
+          cancelled: false,
+          updatedAt: nextToken(),
+        };
+        overrideRows[index] = restored;
+        await store.refresh();
+        return { status: "ok", row: restored };
+      },
+    ),
+  };
+}
+
+type SpiedActions = {
+  updateEvent: Mock<EventActions["updateEvent"]>;
+  removeEvent: Mock<EventActions["removeEvent"]>;
+  restoreEvent: Mock<EventActions["restoreEvent"]>;
+};
+
+function renderSeriesPage(path: string) {
+  const user = userEvent.setup();
+  const kinds: KindsStore = createKindsStore(kindsRepo);
+  const events: EventsStore = createEventsStore(eventsRepo);
+  const overrides = overridesStoreOf();
+  const over = overrideActionsOver(overrides);
+  const base = actionsOver(events);
+  const spied: SpiedActions = {
+    updateEvent: vi.fn(base.updateEvent),
+    removeEvent: vi.fn(base.removeEvent),
+    restoreEvent: vi.fn(base.restoreEvent),
+  };
+  const page = (
+    <CalendarPage
+      kinds={kinds}
+      events={events}
+      overrides={overrides}
+      now={() => NOW}
+      actions={{ ...base, ...spied }}
+      overrideActions={over}
+    />
+  );
+  render(
+    <ToastProvider>
+      <MemoryRouter initialEntries={[path]}>
+        <header>
+          <CalendarToolbar now={() => NOW} />
+        </header>
+        <main>
+          <Routes>
+            <Route path="/month/:ym" element={page} />
+            <Route path="/week/:date" element={page} />
+            <Route path="/day/:date" element={page} />
+          </Routes>
+        </main>
+        <RouteFocus />
+        <Where />
+      </MemoryRouter>
+      <ToastHost />
+    </ToastProvider>,
+  );
+  return { user, events, overrides, over, actions: spied };
+}
+
+/** November's grid once Spin's five chips are in. */
+async function novemberWithSpin(count = 5): Promise<HTMLElement> {
+  const grid = await settledGrid("November 2026");
+  await waitFor(() =>
+    expect(
+      within(grid).queryAllByRole("button", { name: /^Spin/ }),
+    ).toHaveLength(count),
+  );
+  return grid;
+}
+
+const spinIn = (el: HTMLElement, name = SPIN_10_NAME) =>
+  within(el).queryAllByRole("button", { name });
+
+function spinChipOn(grid: HTMLElement, day: string): HTMLElement {
+  const [chip] = spinIn(monthCell(grid, day));
+  expect(chip, `no Spin chip on ${day}`).toBeDefined();
+  return chip as HTMLElement;
+}
+
+const changeDialog = () =>
+  screen.findByRole("alertdialog", { name: "Change which events?" });
+const deleteDialog = () =>
+  screen.findByRole("alertdialog", { name: "Delete which events?" });
+
+async function confirmScope(
+  user: ReturnType<typeof userEvent.setup>,
+  dialog: HTMLElement,
+  scope: "This event only" | "All events in the series",
+  confirm: "Save" | "Delete",
+): Promise<void> {
+  await user.click(within(dialog).getByRole("radio", { name: scope }));
+  await user.click(within(dialog).getByRole("button", { name: confirm }));
+}
+
+function expectNoWrites(
+  actions: SpiedActions,
+  over: FakeOverrideActions,
+): void {
+  expect(actions.updateEvent).not.toHaveBeenCalled();
+  expect(actions.removeEvent).not.toHaveBeenCalled();
+  expect(over.setOverride).not.toHaveBeenCalled();
+  expect(over.cancelOccurrence).not.toHaveBeenCalled();
+  expect(writes.update).not.toHaveBeenCalled();
+  expect(writes.remove).not.toHaveBeenCalled();
+}
+
+describe("an occurrence asks which events before it is changed (CAL-025 AC-1, Block 6)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it('a drop of the 18 November chip on 20 November writes nothing and opens "Change which events?" with the move helper', async () => {
+    useMoves([spinFrom4Nov()]);
+    const { actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Friday 20 November"),
+    );
+    const dialog = await changeDialog();
+    expect(within(dialog).getByText(MOVE_HELPER)).toBeInTheDocument();
+    expect(
+      within(dialog).getByRole("radio", { name: "This event only" }),
+    ).toBeChecked();
+    expect(
+      within(dialog).getByRole("button", { name: "Save" }),
+    ).toBeInTheDocument();
+    await settle();
+    expectNoWrites(actions, over);
+    expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(1);
+  });
+
+  it('Alt+→ on the focused 18 November chip opens "Change which events?" with the helper, and writes nothing', async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    const dialog = await changeDialog();
+    expect(within(dialog).getByText(MOVE_HELPER)).toBeInTheDocument();
+    await settle();
+    expectNoWrites(actions, over);
+  });
+
+  it('Delete on the focused 18 November chip opens "Delete which events?" (Cancel, Delete; no helper), "This event only" focused, and writes nothing', async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Delete}");
+    const dialog = await deleteDialog();
+    expect(
+      within(dialog)
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toStrictEqual(["Cancel", "Delete"]);
+    expect(within(dialog).queryByText(MOVE_HELPER)).toBeNull();
+    await waitFor(() =>
+      expect(
+        within(dialog).getByRole("radio", { name: "This event only" }),
+      ).toHaveFocus(),
+    );
+    await settle();
+    expectNoWrites(actions, over);
+    expect(spinIn(grid)).toHaveLength(5);
+  });
+
+  it('the sheet\'s "Delete Spin" on an occurrence closes the sheet and opens "Delete which events?", writing nothing', async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    await user.click(spinChipOn(grid, "Wednesday 18 November"));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    await user.click(screen.getByRole("button", { name: "Delete Spin" }));
+    await deleteDialog();
+    expect(
+      screen.queryByRole("dialog", { name: "Edit event: Spin" }),
+    ).toBeNull();
+    await settle();
+    expectNoWrites(actions, over);
+    expect(spinIn(grid)).toHaveLength(5);
+  });
+
+  it("Cancel on the delete dialog writes nothing, keeps all five chips and returns focus to the chip", async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    const chip = spinChipOn(grid, "Wednesday 18 November");
+    chip.focus();
+    await user.keyboard("{Delete}");
+    const dialog = await deleteDialog();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await settle();
+    expectNoWrites(actions, over);
+    expect(spinIn(grid)).toHaveLength(5);
+    expect(chip).toHaveFocus();
+  });
+
+  it("a drop back on its own day is a no-op before any dialog: no alertdialog, no write", async () => {
+    useMoves([spinFrom4Nov()]);
+    const { actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Wednesday 18 November"),
+    );
+    await settle();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expectNoWrites(actions, over);
+  });
+
+  // AC-1's other half. These pass today - nothing asks - and pin that the
+  // dialog is keyed on occurrenceDate, not shown for every drop or delete.
+  it("a plain event's drop and Delete write at once with no alertdialog", async () => {
+    const swim = timed("Swim", nov(19, 7), nov(19, 8));
+    useMoves([swim, spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    const swimName = "Swim, Gym, 07:00 to 08:00";
+    dragTo(
+      within(monthCell(grid, "Thursday 19 November")).getByRole("button", {
+        name: swimName,
+      }),
+      monthCell(grid, "Friday 20 November"),
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      swim.id,
+      { startsAt: nov(20, 7), endsAt: nov(20, 8) },
+      STAMP,
+    ]);
+    (
+      await within(monthCell(grid, "Friday 20 November")).findByRole("button", {
+        name: swimName,
+      })
+    ).focus();
+    await user.keyboard("{Delete}");
+    await waitFor(() => expect(actions.removeEvent).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(over.setOverride).not.toHaveBeenCalled();
+    expect(over.cancelOccurrence).not.toHaveBeenCalled();
+  });
+});
+
+describe('"This event only" on an edit writes one override (CAL-025 AC-2, Blocks 4 and 6)', {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it("a title change from the 18 November sheet: setOverride(series id, 2026-11-18, { title }); that chip reads Spin hard, the other four are unchanged", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    await user.click(spinChipOn(grid, "Wednesday 18 November"));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    await user.type(titleInput(), " hard");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { title: "Spin hard" },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    expect(writes.update).not.toHaveBeenCalled();
+    expect(
+      await within(monthCell(grid, "Wednesday 18 November")).findByRole(
+        "button",
+        { name: "Spin hard, Gym, 10:00 to 11:00, repeats weekly" },
+      ),
+    ).toBeInTheDocument();
+    for (const day of SPIN_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 18 November",
+    )) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(0);
+  });
+
+  // PO decision 7 ("Allow it"): one occurrence may move to ANOTHER DAY. The
+  // override carries the dropped span and stays keyed by the ORIGINAL date.
+  it('the 18 November chip dropped on Friday 20 November, "This event only": setOverride(id, "2026-11-18", { 20 Nov 10:00, 20 Nov 11:00 }); the chip is on the 20th, gone from the 18th, every other Wednesday kept (PO decision 7)', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Friday 20 November"),
+    );
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(20, 10), endsAt: nov(20, 11) },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    expect(writes.update).not.toHaveBeenCalled();
+    await expectUndoToast("Moved to Fri 20 Nov, 10:00");
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Friday 20 November"))).toHaveLength(1),
+    );
+    expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(0);
+    for (const day of SPIN_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 18 November",
+    )) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    expect(spinIn(grid)).toHaveLength(5);
+  });
+
+  it('a week block dropped from 10:00 to 14:00 on the 18th: setOverride(id, date, { startsAt, endsAt }), "Moved to Wed 18 Nov, 14:00" with Undo, the block at 14:00', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/week/2026-11-18");
+    const grid = await settledGrid("Week of 16 November 2026");
+    const block = await screen.findByRole("button", { name: SPIN_10_NAME });
+    dragTo(
+      block,
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 18 November, 14:00",
+      }),
+    );
+    const dialog = await changeDialog();
+    expect(within(dialog).getByText(MOVE_HELPER)).toBeInTheDocument();
+    await confirmScope(user, dialog, "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 14), endsAt: nov(18, 15) },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    await expectUndoToast("Moved to Wed 18 Nov, 14:00");
+    expect(
+      await screen.findByRole("button", {
+        name: "Spin, Gym, 14:00 to 15:00, repeats weekly",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: SPIN_10_NAME })).toBeNull();
+  });
+
+  it("Undo of that move with no prior override writes the span back as null - the series' own times (PO decision 5)", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, over } = renderSeriesPage("/week/2026-11-18");
+    const grid = await settledGrid("Week of 16 November 2026");
+    dragTo(
+      await screen.findByRole("button", { name: SPIN_10_NAME }),
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 18 November, 14:00",
+      }),
+    );
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await expectUndoToast("Moved to Wed 18 Nov, 14:00");
+    await user.click(undoButton());
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(2));
+    expect(over.setOverride.mock.calls[1]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: null, endsAt: null },
+    ]);
+    expect(
+      await screen.findByRole("button", { name: SPIN_10_NAME }),
+    ).toBeInTheDocument();
+  });
+
+  it("Undo with a prior override (12:00 - 13:00) writes those values back, not null (PO decision 5)", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    overrideRows = [
+      overrideOf(spin.id, "2026-11-18", {
+        startsAt: nov(18, 12),
+        endsAt: nov(18, 13),
+      }),
+    ];
+    const { user, over } = renderSeriesPage("/week/2026-11-18");
+    const grid = await settledGrid("Week of 16 November 2026");
+    dragTo(
+      await screen.findByRole("button", {
+        name: "Spin, Gym, 12:00 to 13:00, repeats weekly",
+      }),
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 18 November, 14:00",
+      }),
+    );
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 14), endsAt: nov(18, 15) },
+    ]);
+    await expectUndoToast("Moved to Wed 18 Nov, 14:00");
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(2));
+    expect(over.setOverride.mock.calls[1]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 12), endsAt: nov(18, 13) },
+    ]);
+    expect(
+      await screen.findByRole("button", {
+        name: "Spin, Gym, 12:00 to 13:00, repeats weekly",
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('"This event only" on a delete cancels one occurrence (CAL-025 AC-3, Block 6)', {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it('cancelOccurrence(series id, 2026-11-18) once, no removeEvent; that chip goes, four stay; "Deleted Spin" with Undo; focus on the cell', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Delete}");
+    await confirmScope(user, await deleteDialog(), "This event only", "Delete");
+    await waitFor(() => expect(over.cancelOccurrence).toHaveBeenCalledTimes(1));
+    expect(over.cancelOccurrence.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+    ]);
+    expect(actions.removeEvent).not.toHaveBeenCalled();
+    expect(writes.remove).not.toHaveBeenCalled();
+    await expectUndoToast("Deleted Spin");
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(0),
+    );
+    for (const day of SPIN_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 18 November",
+    )) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    await waitFor(() =>
+      expect(monthCell(grid, "Wednesday 18 November")).toHaveFocus(),
+    );
+  });
+
+  it("Undo calls restoreOccurrence with the row cancelOccurrence resolved, once, and the chip is back", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Delete}");
+    await confirmScope(user, await deleteDialog(), "This event only", "Delete");
+    await expectUndoToast("Deleted Spin");
+    const resolved = await over.cancelOccurrence.mock.results[0]?.value;
+    if (resolved?.status !== "ok") throw new Error("cancelOccurrence not ok");
+    await user.click(undoButton());
+    await waitFor(() =>
+      expect(over.restoreOccurrence).toHaveBeenCalledTimes(1),
+    );
+    expect(over.restoreOccurrence.mock.calls[0]?.[0]).toStrictEqual(
+      resolved.row,
+    );
+    expect(over.restoreOccurrence.mock.calls[0]?.[0]?.cancelled).toBe(true);
+    expect(
+      await within(monthCell(grid, "Wednesday 18 November")).findByRole(
+        "button",
+        { name: SPIN_10_NAME },
+      ),
+    ).toBeInTheDocument();
+    await user.keyboard("{Control>}z{/Control}");
+    await settle();
+    expect(over.restoreOccurrence).toHaveBeenCalledTimes(1);
+  });
+
+  it("from the sheet's Delete: Ctrl+Z after the cancellation restores it", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    await user.click(spinChipOn(grid, "Wednesday 18 November"));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    await user.click(screen.getByRole("button", { name: "Delete Spin" }));
+    await confirmScope(user, await deleteDialog(), "This event only", "Delete");
+    await expectUndoToast("Deleted Spin");
+    expect(over.cancelOccurrence.mock.calls).toStrictEqual([
+      [spin.id, "2026-11-18"],
+    ]);
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() =>
+      expect(over.restoreOccurrence).toHaveBeenCalledTimes(1),
+    );
+    expect(
+      await within(monthCell(grid, "Wednesday 18 November")).findByRole(
+        "button",
+        { name: SPIN_10_NAME },
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it('a refused cancellation shows "Couldn\'t save. Try again." and all five chips stay', async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, over } = renderSeriesPage("/month/2026-11");
+    over.cancelOccurrence.mockResolvedValueOnce({ status: "offline" });
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Delete}");
+    await confirmScope(user, await deleteDialog(), "This event only", "Delete");
+    await expectSaveAlert();
+    expect(spinIn(grid)).toHaveLength(5);
+  });
+});
+
+describe('"All events in the series" on an edit updates the series row (CAL-025 AC-4, Blocks 4 and 6)', {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it("a title change from the 18 November sheet: updateEvent(series id, { title }, the series token); every chip reads Spin hard but the 25th, whose override title wins", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    overrideRows = [overrideOf(spin.id, "2026-11-25", { title: "Spin long" })];
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    expect(
+      within(monthCell(grid, "Wednesday 25 November")).getByRole("button", {
+        name: "Spin long, Gym, 10:00 to 11:00, repeats weekly",
+      }),
+    ).toBeInTheDocument();
+    await user.click(spinChipOn(grid, "Wednesday 18 November"));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    await user.type(titleInput(), " hard");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      spin.id,
+      { title: "Spin hard" },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    const hard = "Spin hard, Gym, 10:00 to 11:00, repeats weekly";
+    await waitFor(() =>
+      expect(
+        within(grid).queryAllByRole("button", { name: hard }),
+      ).toHaveLength(4),
+    );
+    for (const day of SPIN_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 25 November",
+    )) {
+      expect(spinIn(monthCell(grid, day), hard), day).toHaveLength(1);
+    }
+    expect(
+      within(monthCell(grid, "Wednesday 25 November")).getByRole("button", {
+        name: "Spin long, Gym, 10:00 to 11:00, repeats weekly",
+      }),
+    ).toBeInTheDocument();
+  });
+});
+
+describe('"All events in the series" on a delete soft-deletes the series (CAL-025 AC-5, Block 6)', {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it('removeEvent(the series row, not the occurrence); all five chips go; "Deleted Spin and all its occurrences" with Undo', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Delete}");
+    await confirmScope(
+      user,
+      await deleteDialog(),
+      "All events in the series",
+      "Delete",
+    );
+    await waitFor(() => expect(actions.removeEvent).toHaveBeenCalledTimes(1));
+    expect(actions.removeEvent.mock.calls[0]?.[0]).toStrictEqual(spin);
+    expect(writes.remove.mock.calls).toStrictEqual([[spin.id, STAMP]]);
+    expect(over.cancelOccurrence).not.toHaveBeenCalled();
+    await expectUndoToast("Deleted Spin and all its occurrences");
+    await waitFor(() => expect(spinIn(grid)).toHaveLength(0));
+  });
+
+  it("Undo calls restoreEvent with the row removeEvent resolved, and the five chips are back", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    await user.click(spinChipOn(grid, "Wednesday 18 November"));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    await user.click(screen.getByRole("button", { name: "Delete Spin" }));
+    await confirmScope(
+      user,
+      await deleteDialog(),
+      "All events in the series",
+      "Delete",
+    );
+    await expectUndoToast("Deleted Spin and all its occurrences");
+    const deletedToken = tokenOf(spin.id);
+    expect(deletedToken).not.toBe(STAMP);
+    const removed = await actions.removeEvent.mock.results[0]?.value;
+    if (removed?.status !== "ok") throw new Error("removeEvent not ok");
+    await user.click(undoButton());
+    await waitFor(() => expect(actions.restoreEvent).toHaveBeenCalledTimes(1));
+    expect(actions.restoreEvent.mock.calls[0]?.[0]).toStrictEqual(removed.row);
+    expect(writes.restore.mock.calls).toStrictEqual([[spin.id, deletedToken]]);
+    await waitFor(() => expect(spinIn(grid)).toHaveLength(5));
+  });
+});
+
+describe('"All events in the series" on a move moves the series by the same days (CAL-025 AC-6, Blocks 5 and 6)', {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  it("the 18 November chip dropped on Friday 20 November: updateEvent(series id, { 6 Nov 10:00, 6 Nov 11:00 }, the series token) - not 20 November", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Friday 20 November"),
+    );
+    const dialog = await changeDialog();
+    expect(within(dialog).getByText(MOVE_HELPER)).toBeInTheDocument();
+    await confirmScope(user, dialog, "All events in the series", "Save");
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      spin.id,
+      { startsAt: nov(6, 10), endsAt: nov(6, 11) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    await expectUndoToast("Moved to Fri 20 Nov, 10:00");
+    // Weekly from Friday 6 November: 6, 13, 20, 27 November, 4 December.
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Friday 20 November"))).toHaveLength(1),
+    );
+    for (const day of [
+      "Friday 6 November",
+      "Friday 13 November",
+      "Friday 27 November",
+      "Friday 4 December",
+    ]) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    for (const day of SPIN_WEDNESDAYS) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(0);
+    }
+  });
+
+  it("Undo puts the series back on 4 November with the moved row's token", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Friday 20 November"),
+    );
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await expectUndoToast("Moved to Fri 20 Nov, 10:00");
+    const movedToken = tokenOf(spin.id);
+    expect(movedToken).not.toBe(STAMP);
+    await user.click(undoButton());
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(2));
+    expect(actions.updateEvent.mock.calls[1]).toStrictEqual([
+      spin.id,
+      { startsAt: nov(4, 10), endsAt: nov(4, 11) },
+      movedToken,
+    ]);
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(1),
+    );
+  });
+
+  it("Escape on the move dialog writes nothing: the series stays on Wednesdays", async () => {
+    useMoves([spinFrom4Nov()]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    dragTo(
+      spinChipOn(grid, "Wednesday 18 November"),
+      monthCell(grid, "Friday 20 November"),
+    );
+    const dialog = await changeDialog();
+    await user.click(
+      within(dialog).getByRole("radio", { name: "All events in the series" }),
+    );
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    await settle();
+    expectNoWrites(actions, over);
+    for (const day of SPIN_WEDNESDAYS) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    expect(spinIn(monthCell(grid, "Friday 20 November"))).toHaveLength(0);
   });
 });

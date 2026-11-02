@@ -858,18 +858,17 @@ describe("a recurring event's chip (CAL-024 AC-4, Block 6)", () => {
   });
 });
 
-// CAL-024 Contract, Block 11 (PO decision 5): until CAL-025 adds "this event
-// only", an occurrence - an Event with occurrenceDate set - can be opened
-// but not moved or deleted. For an occurrence chip the button gets no key
-// command handler (no mapped key calls onCommand, none is preventDefault-ed,
-// each reaches the parent) and no drag handlers (dragProps' onPointerDown and
-// onClickCapture are not attached); click, Enter and Space still call
-// onActivate. Every case renders the occurrence and, in the same case, the
-// plain event it stands beside with the same props, so a chip that disables
-// everything, or nothing, fails here. Block 11's predicate is occurrenceDate,
-// not recurrence: a series row with no occurrenceDate keeps every path.
+// CAL-025 Contract, Block 3 (AC-1's entry points), replacing CAL-024 Block
+// 11's guard: an occurrence - an Event with occurrenceDate set - is moved and
+// deleted from its chip exactly as any other event is. The page decides the
+// scope (the edit-scope dialog); the chip only reports the command. So for
+// an occurrence chip every mapped key calls onCommand(the occurrence, its
+// command, the chip), is preventDefault-ed and does not reach the parent,
+// and a pointerdown reaches dragProps. Each case renders the plain event
+// first, with the same props, so the two are seen to behave identically.
+// Name, glyph and activation are unchanged (the last cases).
 
-describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 11)", () => {
+describe("an occurrence is moved and deleted from its chip like any event (CAL-025 Block 3)", () => {
   type OnCommand = (
     event: Event,
     command: ChipCommand,
@@ -946,10 +945,8 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
     ],
   ];
 
-  // The plain twin runs FIRST in each case, so in RED it is observed to pass
-  // before the occurrence half fails.
   it.each(MAPPED)(
-    "%s on a plain event is still %j; on an occurrence chip it does nothing - no onCommand, not prevented, it reaches the parent",
+    "%s on an occurrence chip is %j, exactly as on a plain event: onCommand(the occurrence, command, the chip) once, prevented, not seen by the parent",
     (_label, command, init) => {
       const plain = renderWired(TIMED);
       expect(press(plain.chip, init)).toBe(true);
@@ -959,28 +956,36 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
       cleanupChip();
       const occurrence = renderWired(OCCURRENCE);
       expect(press(occurrence.chip, init), "occurrence keydown prevented").toBe(
-        false,
+        true,
       );
-      expect(occurrence.onCommand).not.toHaveBeenCalled();
-      expect(occurrence.onParentKey).toHaveBeenCalledWith(init.key);
+      expect(occurrence.onCommand).toHaveBeenCalledTimes(1);
+      expect(occurrence.onCommand).toHaveBeenCalledWith(
+        OCCURRENCE,
+        command,
+        occurrence.chip,
+      );
+      // The occurrence itself, occurrenceDate and all - not the series row.
+      expect(occurrence.onCommand.mock.calls[0]?.[0]?.occurrenceDate).toBe(
+        "2026-11-18",
+      );
+      expect(occurrence.onParentKey).not.toHaveBeenCalled();
     },
   );
 
-  it("the plain block (week/day) still deletes; the occurrence block ignores Delete and Alt+Shift+ArrowDown", () => {
-    const plain = renderWired(TIMED, "block");
-    expect(press(plain.chip, { key: "Delete" })).toBe(true);
-    expect(plain.onCommand).toHaveBeenCalledWith(TIMED, "delete", plain.chip);
-    cleanupChip();
+  it("the occurrence block (week/day) deletes and lengthens: onCommand(occurrence, delete) then (occurrence, lengthen)", () => {
     const occurrence = renderWired(OCCURRENCE, "block");
-    expect(press(occurrence.chip, { key: "Delete" })).toBe(false);
+    expect(press(occurrence.chip, { key: "Delete" })).toBe(true);
     expect(
       press(occurrence.chip, {
         key: "ArrowDown",
         altKey: true,
         shiftKey: true,
       }),
-    ).toBe(false);
-    expect(occurrence.onCommand).not.toHaveBeenCalled();
+    ).toBe(true);
+    expect(occurrence.onCommand.mock.calls).toStrictEqual([
+      [OCCURRENCE, "delete", occurrence.chip],
+      [OCCURRENCE, "lengthen", occurrence.chip],
+    ]);
   });
 
   it("a series row with no occurrenceDate keeps its commands: Delete is still delete", () => {
@@ -997,7 +1002,7 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
     ["chip", undefined],
     ["block", "block"],
   ] as const)(
-    "a pointerdown on a plain %s reaches dragProps; on an occurrence it never does (no drag starts)",
+    "a pointerdown on an occurrence %s reaches dragProps, as on a plain one: a drag can start",
     (_label, variant) => {
       const plain = renderWired(TIMED, variant);
       fireEvent.pointerDown(plain.chip, { button: 0, clientX: 5, clientY: 5 });
@@ -1014,12 +1019,12 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
       fireEvent.click(occurrence.chip);
       expect(
         occurrence.onPointerDown,
-        "occurrence reached dragProps.onPointerDown",
-      ).not.toHaveBeenCalled();
+        "occurrence did not reach dragProps.onPointerDown",
+      ).toHaveBeenCalledTimes(1);
       expect(
         occurrence.onClickCapture,
-        "occurrence reached dragProps.onClickCapture",
-      ).not.toHaveBeenCalled();
+        "occurrence did not reach dragProps.onClickCapture",
+      ).toHaveBeenCalledTimes(1);
     },
   );
 
@@ -1037,7 +1042,7 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
   );
 
   it.each(["{Enter}", " "])(
-    "%j on a focused occurrence chip still calls onActivate(the occurrence)",
+    "%j on a focused occurrence chip still calls onActivate(the occurrence), and no command",
     async (key) => {
       const { user, chip, onActivate, onCommand } = renderWired(OCCURRENCE);
       chip.focus();
@@ -1047,4 +1052,12 @@ describe("an occurrence cannot be moved or deleted from its chip (CAL-024 Block 
       expect(onCommand).not.toHaveBeenCalled();
     },
   );
+
+  it("its name and glyph are unchanged: the occurrence chip reads as the series does, with the repeat glyph", () => {
+    const chip = renderWired(OCCURRENCE).chip;
+    expect(chip).toHaveAccessibleName(
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly",
+    );
+    expect(chip.querySelectorAll('svg[data-glyph="repeat"]')).toHaveLength(1);
+  });
 });
