@@ -8,6 +8,7 @@ import {
 } from "./result";
 import {
   type EventOverride,
+  type EventOverrideInsert,
   type EventOverridePatch,
   fromEventOverridePatch,
   fromNewEventOverride,
@@ -17,12 +18,17 @@ import {
 
 // The event_overrides repository (CAL-005). Same shape as kinds.ts, except
 // that an override has no deleted_at column and so no `remove`: it is
-// cancelled or hard-deleted by the story that owns that behaviour.
+// cancelled or hard-deleted by the story that owns that behaviour. CAL-056
+// Block 4 adds what the outbox drain needs, as events.ts has it (CAL-015
+// Block 8): a client-chosen id on insert, and `get`.
 
 export type EventOverridesRepo = {
   listLive(): Promise<ListResult<EventOverride>>;
   listSince(since: string): Promise<ListResult<EventOverride>>;
-  insert(input: NewEventOverride): Promise<Result<EventOverride>>;
+  /** CAL-056 Block 4: `id`, when given, is POSTed as the row's id. */
+  insert(input: NewEventOverride, id?: string): Promise<Result<EventOverride>>;
+  /** CAL-056 Block 4: one override by id; zero rows → conflict. */
+  get(id: string): Promise<Result<EventOverride>>;
   update(
     id: string,
     patch: EventOverridePatch,
@@ -49,11 +55,17 @@ export function eventOverridesRepo(
           .order("updated_at", { ascending: true }),
         toEventOverride,
       ),
-    insert: async (input) =>
-      fromPostgrestOne(
-        await table().insert(fromNewEventOverride(input)).select("*"),
+    insert: async (input, id) => {
+      const body: EventOverrideInsert & { id?: string } =
+        fromNewEventOverride(input);
+      if (id !== undefined) body.id = id;
+      return fromPostgrestOne(
+        await table().insert(body).select("*"),
         toEventOverride,
-      ),
+      );
+    },
+    get: async (id) =>
+      fromPostgrestOne(await table().select("*").eq("id", id), toEventOverride),
     update: async (id, patch, expectedUpdatedAt) =>
       fromPostgrestOne(
         await table()

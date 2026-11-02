@@ -1,13 +1,17 @@
 import type { Table } from "dexie";
+import type { EventOverridesRepo } from "../data/eventOverrides";
 import type { EventsRepo } from "../data/events";
 import type { KindsRepo } from "../data/kinds";
 import type { Result } from "../data/result";
 import type {
   Event,
+  EventOverride,
+  EventOverridePatch,
   EventPatch,
   Kind,
   KindPatch,
   NewEvent,
+  NewEventOverride,
   NewKind,
 } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "./db";
@@ -25,10 +29,14 @@ import type { Drain } from "./drain";
 export type Repos = {
   events: Pick<EventsRepo, "insert" | "update" | "remove" | "restore" | "get">;
   kinds: Pick<KindsRepo, "insert" | "update" | "remove" | "get">;
+  /** CAL-056 Block 2: an override is only ever inserted or updated. */
+  overrides: Pick<EventOverridesRepo, "insert" | "update" | "get">;
 };
 
-export type CacheTable = "events" | "kinds";
-type Row = Event | Kind;
+export type CacheTable = "events" | "kinds" | "event_overrides";
+/** The tables with a `deletedAt`: the only ones an op may delete or restore. */
+type DeletableTable = "events" | "kinds";
+type Row = Event | Kind | EventOverride;
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -38,12 +46,39 @@ export function nowTs(): string {
   return new Date().toISOString();
 }
 
-/** The cache table an op's `table` names. One type for both, so callers stay generic. */
+/** The cache table an op's `table` names. One type for all, so callers stay generic. */
+export function cacheTable(
+  db: CalendarDb,
+  table: DeletableTable,
+): Table<Event | Kind, string>;
+export function cacheTable(
+  db: CalendarDb,
+  table: CacheTable,
+): Table<Row, string>;
 export function cacheTable(
   db: CalendarDb,
   table: CacheTable,
 ): Table<Row, string> {
-  return (table === "events" ? db.events : db.kinds) as Table<Row, string>;
+  switch (table) {
+    case "events":
+      return db.events as Table<Row, string>;
+    case "kinds":
+      return db.kinds as Table<Row, string>;
+    case "event_overrides":
+      return db.overrides as Table<Row, string>;
+  }
+}
+
+/** The repository behind an op's `table`. */
+function repoOf(repos: Repos, table: CacheTable) {
+  switch (table) {
+    case "events":
+      return repos.events;
+    case "kinds":
+      return repos.kinds;
+    case "event_overrides":
+      return repos.overrides;
+  }
 }
 
 /** The patch without its `undefined` keys: an undefined is "not mentioned" (rows.ts). */
@@ -76,20 +111,23 @@ export function enqueueInsert(
   table: "kinds",
   input: NewKind,
 ): Promise<Kind>;
+export function enqueueInsert(
+  db: CalendarDb,
+  table: "event_overrides",
+  input: NewEventOverride,
+): Promise<EventOverride>;
 export async function enqueueInsert(
   db: CalendarDb,
   table: CacheTable,
-  input: NewEvent | NewKind,
+  input: NewEvent | NewKind | NewEventOverride,
 ): Promise<Row> {
   const id = newId();
   const ts = nowTs();
-  const row = {
-    ...input,
-    id,
-    createdAt: ts,
-    updatedAt: ts,
-    deletedAt: null,
-  } as Row;
+  const stamped = { ...input, id, createdAt: ts, updatedAt: ts };
+  // An override has no deleted_at column, so its row has no deletedAt key.
+  const row = (
+    table === "event_overrides" ? stamped : { ...stamped, deletedAt: null }
+  ) as Row;
   const rows = cacheTable(db, table);
   await db.transaction("rw", rows, db.outbox, async () => {
     await rows.put(row);
@@ -137,16 +175,27 @@ export function enqueueUpdate(
 ): Promise<Kind | null>;
 export function enqueueUpdate(
   db: CalendarDb,
+  table: "event_overrides",
+  id: string,
+  patch: EventOverridePatch,
+): Promise<EventOverride | null>;
+export function enqueueUpdate(
+  db: CalendarDb,
   table: CacheTable,
   id: string,
-  patch: EventPatch | KindPatch,
+  patch: EventPatch | KindPatch | EventOverridePatch,
 ): Promise<Row | null> {
   const named = defined(patch);
   // `updatedAt` is not touched: the patch carries domain fields only.
-  return rewrite(db, table, id, "update", named, (row) => ({
-    ...row,
-    ...named,
-  }));
+  // The overloads pair each table with its own patch type.
+  return rewrite(
+    db,
+    table,
+    id,
+    "update",
+    named,
+    (row) => ({ ...row, ...named }) as Row,
+  );
 }
 
 export function enqueueDelete(
@@ -161,12 +210,12 @@ export function enqueueDelete(
 ): Promise<Kind | null>;
 export function enqueueDelete(
   db: CalendarDb,
-  table: CacheTable,
+  table: DeletableTable,
   id: string,
 ): Promise<Event | Kind | null>;
 export function enqueueDelete(
   db: CalendarDb,
-  table: CacheTable,
+  table: DeletableTable,
   id: string,
 ): Promise<Row | null> {
   // Marked deleted at the client stamp, so it leaves every view at once.
@@ -188,12 +237,12 @@ export function enqueueRestore(
 ): Promise<Kind | null>;
 export function enqueueRestore(
   db: CalendarDb,
-  table: CacheTable,
+  table: DeletableTable,
   id: string,
 ): Promise<Event | Kind | null>;
 export function enqueueRestore(
   db: CalendarDb,
-  table: CacheTable,
+  table: DeletableTable,
   id: string,
 ): Promise<Row | null> {
   return rewrite(db, table, id, "restore", null, (row) => ({
@@ -225,13 +274,14 @@ export async function discardOp(
   const op = await db.outbox.get(seq);
   if (op === undefined) return;
   await db.outbox.delete(seq);
-  if (op.table !== "events" && op.table !== "kinds") return;
+  // Reminder ops arrive with CAL-026.
+  if (op.table === "reminders") return;
   const rows = cacheTable(db, op.table);
   if (op.op === "insert") {
     await rows.delete(op.id);
     return;
   }
-  const fresh = await repos[op.table].get(op.id);
+  const fresh: Result<Row> = await repoOf(repos, op.table).get(op.id);
   if (fresh.status === "ok") await rows.put(fresh.row);
 }
 
