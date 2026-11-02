@@ -1,0 +1,67 @@
+/* components.md, "Edit-scope dialog" (CAL-025 Block 2): two radio options
+   inside the Dialog primitive; buttons as the sheet's. */
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: var(--size-touch);
+  font-size: var(--font-size-md);
+  line-height: var(--line-height-md);
+  cursor: pointer;
+}
+
+.option input {
+  margin: 0;
+  accent-color: var(--color-primary);
+}
+
+.helper {
+  margin: calc(-1 * var(--space-2)) 0 0;
+  padding-left: calc(var(--space-2) + 1.25em);
+  color: var(--color-text-muted);
+}
+
+.button,
+.primary,
+.danger {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.button {
+  border-color: var(--color-border-strong);
+  background: none;
+  color: var(--color-text);
+}
+
+.primary {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+.danger {
+  background: var(--color-danger);
+  color: var(--color-danger-contrast);
+}
+
+.option input:focus-visible,
+.button:focus-visible,
+.primary:focus-visible,
+.danger:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}

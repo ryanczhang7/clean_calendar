@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from "react";
-import type { Event } from "../data/rows";
+import type { Event, EventPatch } from "../data/rows";
 import {
   defaultKindId,
   type EventFormValue,
@@ -21,9 +21,16 @@ import {
   validate,
   valueFromEvent,
 } from "../domain/eventForm";
+import { seriesSpan } from "../domain/moveEvent";
 import { type EventActions, eventActions } from "../sync/eventActions";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import {
+  type OverrideActions,
+  type OverrideFields,
+  overrideActions,
+} from "../sync/overrideActions";
 import { Dialog } from "../ui/Dialog";
+import { type EditScope, EditScopeDialog } from "./EditScopeDialog";
 import { EventForm } from "./EventForm";
 import styles from "./EventSheet.module.css";
 
@@ -33,6 +40,13 @@ import styles from "./EventSheet.module.css";
 // nested "Discard changes?" IS the Dialog primitive, which does trap; it is
 // rendered as a sibling of the sheet, outside it, so a key pressed in it never
 // reaches the sheet's own Escape handler.
+//
+// CAL-025 Contract, Block 4: saving an edit to an OCCURRENCE asks which
+// events first, through the edit-scope dialog - rendered as a sibling too.
+// "This event only" writes an override of the changed fields; "All events in
+// the series" updates the series row, its times moved by the occurrence's
+// wall-clock delta (seriesSpan). A repeat-rule change is always the series'
+// (PO decision 4).
 
 export type SheetRequest =
   | {
@@ -42,7 +56,43 @@ export type SheetRequest =
       allDay: boolean;
       opener: HTMLElement | null;
     }
-  | { mode: "edit"; event: Event; opener: HTMLElement | null };
+  | {
+      mode: "edit";
+      event: Event;
+      opener: HTMLElement | null;
+      /** The series row when `event` is an occurrence; absent otherwise (Block 6 fills it). */
+      series?: Event;
+    };
+
+/** The patch's override fields: everything but `recurrence`, verbatim. */
+function overrideFieldsOf(patch: EventPatch): OverrideFields {
+  const fields: OverrideFields = {};
+  if ("title" in patch) fields.title = patch.title;
+  if ("kindId" in patch) fields.kindId = patch.kindId;
+  if ("startsAt" in patch) fields.startsAt = patch.startsAt;
+  if ("endsAt" in patch) fields.endsAt = patch.endsAt;
+  if ("allDay" in patch) fields.allDay = patch.allDay;
+  if ("location" in patch) fields.location = patch.location;
+  if ("notes" in patch) fields.notes = patch.notes;
+  return fields;
+}
+
+/** The patch for the series row: verbatim, but a time moves by the occurrence's delta. */
+function seriesPatchOf(
+  series: Event,
+  occurrence: Event,
+  patch: EventPatch,
+): EventPatch {
+  if (!("startsAt" in patch) && !("endsAt" in patch)) return patch;
+  const span = seriesSpan(series, occurrence, {
+    startsAt: patch.startsAt ?? occurrence.startsAt,
+    endsAt: patch.endsAt ?? occurrence.endsAt,
+  });
+  const out: EventPatch = { ...patch };
+  if ("startsAt" in patch) out.startsAt = span.startsAt;
+  if ("endsAt" in patch) out.endsAt = span.endsAt;
+  return out;
+}
 
 export const SAVE_FAILED = "Couldn't save. Try again.";
 
@@ -61,8 +111,17 @@ export function EventSheet(props: {
   onClose: () => void;
   /** CAL-013 Block 7: edit mode's Delete button; absent → no button. */
   onDelete?: (event: Event) => void;
+  /** CAL-025 Block 4: an occurrence's "This event only"; default the app's. */
+  overrides?: OverrideActions;
 }): JSX.Element | null {
-  const { request, kinds, actions = eventActions, onClose, onDelete } = props;
+  const {
+    request,
+    kinds,
+    actions = eventActions,
+    overrides = overrideActions,
+    onClose,
+    onDelete,
+  } = props;
   if (request === null) return null;
   return (
     <OpenSheet
@@ -70,6 +129,7 @@ export function EventSheet(props: {
       request={request}
       kinds={kinds}
       actions={actions}
+      overrides={overrides}
       onClose={onClose}
       onDelete={onDelete}
     />
@@ -102,10 +162,11 @@ function OpenSheet(props: {
   request: SheetRequest;
   kinds: KindsSnapshot;
   actions: EventActions;
+  overrides: OverrideActions;
   onClose: () => void;
   onDelete: ((event: Event) => void) | undefined;
 }): JSX.Element {
-  const { kinds, actions, onClose, onDelete } = props;
+  const { kinds, actions, overrides, onClose, onDelete } = props;
   // The request this sheet was opened for; a different one remounts it.
   const [request] = useState(props.request);
   const ids = useId();
@@ -116,6 +177,8 @@ function OpenSheet(props: {
   const [errors, setErrors] = useState<FormErrors>({});
   const [failed, setFailed] = useState(false);
   const [confirming, setConfirming] = useState(false);
+  // CAL-025 Block 4: an occurrence's patch, waiting for the edit-scope answer.
+  const [scoping, setScoping] = useState<EventPatch | null>(null);
   const saving = useRef(false);
   const root = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -168,36 +231,82 @@ function OpenSheet(props: {
       focusField(found);
       return;
     }
-    let kindId: string | null;
-    let pending: ReturnType<EventActions["createEvent"]>;
     if (request.mode === "create") {
-      kindId = value.kindId;
+      const kindId = value.kindId;
       // No live kind to choose: nothing can be saved (unreachable after the
       // walkthrough, which seeds the default kinds).
       if (kindId === null) return;
-      pending = actions.createEvent(toNewEvent(value, kindId));
-    } else {
-      const patch = patchOf(request.event, value);
-      if (Object.keys(patch).length === 0) {
-        onClose();
-        return;
-      }
-      kindId = value.kindId;
-      pending = actions.updateEvent(
-        request.event.id,
-        patch,
-        request.event.updatedAt,
-      );
+      await commit(() => actions.createEvent(toNewEvent(value, kindId)));
+      return;
     }
+    const patch = patchOf(request.event, value);
+    const keys = Object.keys(patch);
+    if (keys.length === 0) {
+      onClose();
+      return;
+    }
+    if (request.event.occurrenceDate === undefined) {
+      await commit(() =>
+        actions.updateEvent(request.event.id, patch, request.event.updatedAt),
+      );
+      return;
+    }
+    // CAL-025 Block 4, PO decision 4: the repeat rule alone is the series'.
+    if (keys.length === 1 && "recurrence" in patch) {
+      await commit(() => writeSeries(patch));
+      return;
+    }
+    setScoping(patch);
+  };
+
+  /** One save: a refusal shows SAVE_FAILED; success remembers the kind and closes. */
+  const commit = async (write: () => Promise<{ status: string }>) => {
     saving.current = true;
-    const result = await pending;
+    const result = await write();
     saving.current = false;
     if (result.status !== "ok") {
       setFailed(true);
       return;
     }
-    if (kindId !== null) storeLastKind(kindId);
+    if (value.kindId !== null) storeLastKind(value.kindId);
     onClose();
+  };
+
+  // CAL-025 Block 4: an occurrence's writes go to its series row, with the
+  // SERIES row's token. An occurrence opened without its series row cannot
+  // reach the series: that write is refused as a failed save.
+  const writeSeries = (patch: EventPatch): Promise<{ status: string }> => {
+    if (request.mode !== "edit" || request.series === undefined) {
+      return Promise.resolve({ status: "missing" });
+    }
+    const { series, event } = request;
+    return actions.updateEvent(
+      event.id,
+      seriesPatchOf(series, event, patch),
+      series.updatedAt,
+    );
+  };
+
+  const confirmScope = async (scope: EditScope) => {
+    const patch = scoping;
+    setScoping(null);
+    if (patch === null || request.mode !== "edit") return;
+    const { event } = request;
+    const date = event.occurrenceDate;
+    if (scope === "series" || date === undefined) {
+      await commit(() => writeSeries(patch));
+      return;
+    }
+    await commit(async () => {
+      const result = await overrides.setOverride(
+        event.id,
+        date,
+        overrideFieldsOf(patch),
+      );
+      // PO decision 4: a repeat change rides on the series row as well.
+      if (result.status !== "ok" || !("recurrence" in patch)) return result;
+      return writeSeries({ recurrence: patch.recurrence });
+    });
   };
 
   const heading =
@@ -238,10 +347,8 @@ function OpenSheet(props: {
               <p className={styles.captured}>{captured}</p>
             )}
           </div>
-          {request.mode === "edit" &&
-          onDelete !== undefined &&
-          // An occurrence cannot be deleted until CAL-025 (Block 11).
-          request.event.occurrenceDate === undefined ? (
+          {/* CAL-025 Block 4: an occurrence has Delete too; the page asks which. */}
+          {request.mode === "edit" && onDelete !== undefined ? (
             <button
               type="button"
               aria-label={`Delete ${request.event.title}`}
@@ -330,6 +437,15 @@ function OpenSheet(props: {
           <p>You've edited this event.</p>
         </Dialog>
       ) : null}
+      <EditScopeDialog
+        open={scoping !== null}
+        kind="change"
+        moving={
+          scoping !== null && ("startsAt" in scoping || "endsAt" in scoping)
+        }
+        onCancel={() => setScoping(null)}
+        onConfirm={(scope) => void confirmScope(scope)}
+      />
     </>
   );
 }
