@@ -7,11 +7,13 @@ import {
   type EventOverrideRow,
   type EventRow,
   type KindRow,
+  type ReminderRow,
   toEvent,
   toEventOverride,
   toKind,
+  toReminder,
 } from "../data/rows";
-import type { CalendarDb, ReminderRow } from "./db";
+import type { CalendarDb } from "./db";
 import type { Sync } from "./hydrate";
 
 // CAL-016 Contract, Block 3. One Realtime channel over the four client
@@ -48,29 +50,6 @@ export type Realtime = {
   apply(table: RealtimeTable, payload: Payload): Promise<void>;
 };
 
-type ReminderPgRow = {
-  id: string;
-  event_id: string;
-  minutes_before: number;
-  sent_at: string | null;
-  occurrence_date: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-/** The reminders row mapper (rows.ts has none yet; CAL-026 may move it). */
-export function toReminderRow(row: ReminderPgRow): ReminderRow {
-  return {
-    id: row.id,
-    eventId: row.event_id,
-    minutesBefore: row.minutes_before,
-    sentAt: row.sent_at,
-    occurrenceDate: row.occurrence_date,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-  };
-}
-
 type Cached = { id: string; updatedAt: string };
 
 /** The Dexie table and the mapper for each streamed table. */
@@ -86,7 +65,7 @@ function target(db: CalendarDb, table: RealtimeTable, raw: unknown) {
     case "kinds":
       return { store: db.kinds, row: toKind(raw as KindRow) };
     case "reminders":
-      return { store: db.reminders, row: toReminderRow(raw as ReminderPgRow) };
+      return { store: db.reminders, row: toReminder(raw as ReminderRow) };
   }
 }
 

@@ -1,3 +1,4 @@
+import { IDBKeyRange } from "fake-indexeddb";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   at,
@@ -8,7 +9,6 @@ import {
   override,
 } from "../test/cache-fixtures";
 import { CalendarDb, DB_NAME, db, type OutboxOp } from "./db";
-import { IDBKeyRange } from "fake-indexeddb";
 
 const STAMP_A = "2026-10-14T09:15:02.123456+00:00";
 
@@ -181,6 +181,8 @@ describe("rows are stored as domain objects (Block 1)", () => {
       minutesBefore: 15,
       sentAt: null,
       occurrenceDate: null,
+      // CAL-026 Block 2: db.reminders holds rows.ts's Reminder.
+      deletedAt: null,
       createdAt: STAMP_A,
       updatedAt: STAMP_A,
     };

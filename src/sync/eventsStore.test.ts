@@ -1,7 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ListResult } from "../data/result";
 import type { Event } from "../data/rows";
+import { installServer, onTable } from "../test/msw";
 import {
   createEventsStore,
   type EventsReader,
@@ -9,8 +11,6 @@ import {
   eventsStore,
   useEventsInRange,
 } from "./eventsStore";
-import { HttpResponse } from "msw";
-import { installServer, onTable } from "../test/msw";
 
 vi.mock(
   "../lib/supabase",
@@ -550,12 +550,15 @@ describe("eventsStore over the app's cache (CAL-014 Block 5)", () => {
       ]),
     );
     const overrides = onTable("event_overrides", () => HttpResponse.json([]));
+    // CAL-026 Block 7: the app's sync pulls reminders after overrides.
+    const reminders = onTable("reminders", () => HttpResponse.json([]));
     await eventsStore.refresh();
     const since = (r: typeof kinds) =>
       r.map((q) => q.url.searchParams.get("updated_at"));
     expect(since(kinds)).toStrictEqual([`gt.${EPOCH}`]);
     expect(since(events)).toStrictEqual([`gt.${EPOCH}`]);
     expect(since(overrides)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(reminders)).toStrictEqual([`gt.${EPOCH}`]);
     expect(eventsStore.getSnapshot().events.map((e) => e.title)).toStrictEqual([
       "From the server",
     ]);

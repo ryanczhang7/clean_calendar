@@ -133,14 +133,14 @@ isOneToOne: false
                   ]
                 },"reminders": {
                   Row: {
-                    "created_at": string,"event_id": string,"id": string,"minutes_before": number,"occurrence_date": string | null,"sent_at": string | null,"updated_at": string
+                    "created_at": string,"deleted_at": string | null,"event_id": string,"id": string,"minutes_before": number,"occurrence_date": string | null,"sent_at": string | null,"updated_at": string
                   }
                   ComputedFields: never
                   Insert: {
-                    "created_at"?: string,"event_id": string,"id"?: string,"minutes_before": number,"occurrence_date"?: string | null,"sent_at"?: string | null,"updated_at"?: string
+                    "created_at"?: string,"deleted_at"?: string | null,"event_id": string,"id"?: string,"minutes_before": number,"occurrence_date"?: string | null,"sent_at"?: string | null,"updated_at"?: string
                   }
                   Update: {
-                    "created_at"?: string,"event_id"?: string,"id"?: string,"minutes_before"?: number,"occurrence_date"?: string | null,"sent_at"?: string | null,"updated_at"?: string
+                    "created_at"?: string,"deleted_at"?: string | null,"event_id"?: string,"id"?: string,"minutes_before"?: number,"occurrence_date"?: string | null,"sent_at"?: string | null,"updated_at"?: string
                   }
                   Relationships: [
                     {

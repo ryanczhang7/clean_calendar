@@ -1,5 +1,10 @@
 import { IDBFactory, IDBKeyRange } from "fake-indexeddb";
-import type { EventOverride, Event as EventRow, Kind } from "../data/rows";
+import type {
+  EventOverride,
+  Event as EventRow,
+  Kind,
+  Reminder,
+} from "../data/rows";
 import { CalendarDb } from "../sync/db";
 
 // CAL-014 Contract, Block 7: shared builders for the cache suites. Every
@@ -129,6 +134,24 @@ export function override(
     allDay: null,
     location: null,
     notes: null,
+    createdAt: STAMP,
+    updatedAt: STAMP,
+    ...extra,
+  };
+}
+
+/**
+ * A cached reminder (CAL-026 Block 2): by default the live template
+ * (occurrenceDate null) of ev(1), 15 minutes before, unsent.
+ */
+export function reminder(n: number, extra: Partial<Reminder> = {}): Reminder {
+  return {
+    id: `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+    eventId: ev(1, at(10, 1), at(10, 1, 1)).id,
+    minutesBefore: 15,
+    sentAt: null,
+    occurrenceDate: null,
+    deletedAt: null,
     createdAt: STAMP,
     updatedAt: STAMP,
     ...extra,

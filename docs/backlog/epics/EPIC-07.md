@@ -2,7 +2,7 @@
 id: EPIC-07
 title: Reminders that fire with the app closed
 status: todo
-stories: [CAL-026, CAL-027, CAL-028, CAL-029]
+stories: [CAL-026, CAL-057, CAL-027, CAL-028, CAL-029]
 ---
 
 ## Goal
@@ -25,10 +25,11 @@ permission stops receiving and is pruned.
 
 ## Stories
 
-1. CAL-026 — reminder field on the event, stored and synced
-2. CAL-027 — notification permission and push subscription per device
-3. CAL-028 — the send-reminders function on a one-minute schedule
-4. CAL-029 — reminders for every occurrence of a recurring event
+1. CAL-026 — reminders stored and synced through the outbox
+2. CAL-057 — the reminder field on the event sheet and the bell on the chip
+3. CAL-027 — notification permission and push subscription per device
+4. CAL-028 — the send-reminders function on a one-minute schedule
+5. CAL-029 — reminders for every occurrence of a recurring event
 
 ## Deliberately not in this epic
 

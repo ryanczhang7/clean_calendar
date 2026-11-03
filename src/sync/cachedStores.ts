@@ -1,5 +1,5 @@
 import { liveQuery, type Subscription } from "dexie";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
 import {
   ensureDefaultKinds,
   type SeedOutcome,
@@ -10,6 +10,7 @@ import type { EventsSnapshot, EventsStore } from "./eventsStore";
 import type { Sync } from "./hydrate";
 import type { KindsSnapshot, KindsStore } from "./kindsStore";
 import type { OverridesSnapshot, OverridesStore } from "./overridesStore";
+import type { RemindersSnapshot, RemindersStore } from "./remindersStore";
 import { liveSorted, snapshotOf } from "./snapshots";
 
 // The cached stores (CAL-014 Contract, Block 4): the KindsStore / EventsStore
@@ -221,6 +222,24 @@ export function createCachedOverridesStore(
     sync,
     () => db.overrides.toArray(),
     (status, rows): OverridesSnapshot => ({ status, overrides: ordered(rows) }),
+  );
+  return {
+    refresh: table.refresh,
+    subscribe: table.subscribe,
+    getSnapshot: table.getSnapshot,
+  };
+}
+
+/** CAL-026 Block 8: every cached reminder, in the cache's order. */
+export function createCachedRemindersStore(
+  db: CalendarDb,
+  sync: Sync,
+): RemindersStore {
+  const table = cachedTable<Reminder, RemindersSnapshot>(
+    db,
+    sync,
+    () => db.reminders.toArray(),
+    (status, reminders) => ({ status, reminders }),
   );
   return {
     refresh: table.refresh,

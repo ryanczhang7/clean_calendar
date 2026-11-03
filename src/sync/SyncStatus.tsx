@@ -1,11 +1,16 @@
 import { type JSX, useCallback, useEffect, useState } from "react";
-import type { EventOverridePatch, EventPatch, KindPatch } from "../data/rows";
+import type {
+  EventOverridePatch,
+  EventPatch,
+  KindPatch,
+  ReminderPatch,
+} from "../data/rows";
 import { Dialog } from "../ui/Dialog";
 import { useMaybeToast } from "../ui/Toast";
 import { db as appDb, type CalendarDb } from "./db";
 import { conflictCopy, type Drain, type DrainNotice } from "./drain";
 import {
-  cacheTable,
+  type CacheTable,
   discardOp,
   enqueueUpdate,
   type Repos,
@@ -53,6 +58,32 @@ const drainedCopy = (count: number): string =>
 
 type Problem = { seq: number; title: string; message: string };
 
+/** A conflict's dropped patch again, over the fresh row, as a new op on its own table. */
+function redoUpdate(
+  db: CalendarDb,
+  table: CacheTable,
+  id: string,
+  patch: unknown,
+): Promise<unknown> {
+  switch (table) {
+    case "events":
+      return enqueueUpdate(db, "events", id, patch as EventPatch);
+    case "kinds":
+      return enqueueUpdate(db, "kinds", id, patch as KindPatch);
+    // CAL-025 Block 7.
+    case "event_overrides":
+      return enqueueUpdate(
+        db,
+        "event_overrides",
+        id,
+        patch as EventOverridePatch,
+      );
+    // CAL-026 Block 9.
+    case "reminders":
+      return enqueueUpdate(db, "reminders", id, patch as ReminderPatch);
+  }
+}
+
 /** The failed ops, in seq order, each named by its cache row's title. */
 async function readProblems(db: CalendarDb): Promise<Problem[]> {
   const failed = (await db.outbox.orderBy("seq").toArray()).filter(
@@ -62,9 +93,16 @@ async function readProblems(db: CalendarDb): Promise<Problem[]> {
   for (const op of failed) {
     if (op.seq === undefined) continue;
     let title = "";
-    if (op.table === "events" || op.table === "kinds") {
-      const row = await cacheTable(db, op.table).get(op.id);
-      if (row !== undefined) title = "title" in row ? row.title : row.name;
+    if (op.table === "events") {
+      title = (await db.events.get(op.id))?.title ?? "";
+    } else if (op.table === "kinds") {
+      title = (await db.kinds.get(op.id))?.name ?? "";
+    } else if (op.table === "reminders") {
+      // CAL-026 Block 9: a reminder has no title; its event's.
+      const row = await db.reminders.get(op.id);
+      if (row !== undefined) {
+        title = (await db.events.get(row.eventId))?.title ?? "";
+      }
     } else {
       // CAL-025 Block 7: an override by its own title, else its series'.
       const row = await db.overrides.get(op.id);
@@ -110,29 +148,12 @@ export function SyncStatus(props: {
             action: {
               label: "Redo",
               onClick: () => {
-                // The dropped patch again, over the fresh row, as a new op
-                // on the table it came from (CAL-025 Block 7: overrides too).
-                const redo =
-                  notice.table === "events"
-                    ? enqueueUpdate(
-                        db,
-                        "events",
-                        notice.id,
-                        notice.patch as EventPatch,
-                      )
-                    : notice.table === "event_overrides"
-                      ? enqueueUpdate(
-                          db,
-                          "event_overrides",
-                          notice.id,
-                          notice.patch as EventOverridePatch,
-                        )
-                      : enqueueUpdate(
-                          db,
-                          "kinds",
-                          notice.id,
-                          notice.patch as KindPatch,
-                        );
+                const redo = redoUpdate(
+                  db,
+                  notice.table,
+                  notice.id,
+                  notice.patch,
+                );
                 void redo.then(() => drain.run());
               },
             },

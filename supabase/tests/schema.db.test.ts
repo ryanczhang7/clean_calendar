@@ -98,6 +98,8 @@ const COLUMNS: Record<(typeof ALL_TABLES)[number], Col[]> = {
     ["minutes_before", INT, "NO"],
     ["sent_at", TS, "YES"],
     ["occurrence_date", DATE, "YES"],
+    // CAL-026 Block 1 (migration 0004): a cleared reminder is soft-deleted.
+    ["deleted_at", TS, "YES"],
   ],
   push_subscriptions: [
     ...COMMON,
@@ -239,6 +241,49 @@ describe("AC-1: uniqueness rules", () => {
       db`insert into public.reminders (event_id, minutes_before)
          values (${eventId as string}, 20)`,
     ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  // CAL-026 AC-6, Block 1: the key is unchanged by migration 0004, so a
+  // soft-deleted template still holds (event_id, null) - which is why a
+  // cleared reminder is restored, never inserted a second time (AC-3).
+  it("a soft-deleted template still holds its (event_id, occurrence_date) key: a second template insert for that event is refused", async () => {
+    const { eventId } = await insertParents(env, "reminders");
+    const db = sql(env);
+    const [first] = await db<{ deleted_at: string | null }[]>`
+      insert into public.reminders (event_id, minutes_before)
+      values (${eventId as string}, 10)
+      returning deleted_at`;
+    expect(first?.deleted_at).toBeNull();
+    await db`update public.reminders set deleted_at = now()
+             where event_id = ${eventId as string}`;
+    const cleared = await db<{ n: number }[]>`
+      select count(*)::int as n from public.reminders
+      where event_id = ${eventId as string} and deleted_at is not null`;
+    expect(cleared[0]?.n).toBe(1);
+    await expect(
+      db`insert into public.reminders (event_id, minutes_before)
+         values (${eventId as string}, 20)`,
+    ).rejects.toMatchObject({
+      code: "23505",
+      constraint_name: "reminders_event_occurrence_key",
+    });
+  });
+
+  it("a soft-deleted template is restored by clearing deleted_at on the same row", async () => {
+    const { eventId } = await insertParents(env, "reminders");
+    const db = sql(env);
+    const [row] = await db<{ id: string }[]>`
+      insert into public.reminders (event_id, minutes_before)
+      values (${eventId as string}, 10) returning id`;
+    await db`update public.reminders set deleted_at = now() where id = ${row?.id as string}`;
+    await db`update public.reminders set deleted_at = null, minutes_before = 30
+             where id = ${row?.id as string}`;
+    const rows = await db<{ id: string; minutes_before: number; deleted_at: string | null }[]>`
+      select id, minutes_before, deleted_at from public.reminders
+      where event_id = ${eventId as string}`;
+    expect(rows).toEqual([
+      { id: row?.id, minutes_before: 30, deleted_at: null },
+    ]);
   });
 
   it("push_subscriptions is unique on endpoint", async () => {

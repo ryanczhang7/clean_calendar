@@ -2,6 +2,7 @@ import { type Mock, vi } from "vitest";
 import type { EventOverridesRepo } from "../data/eventOverrides";
 import type { EventsRepo } from "../data/events";
 import type { KindsRepo } from "../data/kinds";
+import type { RemindersRepo } from "../data/reminders";
 import type { Result } from "../data/result";
 import type { NewEvent, NewKind } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "../sync/db";
@@ -23,6 +24,11 @@ type EventsPick = Pick<
 type KindsPick = Pick<KindsRepo, "insert" | "update" | "remove" | "get">;
 /** CAL-056 Block 2: the override members the drain and `discardOp` need. */
 type OverridesPick = Pick<EventOverridesRepo, "insert" | "update" | "get">;
+/** CAL-026 Block 5: a reminder is inserted, updated, soft-deleted and restored. */
+type RemindersPick = Pick<
+  RemindersRepo,
+  "insert" | "update" | "remove" | "restore" | "get"
+>;
 
 export type FakeRepos = {
   events: {
@@ -42,6 +48,13 @@ export type FakeRepos = {
     insert: Mock<OverridesPick["insert"]>;
     update: Mock<OverridesPick["update"]>;
     get: Mock<OverridesPick["get"]>;
+  };
+  reminders: {
+    insert: Mock<RemindersPick["insert"]>;
+    update: Mock<RemindersPick["update"]>;
+    remove: Mock<RemindersPick["remove"]>;
+    restore: Mock<RemindersPick["restore"]>;
+    get: Mock<RemindersPick["get"]>;
   };
 };
 
@@ -66,6 +79,13 @@ export function fakeRepos(): FakeRepos {
       insert: vi.fn<OverridesPick["insert"]>(offline),
       update: vi.fn<OverridesPick["update"]>(offline),
       get: vi.fn<OverridesPick["get"]>(offline),
+    },
+    reminders: {
+      insert: vi.fn<RemindersPick["insert"]>(offline),
+      update: vi.fn<RemindersPick["update"]>(offline),
+      remove: vi.fn<RemindersPick["remove"]>(offline),
+      restore: vi.fn<RemindersPick["restore"]>(offline),
+      get: vi.fn<RemindersPick["get"]>(offline),
     },
   };
 }

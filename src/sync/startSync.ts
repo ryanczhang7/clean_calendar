@@ -1,6 +1,7 @@
 import { eventOverridesRepo } from "../data/eventOverrides";
 import { eventsRepo } from "../data/events";
 import { kindsRepo } from "../data/kinds";
+import { remindersRepo as createRemindersRepo } from "../data/reminders";
 import { supabase } from "../lib/supabase";
 import { db } from "./db";
 import { createDrain, type Drain } from "./drain";
@@ -17,11 +18,15 @@ import { createRealtime, type Realtime } from "./realtime";
 /** One overrides repository for the pull and the drain (CAL-056 Block 4). */
 const overridesRepo = eventOverridesRepo(supabase);
 
+/** One reminders repository for the pull and the drain (CAL-026 Block 7). */
+const remindersRepo = createRemindersRepo(supabase);
+
 /** The app's sync over the real repositories and `db`. */
 export const appSync: Sync = createSync(db, {
   kinds: kindsRepo(supabase),
   events: eventsRepo(supabase),
   overrides: overridesRepo,
+  reminders: remindersRepo,
 });
 
 /** The repositories the app's drain and the sync problems dialog write through. */
@@ -29,6 +34,7 @@ export const appRepos: Repos = {
   events: eventsRepo(supabase),
   kinds: kindsRepo(supabase),
   overrides: overridesRepo,
+  reminders: remindersRepo,
 };
 
 /** The app's outbox drain over `db`; online is `navigator.onLine`. */

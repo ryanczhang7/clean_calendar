@@ -8,7 +8,7 @@ import {
   vi,
 } from "vitest";
 import type { ListResult } from "../data/result";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
 import {
   at,
   brokenDb,
@@ -17,6 +17,7 @@ import {
   freshDb,
   kind,
   override,
+  reminder,
   T1,
   T2,
   T3,
@@ -42,6 +43,10 @@ type Repos = {
   overrides: {
     listSince: Mock<(since: string) => Promise<ListResult<EventOverride>>>;
   };
+  /** CAL-026 Block 7: pulled after overrides. */
+  reminders: {
+    listSince: Mock<(since: string) => Promise<ListResult<Reminder>>>;
+  };
 };
 
 let db: CalendarDb;
@@ -63,6 +68,11 @@ beforeEach(() => {
     },
     overrides: {
       listSince: vi.fn<(since: string) => Promise<ListResult<EventOverride>>>(
+        async () => ok([]),
+      ),
+    },
+    reminders: {
+      listSince: vi.fn<(since: string) => Promise<ListResult<Reminder>>>(
         async () => ok([]),
       ),
     },
@@ -506,5 +516,136 @@ describe("rows with a pending op are not pulled over (CAL-015 Block 5)", () => {
     await db.outbox.delete(seq);
     await hydrate(db, asRepos(repos));
     expect((await db.events.get(mine.id))?.title).toBe("Server");
+  });
+});
+
+// CAL-026 AC-5, Contract Block 7: reminders are the fourth table of a pass,
+// pulled after overrides into db.reminders with their own mark
+// (`mark:reminders`), soft-deleted rows included, and a row with a queued or
+// failed reminders op is not written over (OUTBOX_TABLE gains reminders).
+describe("reminders are pulled after overrides (CAL-026 AC-5, Block 7)", () => {
+  const liveTemplate = reminder(1, { updatedAt: T2 });
+  const clearedTemplate = reminder(2, {
+    eventId: ev(2, at(10, 15, 9), at(10, 15, 10)).id,
+    deletedAt: T4,
+    updatedAt: T4,
+  });
+  const materialised = reminder(3, {
+    occurrenceDate: "2026-10-14",
+    sentAt: "2026-10-14T08:45:00.000001+00:00",
+    updatedAt: T3,
+  });
+
+  it("the first pass asks reminders once, for rows since EPOCH, after overrides", async () => {
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(repos.reminders.listSince.mock.calls).toStrictEqual([[EPOCH]]);
+    const first = (m: Mock) => m.mock.invocationCallOrder[0] ?? -1;
+    expect(first(repos.reminders.listSince)).toBeGreaterThan(
+      first(repos.overrides.listSince),
+    );
+    expect(first(repos.overrides.listSince)).toBeGreaterThan(0);
+  });
+
+  it("writes every reminder returned - live, soft-deleted, per-occurrence - into db.reminders exactly as returned, and stores mark:reminders as the greatest updatedAt", async () => {
+    repos.reminders.listSince.mockResolvedValueOnce(
+      ok([liveTemplate, clearedTemplate, materialised]),
+    );
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(byId(await db.reminders.toArray())).toStrictEqual(
+      byId([liveTemplate, clearedTemplate, materialised]),
+    );
+    expect(await marks()).toStrictEqual([["mark:reminders", T4]]);
+  });
+
+  it("a second pass asks reminders since the mark the first stored, byte for byte", async () => {
+    repos.reminders.listSince.mockResolvedValueOnce(ok([liveTemplate]));
+    await hydrate(db, asRepos(repos));
+    await hydrate(db, asRepos(repos));
+    expect(repos.reminders.listSince.mock.calls).toStrictEqual([[EPOCH], [T2]]);
+  });
+
+  it("a newer server copy replaces the cached template - a clear from another device reaches this one", async () => {
+    await db.reminders.put(liveTemplate);
+    const clearedThere = { ...liveTemplate, deletedAt: T5, updatedAt: T5 };
+    repos.reminders.listSince.mockResolvedValueOnce(ok([clearedThere]));
+    await hydrate(db, asRepos(repos));
+    expect(await db.reminders.toArray()).toStrictEqual([clearedThere]);
+  });
+
+  it.each(["queued", "failed"] as const)(
+    "a server reminder whose id has a %s reminders op is not written over the cached one; the mark still moves",
+    async (status) => {
+      const mine = { ...liveTemplate, minutesBefore: 60 };
+      await db.reminders.put(mine);
+      await db.outbox.add({
+        op: "update",
+        table: "reminders",
+        id: mine.id,
+        patch: { minutesBefore: 60 },
+        baseUpdatedAt: T2,
+        clientTs: "2026-10-21T09:00:00.000Z",
+        status,
+        ...(status === "failed"
+          ? { error: { code: "22P02", message: "bad", http: 400 } }
+          : {}),
+      });
+      repos.reminders.listSince.mockResolvedValueOnce(
+        ok([
+          { ...liveTemplate, minutesBefore: 5, updatedAt: T3 },
+          materialised,
+        ]),
+      );
+      await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+        status: "ok",
+      });
+      expect(byId(await db.reminders.toArray())).toStrictEqual(
+        byId([mine, materialised]),
+      );
+      expect((await db.meta.get("mark:reminders"))?.value).toBe(T3);
+    },
+  );
+
+  it("an op on another table with the same id does not hold the reminder", async () => {
+    await db.reminders.put(liveTemplate);
+    await db.outbox.add({
+      op: "update",
+      table: "events",
+      id: liveTemplate.id,
+      patch: { title: "x" },
+      baseUpdatedAt: T1,
+      clientTs: "2026-10-21T09:00:00.000Z",
+      status: "queued",
+    });
+    const theirs = { ...liveTemplate, minutesBefore: 5, updatedAt: T3 };
+    repos.reminders.listSince.mockResolvedValueOnce(ok([theirs]));
+    await hydrate(db, asRepos(repos));
+    expect(await db.reminders.toArray()).toStrictEqual([theirs]);
+  });
+
+  it("overrides offline: reminders are never asked, and the result is unavailable", async () => {
+    repos.overrides.listSince.mockResolvedValueOnce({ status: "offline" });
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "unavailable",
+    });
+    expect(repos.reminders.listSince).not.toHaveBeenCalled();
+  });
+
+  it("reminders offline after the other three answered: their marks move, the reminders mark does not, the cache keeps its reminders, and the result is unavailable", async () => {
+    await db.reminders.put(liveTemplate);
+    await db.meta.put({ key: "mark:reminders", value: T2 });
+    repos.overrides.listSince.mockResolvedValueOnce(ok([cancelledOverride]));
+    repos.reminders.listSince.mockResolvedValueOnce({ status: "offline" });
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "unavailable",
+    });
+    expect(await marks()).toStrictEqual([
+      ["mark:overrides", T1],
+      ["mark:reminders", T2],
+    ]);
+    expect(await db.reminders.toArray()).toStrictEqual([liveTemplate]);
   });
 });

@@ -11,6 +11,7 @@ type Tables = Database["public"]["Tables"];
 export type KindRow = Tables["kinds"]["Row"];
 export type EventRow = Tables["events"]["Row"];
 export type EventOverrideRow = Tables["event_overrides"]["Row"];
+export type ReminderRow = Tables["reminders"]["Row"];
 
 export type Kind = {
   id: string;
@@ -71,6 +72,20 @@ export type EventOverride = {
   updatedAt: string;
 };
 
+/** CAL-026 Block 2. A row with `occurrenceDate` null is the event's template;
+ *  a dated row is one the scheduler materialised for an occurrence. */
+export type Reminder = {
+  id: string;
+  eventId: string;
+  /** May be negative: -540 is 09:00 on an all-day event's day (CAL-057). */
+  minutesBefore: number;
+  sentAt: string | null;
+  occurrenceDate: string | null;
+  deletedAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type NewKind = Omit<
   Kind,
   "id" | "createdAt" | "updatedAt" | "deletedAt"
@@ -84,14 +99,21 @@ export type NewEventOverride = Omit<
   "id" | "createdAt" | "updatedAt"
 >;
 
+export type NewReminder = Omit<
+  Reminder,
+  "id" | "createdAt" | "updatedAt" | "deletedAt"
+>;
+
 export type KindPatch = Partial<NewKind>;
 export type EventPatch = Partial<NewEvent>;
 export type EventOverridePatch = Partial<NewEventOverride>;
+export type ReminderPatch = Partial<Pick<NewReminder, "minutesBefore">>;
 
 type Bookkeeping = "id" | "created_at" | "updated_at" | "deleted_at";
 export type KindInsert = Omit<KindRow, Bookkeeping>;
 export type EventInsert = Omit<EventRow, Bookkeeping>;
 export type EventOverrideInsert = Omit<EventOverrideRow, Bookkeeping>;
+export type ReminderInsert = Omit<ReminderRow, Bookkeeping>;
 
 // --- helpers -----------------------------------------------------------------
 
@@ -306,5 +328,35 @@ export function fromEventOverridePatch(
   put(out, "all_day", patch.allDay);
   put(out, "location", patch.location);
   put(out, "notes", patch.notes);
+  return out;
+}
+
+// --- reminders (CAL-026 Block 2) -----------------------------------------------
+
+export function toReminder(row: ReminderRow): Reminder {
+  return {
+    id: row.id,
+    eventId: row.event_id,
+    minutesBefore: row.minutes_before,
+    sentAt: row.sent_at,
+    occurrenceDate: row.occurrence_date,
+    deletedAt: row.deleted_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+export function fromNewReminder(input: NewReminder): ReminderInsert {
+  return {
+    event_id: input.eventId,
+    minutes_before: input.minutesBefore,
+    sent_at: input.sentAt,
+    occurrence_date: input.occurrenceDate,
+  };
+}
+
+export function fromReminderPatch(patch: ReminderPatch): Partial<ReminderRow> {
+  const out: Partial<ReminderRow> = {};
+  put(out, "minutes_before", patch.minutesBefore);
   return out;
 }

@@ -45,7 +45,6 @@ import {
   type RealtimeClient,
   type RealtimeTable,
   TABLES,
-  toReminderRow,
 } from "./realtime";
 
 vi.mock(
@@ -718,12 +717,32 @@ describe("catch-up on rejoin and on return to the foreground (AC-5)", () => {
   });
 });
 
-describe("toReminderRow (PO decision 7)", () => {
-  it("maps every column, a sent reminder for one occurrence", () => {
-    expect(toReminderRow(reminderRowFull)).toStrictEqual(reminderFull);
+// CAL-026 Block 2: realtime.ts maps reminders with rows.ts's toReminder
+// (deleted_at included) instead of its own toReminderRow; the mapper itself
+// is pinned in rows.test.ts. What this suite owns is that a streamed reminder
+// reaches the cache whole - and a streamed soft-delete with its deletedAt.
+describe("reminders stream through rows.ts's toReminder (CAL-026 Block 2)", () => {
+  it("an INSERT reaches the cache with every column mapped, deleted_at included", async () => {
+    await make().apply(
+      "reminders",
+      changed("INSERT", "reminders", reminderRowFull),
+    );
+    expect(await db.reminders.toArray()).toStrictEqual([reminderFull]);
   });
 
-  it("keeps the nulls of an unsent reminder for every occurrence", () => {
-    expect(toReminderRow(reminderRowNulls)).toStrictEqual(reminderNulls);
+  it("an UPDATE that soft-deletes a cached template replaces it with the deleted row, deletedAt set", async () => {
+    await db.reminders.put(reminderNulls);
+    const deletedAt = "2026-10-03T10:00:00.000009+00:00";
+    await make().apply(
+      "reminders",
+      changed("UPDATE", "reminders", {
+        ...reminderRowNulls,
+        deleted_at: deletedAt,
+        updated_at: deletedAt,
+      }),
+    );
+    expect(await db.reminders.toArray()).toStrictEqual([
+      { ...reminderNulls, deletedAt, updatedAt: deletedAt },
+    ]);
   });
 });
