@@ -1,5 +1,5 @@
 import Dexie, { type DexieOptions, type Table } from "dexie";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
 
 // The local cache (CAL-014 Contract, Block 1; architecture.md, "Where state
 // lives"): the UI renders only from this copy. Rows are the domain objects of
@@ -23,15 +23,6 @@ export type OutboxOp = {
   error?: { code: string; message: string; http?: number };
 };
 export type MetaRow = { key: string; value: string };
-export type ReminderRow = {
-  id: string;
-  eventId: string;
-  minutesBefore: number;
-  sentAt: string | null;
-  occurrenceDate: string | null;
-  createdAt: string;
-  updatedAt: string;
-};
 
 export const DB_NAME = "clean-calendar";
 
@@ -39,8 +30,9 @@ export class CalendarDb extends Dexie {
   kinds!: Table<Kind, string>;
   events!: Table<Event, string>;
   overrides!: Table<EventOverride, string>;
-  /** Declared here, filled by CAL-026. */
-  reminders!: Table<ReminderRow, string>;
+  /** CAL-026 Block 2. A cached row with no `deletedAt` key (streamed before
+   *  that story) counts as live: `deletedAt == null`. */
+  reminders!: Table<Reminder, string>;
   /** The pending writes, in `seq` order (CAL-015; outbox.ts, drain.ts). */
   outbox!: Table<OutboxOp, number>;
   /** The high-water marks, `mark:<table>` → the greatest `updatedAt` seen. */

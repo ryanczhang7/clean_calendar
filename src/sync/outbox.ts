@@ -2,6 +2,7 @@ import type { Table } from "dexie";
 import type { EventOverridesRepo } from "../data/eventOverrides";
 import type { EventsRepo } from "../data/events";
 import type { KindsRepo } from "../data/kinds";
+import type { RemindersRepo } from "../data/reminders";
 import type { Result } from "../data/result";
 import type {
   Event,
@@ -13,6 +14,9 @@ import type {
   NewEvent,
   NewEventOverride,
   NewKind,
+  NewReminder,
+  Reminder,
+  ReminderPatch,
 } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "./db";
 // Types only: drain.ts imports this module at run time, never the reverse.
@@ -31,12 +35,18 @@ export type Repos = {
   kinds: Pick<KindsRepo, "insert" | "update" | "remove" | "get">;
   /** CAL-056 Block 2: an override is only ever inserted or updated. */
   overrides: Pick<EventOverridesRepo, "insert" | "update" | "get">;
+  /** CAL-026 Block 5: a reminder is soft-deleted and restored, as an event. */
+  reminders: Pick<
+    RemindersRepo,
+    "insert" | "update" | "remove" | "restore" | "get"
+  >;
 };
 
-export type CacheTable = "events" | "kinds" | "event_overrides";
+export type CacheTable = "events" | "kinds" | "event_overrides" | "reminders";
 /** The tables with a `deletedAt`: the only ones an op may delete or restore. */
-type DeletableTable = "events" | "kinds";
-type Row = Event | Kind | EventOverride;
+type DeletableTable = "events" | "kinds" | "reminders";
+type Deletable = Event | Kind | Reminder;
+type Row = Event | Kind | EventOverride | Reminder;
 
 export function newId(): string {
   return crypto.randomUUID();
@@ -50,7 +60,7 @@ export function nowTs(): string {
 export function cacheTable(
   db: CalendarDb,
   table: DeletableTable,
-): Table<Event | Kind, string>;
+): Table<Deletable, string>;
 export function cacheTable(
   db: CalendarDb,
   table: CacheTable,
@@ -66,6 +76,8 @@ export function cacheTable(
       return db.kinds as Table<Row, string>;
     case "event_overrides":
       return db.overrides as Table<Row, string>;
+    case "reminders":
+      return db.reminders as Table<Row, string>;
   }
 }
 
@@ -78,6 +90,8 @@ function repoOf(repos: Repos, table: CacheTable) {
       return repos.kinds;
     case "event_overrides":
       return repos.overrides;
+    case "reminders":
+      return repos.reminders;
   }
 }
 
@@ -116,10 +130,15 @@ export function enqueueInsert(
   table: "event_overrides",
   input: NewEventOverride,
 ): Promise<EventOverride>;
+export function enqueueInsert(
+  db: CalendarDb,
+  table: "reminders",
+  input: NewReminder,
+): Promise<Reminder>;
 export async function enqueueInsert(
   db: CalendarDb,
   table: CacheTable,
-  input: NewEvent | NewKind | NewEventOverride,
+  input: NewEvent | NewKind | NewEventOverride | NewReminder,
 ): Promise<Row> {
   const id = newId();
   const ts = nowTs();
@@ -181,9 +200,15 @@ export function enqueueUpdate(
 ): Promise<EventOverride | null>;
 export function enqueueUpdate(
   db: CalendarDb,
+  table: "reminders",
+  id: string,
+  patch: ReminderPatch,
+): Promise<Reminder | null>;
+export function enqueueUpdate(
+  db: CalendarDb,
   table: CacheTable,
   id: string,
-  patch: EventPatch | KindPatch | EventOverridePatch,
+  patch: EventPatch | KindPatch | EventOverridePatch | ReminderPatch,
 ): Promise<Row | null> {
   const named = defined(patch);
   // `updatedAt` is not touched: the patch carries domain fields only.
@@ -210,9 +235,14 @@ export function enqueueDelete(
 ): Promise<Kind | null>;
 export function enqueueDelete(
   db: CalendarDb,
+  table: "reminders",
+  id: string,
+): Promise<Reminder | null>;
+export function enqueueDelete(
+  db: CalendarDb,
   table: DeletableTable,
   id: string,
-): Promise<Event | Kind | null>;
+): Promise<Deletable | null>;
 export function enqueueDelete(
   db: CalendarDb,
   table: DeletableTable,
@@ -237,9 +267,14 @@ export function enqueueRestore(
 ): Promise<Kind | null>;
 export function enqueueRestore(
   db: CalendarDb,
+  table: "reminders",
+  id: string,
+): Promise<Reminder | null>;
+export function enqueueRestore(
+  db: CalendarDb,
   table: DeletableTable,
   id: string,
-): Promise<Event | Kind | null>;
+): Promise<Deletable | null>;
 export function enqueueRestore(
   db: CalendarDb,
   table: DeletableTable,
@@ -274,8 +309,6 @@ export async function discardOp(
   const op = await db.outbox.get(seq);
   if (op === undefined) return;
   await db.outbox.delete(seq);
-  // Reminder ops arrive with CAL-026.
-  if (op.table === "reminders") return;
   const rows = cacheTable(db, op.table);
   if (op.op === "insert") {
     await rows.delete(op.id);

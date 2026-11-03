@@ -1,6 +1,6 @@
 import type { Table } from "dexie";
 import type { ListResult } from "../data/result";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "./db";
 
 // Incremental hydration of the cache from the server (CAL-014 AC-1, AC-2;
@@ -15,6 +15,8 @@ export type SyncRepos = {
   kinds: { listSince(since: string): Promise<ListResult<Kind>> };
   events: { listSince(since: string): Promise<ListResult<Event>> };
   overrides: { listSince(since: string): Promise<ListResult<EventOverride>> };
+  /** CAL-026 Block 7: pulled after overrides, soft-deleted rows included. */
+  reminders: { listSince(since: string): Promise<ListResult<Reminder>> };
 };
 
 export const EPOCH = "1970-01-01T00:00:00+00:00";
@@ -28,6 +30,7 @@ const OUTBOX_TABLE: Record<string, OutboxOp["table"]> = {
   kinds: "kinds",
   events: "events",
   overrides: "event_overrides",
+  reminders: "reminders",
 };
 
 /** One table's step of a pass; false when the server did not answer ok. */
@@ -66,7 +69,7 @@ async function pull<T extends Synced>(
   return true;
 }
 
-/** One pass: kinds, then events, then overrides. Never throws. */
+/** One pass: kinds, then events, then overrides, then reminders. Never throws. */
 export async function hydrate(
   db: CalendarDb,
   repos: SyncRepos,
@@ -75,7 +78,8 @@ export async function hydrate(
     const ok =
       (await pull(db, db.kinds, repos.kinds)) &&
       (await pull(db, db.events, repos.events)) &&
-      (await pull(db, db.overrides, repos.overrides));
+      (await pull(db, db.overrides, repos.overrides)) &&
+      (await pull(db, db.reminders, repos.reminders));
     return ok ? { status: "ok" } : { status: "unavailable" };
   } catch {
     // A cache that cannot be opened or written.

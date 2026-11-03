@@ -1,5 +1,5 @@
 import type { Result } from "../data/result";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
 import type { CalendarDb, OutboxOp } from "./db";
 import {
   type CacheTable,
@@ -65,7 +65,7 @@ export type Drain = {
   subscribe(listener: (n: DrainNotice) => void): () => void;
 };
 
-type Row = Event | Kind | EventOverride;
+type Row = Event | Kind | EventOverride | Reminder;
 
 /** The members a pass calls, the same for every table (kinds have no restore, overrides no remove or restore). */
 type AnyRepo = {
@@ -78,7 +78,7 @@ type AnyRepo = {
 };
 
 /** A kind is named by its name; an override may carry no title (CAL-056 Block 3). */
-const titleOf = (row: Row): string =>
+const titleOf = (row: Exclude<Row, Reminder>): string =>
   "name" in row ? row.name : (row.title ?? "");
 
 /** An override has no deleted_at column: it is always live. */
@@ -91,6 +91,14 @@ function titleFromPatch(patch: unknown): string {
   const p = patch as { title?: unknown; name?: unknown };
   if (typeof p.title === "string") return p.title;
   return typeof p.name === "string" ? p.name : "";
+}
+
+/** The event id a reminder op names: its cached row's, else its insert patch's. */
+function eventIdOf(row: Row | undefined, patch: unknown): string | undefined {
+  if (row !== undefined && "minutesBefore" in row) return row.eventId;
+  if (typeof patch !== "object" || patch === null) return undefined;
+  const p = patch as { eventId?: unknown };
+  return typeof p.eventId === "string" ? p.eventId : undefined;
 }
 
 /** What a pass does with an answer that is neither ok nor a conflict. */
@@ -118,12 +126,38 @@ export function createDrain(
   let inFlight: Promise<DrainResult> | null = null;
   let announce = false;
 
-  const repoFor = (table: CacheTable): AnyRepo =>
-    table === "events"
-      ? repos.events
-      : table === "kinds"
-        ? repos.kinds
-        : repos.overrides;
+  const repoFor = (table: CacheTable): AnyRepo => {
+    switch (table) {
+      case "events":
+        return repos.events;
+      case "kinds":
+        return repos.kinds;
+      case "event_overrides":
+        return repos.overrides;
+      case "reminders":
+        return repos.reminders;
+    }
+  };
+
+  /**
+   * A notice's title. A reminder has none of its own (CAL-026 Block 6): it
+   * reads its event's cached title, "" when the event is not cached.
+   */
+  async function noticeTitle(
+    table: CacheTable,
+    row: Row | undefined,
+    patch: unknown,
+  ): Promise<string> {
+    if (table === "reminders") {
+      const eventId = eventIdOf(row, patch);
+      if (eventId === undefined) return "";
+      return (await db.events.get(eventId))?.title ?? "";
+    }
+    if (row === undefined || "minutesBefore" in row) {
+      return titleFromPatch(patch);
+    }
+    return titleOf(row);
+  }
 
   /** Sends one op. "offline" / "server" end the pass; anything else goes on. */
   async function send(
@@ -190,11 +224,12 @@ export function createDrain(
         }
       });
       if (isLive(row) && op.op !== "delete") {
+        const title = await noticeTitle(table, row, op.patch);
         emit({
           kind: "conflict",
           table,
           id: op.id,
-          title: titleOf(row),
+          title,
           fields: fieldNames(table, op.patch),
           patch: op.patch,
           freshUpdatedAt: row.updatedAt,
@@ -213,12 +248,13 @@ export function createDrain(
   ): Promise<"changed" | "offline" | "server"> {
     if ("stop" in v) return v.stop;
     await db.outbox.update(op.seq, { status: "failed", error: v.failed });
+    const title = await noticeTitle(op.table, cached, op.patch);
     emit({
       kind: "failed",
       seq: op.seq,
       table: op.table,
       id: op.id,
-      title: cached === undefined ? titleFromPatch(op.patch) : titleOf(cached),
+      title,
       error: v.failed,
     });
     return "changed";
@@ -239,8 +275,6 @@ export function createDrain(
           .first();
         if (op === undefined || op.seq === undefined) break;
         last = op.seq;
-        // Reminder ops arrive with CAL-026.
-        if (op.table === "reminders") continue;
         const outcome = await send({ ...op, seq: op.seq, table: op.table });
         if (outcome === "sent") {
           sent += 1;
@@ -301,6 +335,10 @@ const KIND_FIELDS: [key: string, name: string][] = [
   ["colorDark", "colour"],
   ["sortOrder", "order"],
 ];
+/** CAL-026 Block 6: voice.md line 152. */
+const REMINDER_FIELDS: [key: string, name: string][] = [
+  ["minutesBefore", "reminder"],
+];
 /** CAL-056 Block 3: an override's fields, in this order. */
 const OVERRIDE_FIELDS: [key: string, name: string][] = [
   ["title", "title"],
@@ -313,16 +351,16 @@ const OVERRIDE_FIELDS: [key: string, name: string][] = [
   ["cancelled", "cancelled"],
 ];
 
-/** Plain field names, voice.md: title, kind, start time, end time, all day, location, notes, repeat; kinds: name, colour, order; overrides: OVERRIDE_FIELDS. */
+/** Plain field names, voice.md: title, kind, start time, end time, all day, location, notes, repeat; kinds: name, colour, order; overrides: OVERRIDE_FIELDS; reminders: reminder. */
 export function fieldNames(table: CacheTable, patch: unknown): string[] {
   if (typeof patch !== "object" || patch === null) return [];
   const keys = Object.keys(patch);
-  const known =
-    table === "events"
-      ? EVENT_FIELDS
-      : table === "kinds"
-        ? KIND_FIELDS
-        : OVERRIDE_FIELDS;
+  const known = {
+    events: EVENT_FIELDS,
+    kinds: KIND_FIELDS,
+    event_overrides: OVERRIDE_FIELDS,
+    reminders: REMINDER_FIELDS,
+  }[table];
   const names: string[] = [];
   for (const [key, name] of known) {
     if (keys.includes(key) && !names.includes(name)) names.push(name);
