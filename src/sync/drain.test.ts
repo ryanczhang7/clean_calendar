@@ -5,6 +5,8 @@ import type {
   EventOverride,
   Kind,
   NewEventOverride,
+  NewReminder,
+  Reminder,
 } from "../data/rows";
 import {
   at,
@@ -12,6 +14,7 @@ import {
   freshDb,
   kind,
   override,
+  reminder,
   T1,
   T2,
 } from "../test/cache-fixtures";
@@ -960,5 +963,316 @@ describe("fieldNames for event_overrides - voice.md's plain field names (CAL-056
       "kind",
       "cancelled",
     ]);
+  });
+});
+
+// CAL-026 AC-4, Contract Block 6: the fourth table. A reminders op is sent
+// through the reminders repository exactly as an event op is through the
+// events one - insert(patch, id), update / remove / restore with the cache
+// row's CURRENT updatedAt - and on ok the cache row takes the server's stamps,
+// deletedAt included. A conflict notice names the field "reminder" and is
+// titled by the reminder's event (a reminder has no title of its own).
+describe("reminders ops (CAL-026 AC-4, Block 6)", () => {
+  const SERIES: Event = ev(5, at(10, 27, 9), at(10, 27, 10), {
+    title: "Standup",
+    updatedAt: T1,
+  });
+  const REM: Reminder = reminder(1, {
+    eventId: SERIES.id,
+    minutesBefore: 15,
+    updatedAt: T1,
+  });
+  const NEW_REM: NewReminder = {
+    eventId: SERIES.id,
+    minutesBefore: 15,
+    sentAt: null,
+    occurrenceDate: null,
+  };
+  /** The server's copy of REM: its fields, the server's stamps. */
+  const served = (extra: Partial<Reminder> = {}): Reminder => ({
+    ...REM,
+    createdAt: SERVER_CREATED,
+    updatedAt: S1,
+    ...extra,
+  });
+
+  const reminderOp = (extra: Partial<OutboxOp>): OutboxOp => ({
+    op: "update",
+    table: "reminders",
+    id: REM.id,
+    patch: { minutesBefore: 30 },
+    baseUpdatedAt: T2,
+    clientTs: NOW_TS,
+    status: "queued",
+    ...extra,
+  });
+
+  /** No member of the events, kinds or overrides repositories was called. */
+  const othersUntouched = () => {
+    for (const table of [repos.events, repos.kinds, repos.overrides]) {
+      for (const member of Object.values(table)) {
+        expect(member).not.toHaveBeenCalled();
+      }
+    }
+  };
+
+  it("an insert op calls the reminders repository's insert(patch, id), once, and no other repository", async () => {
+    await db.reminders.put(REM);
+    await db.outbox.add(
+      reminderOp({ op: "insert", patch: NEW_REM, baseUpdatedAt: null }),
+    );
+    repos.reminders.insert.mockResolvedValue(okRow(served()));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.insert.mock.calls).toStrictEqual([
+      [NEW_REM, REM.id],
+    ]);
+    othersUntouched();
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("an update op calls update(id, patch, the cache row's updatedAt) - not the op's baseUpdatedAt", async () => {
+    await db.reminders.put(REM);
+    await db.outbox.add(reminderOp({}));
+    repos.reminders.update.mockResolvedValue(
+      okRow(served({ minutesBefore: 30 })),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.update.mock.calls).toStrictEqual([
+      [REM.id, { minutesBefore: 30 }, T1],
+    ]);
+    othersUntouched();
+  });
+
+  it("a delete op calls remove(id, the cache row's updatedAt), and on ok the cache row takes the server's deletedAt and stamps", async () => {
+    await db.reminders.put({ ...REM, deletedAt: NOW_TS });
+    await db.outbox.add(
+      reminderOp({ op: "delete", patch: null, baseUpdatedAt: T1 }),
+    );
+    repos.reminders.remove.mockResolvedValue(
+      okRow(served({ deletedAt: SERVER_DELETED })),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.remove.mock.calls).toStrictEqual([[REM.id, T1]]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(
+      served({ deletedAt: SERVER_DELETED }),
+    );
+    othersUntouched();
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it("a restore op calls restore(id, the cache row's updatedAt), and on ok the cache row takes deletedAt null and the server's stamps", async () => {
+    await db.reminders.put({ ...REM, deletedAt: null, updatedAt: T2 });
+    await db.outbox.add(
+      reminderOp({ op: "restore", patch: null, baseUpdatedAt: T2 }),
+    );
+    repos.reminders.restore.mockResolvedValue(okRow(served()));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.restore.mock.calls).toStrictEqual([[REM.id, T2]]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(served());
+    othersUntouched();
+  });
+
+  it("on ok only the stamps are copied: a minutesBefore the cache holds stays visible", async () => {
+    await db.reminders.put({ ...REM, minutesBefore: 30 });
+    await db.outbox.add(reminderOp({}));
+    // The server's row differs in a field: only the stamps are copied.
+    repos.reminders.update.mockResolvedValue(
+      okRow(served({ minutesBefore: 99 })),
+    );
+    await drain.run();
+    expect(await db.reminders.get(REM.id)).toStrictEqual(
+      served({ minutesBefore: 30 }),
+    );
+  });
+
+  it("restore then update (AC-3's set after a clear) drain in seq order, the update sent with the stamp the restore returned", async () => {
+    await db.reminders.put({ ...REM, minutesBefore: 45 });
+    await db.outbox.add(
+      reminderOp({ op: "restore", patch: null, baseUpdatedAt: T1 }),
+    );
+    await db.outbox.add(
+      reminderOp({ patch: { minutesBefore: 45 }, baseUpdatedAt: T1 }),
+    );
+    repos.reminders.restore.mockResolvedValue(okRow(served()));
+    repos.reminders.update.mockResolvedValue(
+      okRow(served({ minutesBefore: 45, updatedAt: S2 })),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 2,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.restore.mock.calls).toStrictEqual([[REM.id, T1]]);
+    expect(repos.reminders.update.mock.calls).toStrictEqual([
+      [REM.id, { minutesBefore: 45 }, S1],
+    ]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(
+      served({ minutesBefore: 45, updatedAt: S2 }),
+    );
+  });
+
+  it("a reminders op queued between two event ops is sent in seq order, and the pass goes on to the event op after it", async () => {
+    await db.events.put(ROW);
+    await db.reminders.put(REM);
+    await enqueueUpdate(db, "events", ROW.id, { title: "First" });
+    await db.outbox.add(reminderOp({}));
+    await enqueueUpdate(db, "events", ROW.id, { notes: "Third" });
+    repos.events.update.mockResolvedValue(okRow(server(ROW)));
+    repos.reminders.update.mockResolvedValue(
+      okRow(served({ minutesBefore: 30, updatedAt: S2 })),
+    );
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 3,
+      stoppedAt: "end",
+    });
+    const [firstAt, thirdAt] = repos.events.update.mock.invocationCallOrder;
+    const [reminderAt] = repos.reminders.update.mock.invocationCallOrder;
+    expect(firstAt).toBeLessThan(reminderAt ?? 0);
+    expect(reminderAt).toBeLessThan(thirdAt ?? 0);
+    expect(await db.outbox.count()).toBe(0);
+  });
+
+  it('a conflict: the fresh server reminder replaces the cached one, the op is dropped, and the notice names "reminder", titled by the cached event', async () => {
+    await db.events.put(SERIES);
+    await db.reminders.put(REM);
+    await db.outbox.add(reminderOp({}));
+    const fresh: Reminder = { ...REM, minutesBefore: 5, updatedAt: S9 };
+    repos.reminders.update.mockResolvedValue({ status: "conflict" });
+    repos.reminders.get.mockResolvedValue(okRow(fresh));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "end",
+    });
+    expect(repos.reminders.get.mock.calls).toStrictEqual([[REM.id]]);
+    expect(repos.events.get).not.toHaveBeenCalled();
+    expect(await db.reminders.get(REM.id)).toStrictEqual(fresh);
+    expect(await db.outbox.count()).toBe(0);
+    expect(of("conflict")).toStrictEqual([
+      {
+        kind: "conflict",
+        table: "reminders",
+        id: REM.id,
+        title: "Standup",
+        fields: ["reminder"],
+        patch: { minutesBefore: 30 },
+        freshUpdatedAt: S9,
+      },
+    ]);
+  });
+
+  it("a conflict for a reminder whose event the cache does not hold is titled empty", async () => {
+    await db.reminders.put(REM);
+    await db.outbox.add(reminderOp({}));
+    repos.reminders.update.mockResolvedValue({ status: "conflict" });
+    repos.reminders.get.mockResolvedValue(okRow({ ...REM, updatedAt: S9 }));
+    await drain.run();
+    expect(of("conflict").map((n) => [n.table, n.title])).toStrictEqual([
+      ["reminders", ""],
+    ]);
+  });
+
+  it("an edit that meets a reminder cleared on the server is dropped without a notice, and the cache row ends cleared", async () => {
+    await db.reminders.put(REM);
+    await db.outbox.add(reminderOp({}));
+    const theirClear = served({ deletedAt: SERVER_DELETED, updatedAt: S9 });
+    repos.reminders.update.mockResolvedValue({ status: "conflict" });
+    repos.reminders.get.mockResolvedValue(okRow(theirClear));
+    await drain.run();
+    expect(repos.reminders.get.mock.calls).toStrictEqual([[REM.id]]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(theirClear);
+    expect(await db.outbox.count()).toBe(0);
+    expect(of("conflict")).toStrictEqual([]);
+  });
+
+  it("a delete that conflicts with a newer live reminder is queued again over the fresh row, and sent by the same pass", async () => {
+    await db.reminders.put({ ...REM, deletedAt: NOW_TS });
+    await db.outbox.add(
+      reminderOp({ op: "delete", patch: null, baseUpdatedAt: T1 }),
+    );
+    const theirEdit = served({ minutesBefore: 5, updatedAt: S9 });
+    const finalRow = served({
+      minutesBefore: 5,
+      deletedAt: SERVER_DELETED,
+      updatedAt: S3,
+    });
+    repos.reminders.remove
+      .mockResolvedValueOnce({ status: "conflict" })
+      .mockResolvedValueOnce(okRow(finalRow));
+    repos.reminders.get.mockResolvedValue(okRow(theirEdit));
+    await drain.run();
+    expect(repos.reminders.remove.mock.calls).toStrictEqual([
+      [REM.id, T1],
+      [REM.id, S9],
+    ]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(finalRow);
+    expect(await db.outbox.count()).toBe(0);
+    expect(of("conflict")).toStrictEqual([]);
+  });
+
+  it("a 4xx marks the reminders op failed, the pass goes on, and the failed notice is titled by the cached event", async () => {
+    await db.events.put(SERIES);
+    await db.reminders.put(REM);
+    const seq = await db.outbox.add(reminderOp({}));
+    const error = { code: "22P02", message: "invalid input", http: 400 };
+    repos.reminders.update.mockResolvedValue({ status: "error", ...error });
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "end",
+    });
+    expect(await ops(db)).toStrictEqual([
+      { ...reminderOp({}), seq, status: "failed", error },
+    ]);
+    expect(of("failed")).toStrictEqual([
+      {
+        kind: "failed",
+        seq,
+        table: "reminders",
+        id: REM.id,
+        title: "Standup",
+        error,
+      },
+    ]);
+  });
+
+  it("offline, a reminders op stays queued and the pass stops at it", async () => {
+    await db.reminders.put(REM);
+    await db.outbox.add(reminderOp({}));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "offline",
+    });
+    expect(repos.reminders.update).toHaveBeenCalledTimes(1);
+    expect((await ops(db))[0]?.status).toBe("queued");
+  });
+});
+
+describe("fieldNames for reminders - voice.md's plain field name (CAL-026 AC-4, Block 6)", () => {
+  it('a reminders patch of minutesBefore reads "reminder"', () => {
+    expect(fieldNames("reminders", { minutesBefore: 30 })).toStrictEqual([
+      "reminder",
+    ]);
+  });
+
+  it("a key voice.md does not name still reads as itself, after the named one", () => {
+    expect(
+      fieldNames("reminders", { sentAt: "x", minutesBefore: 30 }),
+    ).toStrictEqual(["reminder", "sentAt"]);
+  });
+
+  it("conflictCopy over it reads as voice.md's singular toast", () => {
+    expect(conflictCopy(fieldNames("reminders", { minutesBefore: 30 }))).toBe(
+      "Edited elsewhere; your change to reminder was not applied.",
+    );
   });
 });

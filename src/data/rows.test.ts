@@ -1,5 +1,12 @@
 import { describe, expect, test } from "vitest";
 import {
+  reminderFull,
+  reminderNulls,
+  reminderRowFull,
+  reminderRowNulls,
+} from "../test/realtime-fixtures";
+import { roundTripMismatches } from "../test/roundtrip";
+import {
   eventFull,
   eventNulls,
   eventRowFull,
@@ -13,7 +20,6 @@ import {
   overrideRowFull,
   overrideRowNulls,
 } from "../test/rows-fixtures";
-import { roundTripMismatches } from "../test/roundtrip";
 import {
   fromEvent,
   fromEventOverride,
@@ -21,9 +27,12 @@ import {
   fromEventPatch,
   fromKind,
   fromKindPatch,
+  fromNewReminder,
+  fromReminderPatch,
   toEvent,
   toEventOverride,
   toKind,
+  toReminder,
 } from "./rows";
 
 const EVENT_INSTANTS = ["starts_at", "ends_at"] as const;
@@ -218,5 +227,78 @@ describe("patches carry only the columns the caller named", () => {
       fromEventOverridePatch({ cancelled: true, startsAt: null, kindId: null }),
     ).toStrictEqual({ cancelled: true, starts_at: null, kind_id: null });
     expect(fromEventOverridePatch({})).toStrictEqual({});
+  });
+});
+
+// CAL-026 Contract, Block 2: the reminders mapper moves into rows.ts from
+// realtime.ts and gains deleted_at. The stamps stay strings, as on every
+// other table; minutes_before may be negative (CAL-057's all-day "At time").
+describe("reminders rows map to camelCase domain objects (CAL-026 Block 2)", () => {
+  test("a full reminders row - sent, for one occurrence, soft-deleted - maps to the camelCase Reminder with every column", () => {
+    expect(toReminder(reminderRowFull)).toStrictEqual(reminderFull);
+  });
+
+  test("a reminders row with every nullable column null maps to nulls: the live, unsent template", () => {
+    expect(toReminder(reminderRowNulls)).toStrictEqual(reminderNulls);
+  });
+
+  test("the stamps stay the server's exact strings, microseconds and +00:00 included; occurrence_date stays a date string", () => {
+    const r = toReminder(reminderRowFull);
+    expect(r.deletedAt).toBe("2026-10-20T09:00:00.000003+00:00");
+    expect(r.sentAt).toBe("2026-10-20T08:45:00.000007+00:00");
+    expect(r.updatedAt).toBe("2026-10-14T09:15:02.123456+00:00");
+    expect(r.occurrenceDate).toBe("2026-10-20");
+  });
+
+  test("a negative minutes_before is kept as it is", () => {
+    expect(
+      toReminder({ ...reminderRowNulls, minutes_before: -540 }).minutesBefore,
+    ).toBe(-540);
+  });
+
+  test("fromNewReminder writes the four insert columns only - no id, no stamps, no deleted_at", () => {
+    expect(
+      fromNewReminder({
+        eventId: reminderFull.eventId,
+        minutesBefore: 30,
+        sentAt: null,
+        occurrenceDate: null,
+      }),
+    ).toStrictEqual({
+      event_id: reminderFull.eventId,
+      minutes_before: 30,
+      sent_at: null,
+      occurrence_date: null,
+    });
+  });
+
+  test("fromNewReminder keeps a sent per-occurrence reminder's values", () => {
+    expect(
+      fromNewReminder({
+        eventId: reminderFull.eventId,
+        minutesBefore: -540,
+        sentAt: "2026-10-20T08:45:00.000007+00:00",
+        occurrenceDate: "2026-10-20",
+      }),
+    ).toStrictEqual({
+      event_id: reminderFull.eventId,
+      minutes_before: -540,
+      sent_at: "2026-10-20T08:45:00.000007+00:00",
+      occurrence_date: "2026-10-20",
+    });
+  });
+
+  test("fromReminderPatch maps minutesBefore to minutes_before, and nothing else", () => {
+    expect(fromReminderPatch({ minutesBefore: 10 })).toStrictEqual({
+      minutes_before: 10,
+    });
+    expect(fromReminderPatch({ minutesBefore: 0 })).toStrictEqual({
+      minutes_before: 0,
+    });
+  });
+
+  test("an empty or undefined reminders patch maps to an empty body", () => {
+    expect(fromReminderPatch({})).toStrictEqual({});
+    expect(fromReminderPatch({ minutesBefore: undefined })).toStrictEqual({});
   });
 });

@@ -1,11 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Event, EventOverride, Kind } from "../data/rows";
+import type {
+  Event,
+  EventOverride,
+  Kind,
+  NewReminder,
+  Reminder,
+} from "../data/rows";
 import {
   at,
   ev,
   freshDb,
   kind,
   override,
+  reminder,
   T1,
   T2,
 } from "../test/cache-fixtures";
@@ -514,5 +521,156 @@ describe("discardOp on event_overrides (CAL-056 AC-5, Block 2)", () => {
       enqueueRestore(db, "event_overrides", CACHED_OVERRIDE.id),
     ];
     expect(typeof attempts).toBe("function");
+  });
+});
+
+// CAL-026 Contract, Block 5: the fourth table. A reminder has a deletedAt, so
+// it may be inserted, updated, deleted and restored through the outbox, as an
+// event may; discardOp treats it as the other tables (AC-4) - an insert's cache
+// row goes with it, any other op's row is replaced by the reminders
+// repository's get(id).
+describe("the outbox on reminders (CAL-026 AC-1 to AC-4, Block 5)", () => {
+  const CACHED_REMINDER: Reminder = reminder(1, {
+    minutesBefore: 15,
+    updatedAt: T1,
+  });
+  const NEW_REMINDER: NewReminder = {
+    eventId: CACHED_REMINDER.eventId,
+    minutesBefore: 30,
+    sentAt: null,
+    occurrenceDate: null,
+  };
+
+  it("enqueueInsert: the cache row is the input with the new id, the client stamp, deletedAt null; one insert op carries the input", async () => {
+    const want: Reminder = {
+      ...NEW_REMINDER,
+      id: U1,
+      deletedAt: null,
+      createdAt: NOW_TS,
+      updatedAt: NOW_TS,
+    };
+    await expect(
+      enqueueInsert(db, "reminders", NEW_REMINDER),
+    ).resolves.toStrictEqual(want);
+    expect(await db.reminders.toArray()).toStrictEqual([want]);
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "insert",
+        table: "reminders",
+        id: U1,
+        patch: NEW_REMINDER,
+        baseUpdatedAt: null,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+  });
+
+  it("enqueueUpdate: the patch lands on the cached reminder, updatedAt untouched, and one update op is based on the cached stamp", async () => {
+    await db.reminders.put(CACHED_REMINDER);
+    await expect(
+      enqueueUpdate(db, "reminders", CACHED_REMINDER.id, { minutesBefore: 5 }),
+    ).resolves.toStrictEqual({ ...CACHED_REMINDER, minutesBefore: 5 });
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "update",
+        table: "reminders",
+        id: CACHED_REMINDER.id,
+        patch: { minutesBefore: 5 },
+        baseUpdatedAt: T1,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+  });
+
+  it("enqueueDelete then enqueueRestore: deletedAt is the client stamp, then null again; a delete op and a restore op, both with no patch", async () => {
+    await db.reminders.put(CACHED_REMINDER);
+    await expect(
+      enqueueDelete(db, "reminders", CACHED_REMINDER.id),
+    ).resolves.toStrictEqual({ ...CACHED_REMINDER, deletedAt: NOW_TS });
+    await expect(
+      enqueueRestore(db, "reminders", CACHED_REMINDER.id),
+    ).resolves.toStrictEqual(CACHED_REMINDER);
+    expect(await db.reminders.toArray()).toStrictEqual([CACHED_REMINDER]);
+    expect(
+      (await opsWithoutSeq(db)).map((o) => [o.op, o.table, o.patch]),
+    ).toStrictEqual([
+      ["delete", "reminders", null],
+      ["restore", "reminders", null],
+    ]);
+  });
+
+  it("discardOp on a reminder insert: the op and the cached reminder are both removed, and nothing is fetched", async () => {
+    await db.reminders.put(CACHED_REMINDER);
+    const seq = await put(
+      queuedOp(CACHED_REMINDER.id, {
+        op: "insert",
+        table: "reminders",
+        patch: NEW_REMINDER,
+        baseUpdatedAt: null,
+        status: "failed",
+        error: ERROR,
+      }),
+    );
+    await put(queuedOp("other"));
+    await discardOp(db, seq, asRepos(repos));
+    expect(await db.reminders.get(CACHED_REMINDER.id)).toBeUndefined();
+    expect((await ops(db)).map((o) => o.id)).toStrictEqual(["other"]);
+    expect(repos.reminders.get).not.toHaveBeenCalled();
+    expect(repos.events.get).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["update", { minutesBefore: 5 }],
+    ["delete", null],
+    ["restore", null],
+  ] as const)(
+    "discardOp on a reminder %s: the op is removed and the reminders repository's copy, fetched once by id, replaces the cached reminder",
+    async (op, patch) => {
+      await db.reminders.put({ ...CACHED_REMINDER, minutesBefore: 5 });
+      const server: Reminder = {
+        ...CACHED_REMINDER,
+        minutesBefore: 20,
+        updatedAt: S9,
+      };
+      repos.reminders.get.mockResolvedValue(okRow(server));
+      const seq = await put(
+        queuedOp(CACHED_REMINDER.id, {
+          op,
+          table: "reminders",
+          patch,
+          status: "failed",
+          error: ERROR,
+        }),
+      );
+      await discardOp(db, seq, asRepos(repos));
+      expect(repos.reminders.get.mock.calls).toStrictEqual([
+        [CACHED_REMINDER.id],
+      ]);
+      expect(repos.events.get).not.toHaveBeenCalled();
+      expect(repos.overrides.get).not.toHaveBeenCalled();
+      expect(await db.reminders.get(CACHED_REMINDER.id)).toStrictEqual(server);
+      expect(await db.outbox.count()).toBe(0);
+    },
+  );
+
+  it("discardOp on a reminder update whose fetch is not ok: the op is removed and the cached reminder is left as it is", async () => {
+    const mine = { ...CACHED_REMINDER, minutesBefore: 5 };
+    await db.reminders.put(mine);
+    const seq = await put(
+      queuedOp(CACHED_REMINDER.id, {
+        table: "reminders",
+        patch: { minutesBefore: 5 },
+        status: "failed",
+        error: ERROR,
+      }),
+    );
+    await discardOp(db, seq, asRepos(repos)); // get answers offline
+    expect(repos.reminders.get.mock.calls).toStrictEqual([
+      [CACHED_REMINDER.id],
+    ]);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.reminders.get(CACHED_REMINDER.id)).toStrictEqual(mine);
   });
 });

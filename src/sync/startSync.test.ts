@@ -9,6 +9,12 @@ import {
   vi,
 } from "vitest";
 import { installServer, onTable, type Recorded } from "../test/msw";
+import { held } from "../test/outbox-fixtures";
+import {
+  changed,
+  reminderNulls,
+  reminderRowNulls,
+} from "../test/realtime-fixtures";
 import {
   eventFull,
   eventRowFull,
@@ -19,8 +25,6 @@ import {
   overrideFull,
   overrideRowFull,
 } from "../test/rows-fixtures";
-import { held } from "../test/outbox-fixtures";
-import { changed } from "../test/realtime-fixtures";
 import { fake } from "../test/supabase-mock";
 import { db } from "./db";
 import type { Drain, DrainNotice } from "./drain";
@@ -46,7 +50,12 @@ vi.mock(
 
 installServer();
 
-let seen: { kinds: Recorded[]; events: Recorded[]; overrides: Recorded[] };
+let seen: {
+  kinds: Recorded[];
+  events: Recorded[];
+  overrides: Recorded[];
+  reminders: Recorded[];
+};
 
 beforeEach(async () => {
   await Promise.all(db.tables.map((t) => t.clear()));
@@ -57,6 +66,10 @@ beforeEach(async () => {
     events: onTable("events", () => HttpResponse.json([eventRowFull])),
     overrides: onTable("event_overrides", () =>
       HttpResponse.json([overrideRowFull]),
+    ),
+    // CAL-026 Block 7: the app's sync pulls reminders too.
+    reminders: onTable("reminders", () =>
+      HttpResponse.json([reminderRowNulls]),
     ),
   };
 });
@@ -70,6 +83,7 @@ describe("startSync() - sync starts after sign-in (AC-1, Block 3)", () => {
     expect(since(seen.kinds)).toStrictEqual([["GET", `gt.${EPOCH}`]]);
     expect(since(seen.events)).toStrictEqual([["GET", `gt.${EPOCH}`]]);
     expect(since(seen.overrides)).toStrictEqual([["GET", `gt.${EPOCH}`]]);
+    expect(since(seen.reminders)).toStrictEqual([["GET", `gt.${EPOCH}`]]);
   });
 
   it("writes the server's rows, live and soft-deleted, into the app's db as domain objects, with each table's mark", async () => {
@@ -80,6 +94,10 @@ describe("startSync() - sync starts after sign-in (AC-1, Block 3)", () => {
     );
     expect(await db.events.toArray()).toStrictEqual([eventFull]);
     expect(await db.overrides.toArray()).toStrictEqual([overrideFull]);
+    expect(await db.reminders.toArray()).toStrictEqual([reminderNulls]);
+    expect((await db.meta.get("mark:reminders"))?.value).toBe(
+      reminderRowNulls.updated_at,
+    );
     expect(await db.meta.get("mark:kinds")).toStrictEqual({
       key: "mark:kinds",
       value: kindRowFull.updated_at,
@@ -107,6 +125,10 @@ describe("startSync() - sync starts after sign-in (AC-1, Block 3)", () => {
       "GET",
       `gt.${overrideRowFull.updated_at}`,
     ]);
+    expect(since(seen.reminders)[1]).toStrictEqual([
+      "GET",
+      `gt.${reminderRowNulls.updated_at}`,
+    ]);
   });
 
   it("two concurrent startSync() calls share one pass: one request per table", async () => {
@@ -114,6 +136,7 @@ describe("startSync() - sync starts after sign-in (AC-1, Block 3)", () => {
     expect(seen.kinds).toHaveLength(1);
     expect(seen.events).toHaveLength(1);
     expect(seen.overrides).toHaveLength(1);
+    expect(seen.reminders).toHaveLength(1);
   });
 });
 

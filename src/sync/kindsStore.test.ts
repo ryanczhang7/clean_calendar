@@ -1,9 +1,9 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
+import { HttpResponse } from "msw";
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import type { ListResult } from "../data/result";
 import type { Kind } from "../data/rows";
 import type { SeedRepo } from "../kinds/seedKinds";
-import { HttpResponse } from "msw";
 import { installServer, onTable } from "../test/msw";
 import { createKindsStore, kindsStore, useKinds } from "./kindsStore";
 
@@ -328,6 +328,8 @@ describe("kindsStore, the app's one store (CAL-014 Block 5)", () => {
     });
     const events = onTable("events", () => HttpResponse.json([]));
     const overrides = onTable("event_overrides", () => HttpResponse.json([]));
+    // CAL-026 Block 7: the app's sync pulls reminders after overrides.
+    const reminders = onTable("reminders", () => HttpResponse.json([]));
 
     await expect(kindsStore.ensureSeeded()).resolves.toBe("seeded");
 
@@ -340,6 +342,7 @@ describe("kindsStore, the app's one store (CAL-014 Block 5)", () => {
     expect(since(kinds)).toStrictEqual([`gt.${EPOCH}`]);
     expect(since(events)).toStrictEqual([`gt.${EPOCH}`]);
     expect(since(overrides)).toStrictEqual([`gt.${EPOCH}`]);
+    expect(since(reminders)).toStrictEqual([`gt.${EPOCH}`]);
   });
 
   it("serves its snapshot from the app's db", async () => {

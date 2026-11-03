@@ -5,6 +5,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { IDBKeyRange } from "fake-indexeddb";
 import { type JSX, useEffect, useLayoutEffect, useRef } from "react";
 import { MemoryRouter } from "react-router";
 import {
@@ -16,11 +17,11 @@ import {
   type Mock,
   vi,
 } from "vitest";
-import type { ListResult } from "../data/result";
-import type { Event, EventOverride, Kind } from "../data/rows";
-import type { SeedRepo } from "../kinds/seedKinds";
 import { CalendarPage } from "../calendar/CalendarPage";
 import { setSelected } from "../calendar/selection";
+import type { ListResult } from "../data/result";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
+import type { SeedRepo } from "../kinds/seedKinds";
 import {
   at,
   brokenDb,
@@ -40,9 +41,8 @@ import {
 } from "./cachedStores";
 import { CalendarDb, type OutboxOp } from "./db";
 import { type EventsStore, useEventsInRange } from "./eventsStore";
-import { createSync, type SyncResult, type SyncRepos } from "./hydrate";
+import { createSync, type SyncRepos, type SyncResult } from "./hydrate";
 import { type KindsStore, useKinds } from "./kindsStore";
-import { IDBKeyRange } from "fake-indexeddb";
 
 vi.mock(
   "../lib/supabase",
@@ -66,6 +66,10 @@ type Repos = {
   events: { listSince: Mock<(since: string) => Promise<ListResult<Event>>> };
   overrides: {
     listSince: Mock<(since: string) => Promise<ListResult<EventOverride>>>;
+  };
+  /** CAL-026 Block 7: the fourth table of a pass. */
+  reminders: {
+    listSince: Mock<(since: string) => Promise<ListResult<Reminder>>>;
   };
 };
 
@@ -110,13 +114,22 @@ function offlineRepos(): Repos {
         async () => ({ status: "offline" }),
       ),
     },
+    reminders: {
+      listSince: vi.fn<(since: string) => Promise<ListResult<Reminder>>>(
+        async () => ({ status: "offline" }),
+      ),
+    },
   };
 }
+
+/** The fakes as the sync's repositories: a missing table is a compile error here. */
+const asSyncRepos = (r: Repos): SyncRepos => r;
 
 const listSinceCalls = (r: Repos) =>
   r.kinds.listSince.mock.calls.length +
   r.events.listSince.mock.calls.length +
-  r.overrides.listSince.mock.calls.length;
+  r.overrides.listSince.mock.calls.length +
+  r.reminders.listSince.mock.calls.length;
 
 /** Subscribe for the rest of the test (unsubscribed in afterEach). */
 function keep(
@@ -304,7 +317,7 @@ describe("offline, from a populated cache (AC-3)", () => {
       ev(2, at(10, 15, 9), at(10, 15, 10), { title: "Dentist" }),
     ]);
     const repos = offlineRepos();
-    const realSync = createSync(db, repos as SyncRepos);
+    const realSync = createSync(db, asSyncRepos(repos));
     const run = vi.spyOn(realSync, "run");
     const kinds = createCachedKindsStore(db, seed, realSync);
     const events = createCachedEventsStore(db, realSync);
@@ -349,7 +362,7 @@ describe("offline, from a populated cache (AC-3)", () => {
 
     await db.kinds.put(A);
     await db.events.put(ev(1, at(10, 15, 7), at(10, 15, 8), { title: "Swim" }));
-    const realSync = createSync(db, offlineRepos() as SyncRepos);
+    const realSync = createSync(db, asSyncRepos(offlineRepos()));
     render(
       <MemoryRouter initialEntries={["/month/2026-10"]}>
         <CalendarPage
@@ -406,7 +419,8 @@ describe("a mounted consumer follows the cache (AC-4)", () => {
     const repos = offlineRepos();
     repos.kinds.listSince.mockResolvedValue({ status: "ok", rows: [] });
     repos.overrides.listSince.mockResolvedValue({ status: "ok", rows: [] });
-    const realSync = createSync(db, repos as SyncRepos);
+    repos.reminders.listSince.mockResolvedValue({ status: "ok", rows: [] });
+    const realSync = createSync(db, asSyncRepos(repos));
     const store = createCachedEventsStore(db, sync);
     const { result, mounts } = mountWeek(store);
     await waitFor(() =>

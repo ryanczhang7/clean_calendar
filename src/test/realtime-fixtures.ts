@@ -1,10 +1,10 @@
 import type {
-  RealtimePostgresChangesPayload,
   REALTIME_SUBSCRIBE_STATES,
+  RealtimePostgresChangesPayload,
 } from "@supabase/supabase-js";
 import { type Mock, vi } from "vitest";
 import type { Database } from "../data/database.types";
-import type { ReminderRow } from "../sync/db";
+import type { Reminder } from "../data/rows";
 import { CREATED_AT, EVENT_ID, UPDATED_AT } from "./rows-fixtures";
 
 // CAL-016 Contract, Block 6: shared builders for the Realtime suites
@@ -149,8 +149,10 @@ export function deletedPayload(table: string, id: string): Payload {
 }
 
 // --- reminders -----------------------------------------------------------------
-// rows.ts has no reminders mapper (PO decision 7); these are written out by
-// hand, as rows-fixtures.ts does for the other tables.
+// Written out by hand, as rows-fixtures.ts does for the other tables. CAL-026
+// Block 2: rows.ts now maps them (toReminder), deleted_at included; the full
+// row carries every nullable column set - deleted_at too, so a mapper that
+// drops it or hard-codes null cannot match - and the nulls row none.
 
 export type ReminderPgRow = Database["public"]["Tables"]["reminders"]["Row"];
 
@@ -163,16 +165,18 @@ export const reminderRowFull: ReminderPgRow = {
   minutes_before: 15,
   sent_at: "2026-10-20T08:45:00.000007+00:00",
   occurrence_date: "2026-10-20",
+  deleted_at: "2026-10-20T09:00:00.000003+00:00",
   created_at: CREATED_AT,
   updated_at: UPDATED_AT,
 };
 
-export const reminderFull: ReminderRow = {
+export const reminderFull: Reminder = {
   id: REMINDER_ID,
   eventId: EVENT_ID,
   minutesBefore: 15,
   sentAt: "2026-10-20T08:45:00.000007+00:00",
   occurrenceDate: "2026-10-20",
+  deletedAt: "2026-10-20T09:00:00.000003+00:00",
   createdAt: CREATED_AT,
   updatedAt: UPDATED_AT,
 };
@@ -183,16 +187,18 @@ export const reminderRowNulls: ReminderPgRow = {
   minutes_before: 0,
   sent_at: null,
   occurrence_date: null,
+  deleted_at: null,
   created_at: "2026-10-03T10:00:00.000004+00:00",
   updated_at: "2026-10-03T10:00:00.000004+00:00",
 };
 
-export const reminderNulls: ReminderRow = {
+export const reminderNulls: Reminder = {
   id: REMINDER_ID_2,
   eventId: EVENT_ID,
   minutesBefore: 0,
   sentAt: null,
   occurrenceDate: null,
+  deletedAt: null,
   createdAt: "2026-10-03T10:00:00.000004+00:00",
   updatedAt: "2026-10-03T10:00:00.000004+00:00",
 };

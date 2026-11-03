@@ -10,7 +10,15 @@ import {
   vi,
 } from "vitest";
 import type { Event } from "../data/rows";
-import { at, ev, freshDb, kind, override, T1 } from "../test/cache-fixtures";
+import {
+  at,
+  ev,
+  freshDb,
+  kind,
+  override,
+  reminder,
+  T1,
+} from "../test/cache-fixtures";
 import {
   asRepos,
   type FakeRepos,
@@ -25,8 +33,8 @@ import {
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import type { CalendarDb, OutboxOp } from "./db";
 import type { Drain, DrainNotice } from "./drain";
-import { appDrain, appSync } from "./startSync";
 import { SyncStatus } from "./SyncStatus";
+import { appDrain, appSync } from "./startSync";
 import type { SyncState, SyncStateStore } from "./syncState";
 
 vi.mock(
@@ -558,5 +566,108 @@ describe("override ops in the toasts and the problems list (CAL-025 Block 7)", (
     await db.outbox.add(failedOverrideOp(override(1, "2026-11-18").id));
     const items = await problemItems();
     expect(items[0]).toHaveTextContent(/^: invalid input/);
+  });
+});
+
+// CAL-026 AC-4, Contract Block 9: reminders ops as CAL-025 Block 7 made
+// override ops - the conflict toast's Redo re-queues the dropped patch on
+// reminders, and the problems list names a failed reminder op by its event's
+// title (a reminder has no title of its own). Discard goes through discardOp
+// with the reminders repository.
+describe("reminder ops in the toasts and the problems list (CAL-026 AC-4, Block 9)", () => {
+  const SERIES: Event = ev(1, at(11, 4, 10), at(11, 4, 11), {
+    title: "Spin",
+    updatedAt: T1,
+  });
+  const REM = reminder(1, { eventId: SERIES.id, updatedAt: T1 });
+  const failedReminderOp = (id: string): OutboxOp => ({
+    op: "update",
+    table: "reminders",
+    id,
+    patch: { minutesBefore: 30 },
+    baseUpdatedAt: T1,
+    clientTs: NOW_TS,
+    status: "failed",
+    error: ERROR,
+  });
+
+  async function openProblems() {
+    renderStatus({ online: true, queued: 0, failed: 1 });
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Show sync problems" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Changes that couldn't sync",
+    });
+    return { user, items: within(dialog).getAllByRole("listitem") };
+  }
+
+  it("Redo on a reminders conflict re-queues the patch on reminders, over the fresh reminder, and runs the drain", async () => {
+    const fresh = { ...REM, minutesBefore: 5, updatedAt: S9 };
+    await db.reminders.put(fresh);
+    renderStatus({ online: true, queued: 0, failed: 0 });
+    emit({
+      kind: "conflict",
+      table: "reminders",
+      id: fresh.id,
+      title: "Spin",
+      fields: ["reminder"],
+      patch: { minutesBefore: 30 },
+      freshUpdatedAt: S9,
+    });
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "Edited elsewhere; your change to reminder was not applied.",
+    );
+    const user = userEvent.setup();
+    await user.click(
+      within(screen.getByRole("alert")).getByRole("button", { name: "Redo" }),
+    );
+    await vi.waitFor(() => expect(drain.run).toHaveBeenCalled());
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "update",
+        table: "reminders",
+        id: fresh.id,
+        patch: { minutesBefore: 30 },
+        baseUpdatedAt: S9,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+    expect(await db.reminders.get(fresh.id)).toStrictEqual({
+      ...fresh,
+      minutesBefore: 30,
+    });
+  });
+
+  it('a failed reminder op is listed by its event\'s title: "Spin: invalid input"', async () => {
+    await db.events.put(SERIES);
+    await db.reminders.put(REM);
+    await db.outbox.add(failedReminderOp(REM.id));
+    const { items } = await openProblems();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent(/^Spin: invalid input/);
+  });
+
+  it('with neither the reminder nor its event in the cache, the title is empty: ": invalid input"', async () => {
+    await db.outbox.add(failedReminderOp(REM.id));
+    const { items } = await openProblems();
+    expect(items[0]).toHaveTextContent(/^: invalid input/);
+  });
+
+  it("Discard on a failed reminder op removes it and puts the reminders repository's copy in the cache", async () => {
+    await db.events.put(SERIES);
+    await db.reminders.put({ ...REM, minutesBefore: 30 });
+    await db.outbox.add(failedReminderOp(REM.id));
+    const server = { ...REM, minutesBefore: 5, updatedAt: S9 };
+    repos.reminders.get.mockResolvedValue(okRow(server));
+    const { user, items } = await openProblems();
+    await user.click(
+      within(items[0] as HTMLElement).getByRole("button", { name: "Discard" }),
+    );
+    await vi.waitFor(async () => expect(await db.outbox.count()).toBe(0));
+    expect(repos.reminders.get.mock.calls).toStrictEqual([[REM.id]]);
+    expect(await db.reminders.get(REM.id)).toStrictEqual(server);
   });
 });
