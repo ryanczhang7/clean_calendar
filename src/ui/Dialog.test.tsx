@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type ReactNode, useState } from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -119,5 +119,82 @@ describe("Dialog (AC-6)", () => {
     await user.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(opener).toHaveFocus();
+  });
+});
+
+// CAL-025 Contract, Block 1: `role` chooses "dialog" (the default) or
+// "alertdialog" (the edit-scope dialog, accessibility.md Roles and names),
+// set on the <dialog> element itself; nothing else about the primitive moves.
+describe("Dialog role (CAL-025 Block 1)", () => {
+  function RoleHarness(props: { role?: "dialog" | "alertdialog" }) {
+    const [open, setOpen] = useState(false);
+    return (
+      <>
+        <button type="button" onClick={() => setOpen(true)}>
+          Open
+        </button>
+        <Dialog
+          open={open}
+          title="Delete which events?"
+          onClose={() => setOpen(false)}
+          {...(props.role === undefined ? {} : { role: props.role })}
+          actions={
+            <>
+              <button type="button" onClick={() => setOpen(false)}>
+                Cancel
+              </button>
+              <button type="button" data-variant="danger">
+                Delete
+              </button>
+            </>
+          }
+        >
+          <p>Body</p>
+        </Dialog>
+      </>
+    );
+  }
+
+  async function openWith(role?: "dialog" | "alertdialog") {
+    const user = userEvent.setup();
+    render(<RoleHarness {...(role === undefined ? {} : { role })} />);
+    const opener = screen.getByRole("button", { name: "Open" });
+    await user.click(opener);
+    return { user, opener };
+  }
+
+  it('role="alertdialog" is set on the <dialog> element, named by its title, and there is no role=dialog', async () => {
+    await openWith("alertdialog");
+    const dialog = screen.getByRole("alertdialog", {
+      name: "Delete which events?",
+    });
+    expect(dialog.tagName).toBe("DIALOG");
+    expect(dialog).toHaveAttribute("role", "alertdialog");
+    expect(dialog).toHaveAttribute("open");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("an alertdialog keeps the primitive's behaviour: focus on the first non-danger control, Escape closes, focus back on the opener", async () => {
+    const { user, opener } = await openWith("alertdialog");
+    const cancel = screen.getByRole("button", { name: "Cancel" });
+    expect(screen.getByRole("alertdialog")).toContainElement(cancel);
+    expect(cancel).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(opener).toHaveFocus();
+  });
+
+  it('without role, and with role="dialog", it is a dialog and not an alertdialog', async () => {
+    await openWith();
+    expect(
+      screen.getByRole("dialog", { name: "Delete which events?" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    cleanup();
+    await openWith("dialog");
+    expect(
+      screen.getByRole("dialog", { name: "Delete which events?" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 });

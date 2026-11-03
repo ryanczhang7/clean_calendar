@@ -10,7 +10,7 @@ import {
   vi,
 } from "vitest";
 import type { Event } from "../data/rows";
-import { at, ev, freshDb, T1 } from "../test/cache-fixtures";
+import { at, ev, freshDb, kind, override, T1 } from "../test/cache-fixtures";
 import {
   asRepos,
   type FakeRepos,
@@ -425,5 +425,138 @@ describe("the app's indicator drains when the network returns (AC-2, Block 5)", 
       drainRun.mockRestore();
       syncRun.mockRestore();
     }
+  });
+});
+
+// CAL-025 Contract, Block 7 (carried from CAL-056 RED, story Notes): once
+// this story queues override ops, the conflict toast's Redo must re-queue an
+// `event_overrides` patch on that table - not fall through to "kinds", where
+// no row has the id and nothing is queued - and the problems list must name
+// a failed override op. An override's title is usually null (it overrides
+// nothing there), so the list falls back to its series' title, then "".
+describe("override ops in the toasts and the problems list (CAL-025 Block 7)", () => {
+  const SERIES: Event = ev(1, at(11, 4, 10), at(11, 4, 11), {
+    title: "Spin",
+    updatedAt: T1,
+  });
+  const failedOverrideOp = (id: string): OutboxOp => ({
+    op: "update",
+    table: "event_overrides",
+    id,
+    patch: { startsAt: at(11, 18, 14) },
+    baseUpdatedAt: T1,
+    clientTs: NOW_TS,
+    status: "failed",
+    error: ERROR,
+  });
+
+  async function problemItems(): Promise<HTMLElement[]> {
+    renderStatus({ online: true, queued: 0, failed: 1 });
+    const user = userEvent.setup();
+    await user.click(
+      screen.getByRole("button", { name: "Show sync problems" }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Changes that couldn't sync",
+    });
+    return within(dialog).getAllByRole("listitem");
+  }
+
+  it("Redo on an event_overrides conflict re-queues the patch on event_overrides, over the fresh override, and runs the drain", async () => {
+    const fresh = override(1, "2026-11-18", {
+      eventId: SERIES.id,
+      title: "Theirs",
+      updatedAt: S9,
+    });
+    await db.overrides.put(fresh);
+    renderStatus({ online: true, queued: 0, failed: 0 });
+    emit({
+      kind: "conflict",
+      table: "event_overrides",
+      id: fresh.id,
+      title: "Theirs",
+      fields: ["title"],
+      patch: { title: "Mine" },
+      freshUpdatedAt: S9,
+    });
+    const user = userEvent.setup();
+    await user.click(
+      within(screen.getByRole("alert")).getByRole("button", { name: "Redo" }),
+    );
+    await vi.waitFor(() => expect(drain.run).toHaveBeenCalled());
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "update",
+        table: "event_overrides",
+        id: fresh.id,
+        patch: { title: "Mine" },
+        baseUpdatedAt: S9,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+    expect(await db.overrides.get(fresh.id)).toStrictEqual({
+      ...fresh,
+      title: "Mine",
+    });
+  });
+
+  it("Redo on a kinds conflict still re-queues on kinds", async () => {
+    const k = kind(3, { name: "Theirs", updatedAt: S9 });
+    await db.kinds.put(k);
+    renderStatus({ online: true, queued: 0, failed: 0 });
+    emit({
+      kind: "conflict",
+      table: "kinds",
+      id: k.id,
+      title: "Theirs",
+      fields: ["name"],
+      patch: { name: "Mine" },
+      freshUpdatedAt: S9,
+    });
+    const user = userEvent.setup();
+    await user.click(
+      within(screen.getByRole("alert")).getByRole("button", { name: "Redo" }),
+    );
+    await vi.waitFor(() => expect(drain.run).toHaveBeenCalled());
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "update",
+        table: "kinds",
+        id: k.id,
+        patch: { name: "Mine" },
+        baseUpdatedAt: S9,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+  });
+
+  it('a failed override op whose cached override has a title is listed by it: "Spin late: invalid input"', async () => {
+    const row = override(1, "2026-11-18", {
+      eventId: SERIES.id,
+      title: "Spin late",
+    });
+    await db.events.put(SERIES);
+    await db.overrides.put(row);
+    await db.outbox.add(failedOverrideOp(row.id));
+    const items = await problemItems();
+    expect(items).toHaveLength(1);
+    expect(items[0]).toHaveTextContent(/^Spin late: invalid input/);
+  });
+
+  it('a failed override op whose override has no title is listed by its series\' title: "Spin: invalid input"', async () => {
+    const row = override(1, "2026-11-18", { eventId: SERIES.id, title: null });
+    await db.events.put(SERIES);
+    await db.overrides.put(row);
+    await db.outbox.add(failedOverrideOp(row.id));
+    const items = await problemItems();
+    expect(items[0]).toHaveTextContent(/^Spin: invalid input/);
+  });
+
+  it('with neither the override nor its series in the cache, the title is empty: ": invalid input"', async () => {
+    await db.outbox.add(failedOverrideOp(override(1, "2026-11-18").id));
+    const items = await problemItems();
+    expect(items[0]).toHaveTextContent(/^: invalid input/);
   });
 });

@@ -1,14 +1,16 @@
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   deletedLabel,
-  moveEvent,
+  deletedSeriesLabel,
   movedLabel,
+  moveEvent,
   moveToDay,
   moveToSlot,
   resizeBy,
   resizedLabel,
-  STEP_MINUTES,
   type Span,
+  STEP_MINUTES,
+  seriesSpan,
 } from "./moveEvent";
 
 // CAL-013 Contract, Block 1 (AC-1, and the arithmetic of AC-2 and AC-3).
@@ -219,5 +221,98 @@ describe("the toast copy (voice.md, Toasts; Block 1; PO decision 5)", () => {
 
   it('a delete reads "Deleted Dinner at Nopa"', () => {
     expect(deletedLabel("Dinner at Nopa")).toBe("Deleted Dinner at Nopa");
+  });
+});
+
+// CAL-025 Contract, Block 5 (AC-6, PO decision 6). "All events in the
+// series" with a time change moves the SERIES by the wall-clock delta the
+// shown occurrence moved by (calendar days plus local minutes-of-day, PO
+// decision 8) - never to the occurrence's absolute dates. Start and
+// end each take their own delta, so a resize of the occurrence resizes the
+// series. MECHANICAL: AC-6's worked example is the story's own number.
+describe("seriesSpan moves the series by the occurrence's delta (CAL-025 Block 5, AC-6)", () => {
+  // The series starts Wed 4 Nov 2026 10:00 - 11:00; its 18 November
+  // occurrence is dropped on 20 November, keeping its time.
+  const SERIES = span(at(11, 4, 10), at(11, 4, 11));
+  const SHOWN = span(at(11, 18, 10), at(11, 18, 11));
+
+  it("the 18 November occurrence moved to 20 November moves a 4 November series to 6 November 10:00 - 11:00", () => {
+    expect(
+      seriesSpan(SERIES, SHOWN, span(at(11, 20, 10), at(11, 20, 11))),
+    ).toStrictEqual(span(at(11, 6, 10), at(11, 6, 11)));
+  });
+
+  it("is not the occurrence's own dates (the mutation 'return next' gives 20 November)", () => {
+    const next = span(at(11, 20, 10), at(11, 20, 11));
+    const out = seriesSpan(SERIES, SHOWN, next);
+    expect(out.startsAt.getTime()).not.toBe(next.startsAt.getTime());
+    expect(out.startsAt).toStrictEqual(at(11, 6, 10));
+  });
+
+  it("a move earlier works the same way: 18 to 16 November puts the series on 2 November", () => {
+    expect(
+      seriesSpan(SERIES, SHOWN, span(at(11, 16, 10), at(11, 16, 11))),
+    ).toStrictEqual(span(at(11, 2, 10), at(11, 2, 11)));
+  });
+
+  it("a time change on the same day moves the series' time: 10:00 -> 14:30 gives 4 November 14:30 - 15:30", () => {
+    expect(
+      seriesSpan(SERIES, SHOWN, span(at(11, 18, 14, 30), at(11, 18, 15, 30))),
+    ).toStrictEqual(span(at(11, 4, 14, 30), at(11, 4, 15, 30)));
+  });
+
+  it("start and end take their own deltas: only the end later by 30 minutes lengthens the series to 11:30", () => {
+    expect(
+      seriesSpan(SERIES, SHOWN, span(at(11, 18, 10), at(11, 18, 11, 30))),
+    ).toStrictEqual(span(at(11, 4, 10), at(11, 4, 11, 30)));
+  });
+
+  it("an unchanged span leaves the series where it is", () => {
+    expect(seriesSpan(SERIES, SHOWN, SHOWN)).toStrictEqual(SERIES);
+  });
+
+  // PO decision 8: the delta is WALL-CLOCK (calendar days plus local
+  // minutes-of-day), not milliseconds. Wed 28 Oct 10:00 CDT -> Mon 2 Nov
+  // 10:00 CST crosses the 1 Nov DST end: 5 days but 121 elapsed hours.
+  // Measured with node in America/Chicago, outside the framework: the
+  // millisecond rule gives Mon 12 Oct 11:00 - 12:00 (CDT), the wall-clock
+  // rule 10:00 - 11:00. The other cases here sit in November, after the
+  // change, where the two rules agree.
+  it("across the 1 November DST end it keeps the wall-clock time: a 7 Oct series whose 28 Oct occurrence goes to Mon 2 Nov starts Mon 12 Oct 10:00 - 11:00, not 11:00 - 12:00", () => {
+    const series = span(at(10, 7, 10), at(10, 7, 11));
+    const shown = span(at(10, 28, 10), at(10, 28, 11));
+    const next = span(at(11, 2, 10), at(11, 2, 11));
+    expect(next.startsAt.getTime() - shown.startsAt.getTime()).toBe(
+      121 * 60 * 60 * 1000,
+    );
+    const out = seriesSpan(series, shown, next);
+    expect(out).toStrictEqual(span(at(10, 12, 10), at(10, 12, 11)));
+    expect(out.startsAt.getHours()).toBe(10);
+  });
+
+  it("returns new Dates and touches none of its inputs", () => {
+    const series = span(at(11, 4, 10), at(11, 4, 11));
+    const shown = span(at(11, 18, 10), at(11, 18, 11));
+    const next = span(at(11, 20, 10), at(11, 20, 11));
+    const out = seriesSpan(series, shown, next);
+    expect(out.startsAt).not.toBe(series.startsAt);
+    expect(out.endsAt).not.toBe(series.endsAt);
+    expect(series).toStrictEqual(span(at(11, 4, 10), at(11, 4, 11)));
+    expect(shown).toStrictEqual(span(at(11, 18, 10), at(11, 18, 11)));
+    expect(next).toStrictEqual(span(at(11, 20, 10), at(11, 20, 11)));
+  });
+});
+
+describe("deletedSeriesLabel (CAL-025 Block 5, AC-5; voice.md Toasts)", () => {
+  it('reads "Deleted Spin and all its occurrences"', () => {
+    expect(deletedSeriesLabel("Spin")).toBe(
+      "Deleted Spin and all its occurrences",
+    );
+  });
+
+  it("keeps the title verbatim, spaces included", () => {
+    expect(deletedSeriesLabel("Dinner at Nopa")).toBe(
+      "Deleted Dinner at Nopa and all its occurrences",
+    );
   });
 });

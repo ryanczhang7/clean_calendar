@@ -79,3 +79,39 @@ export function resizedLabel(span: Span): string {
 export function deletedLabel(title: string): string {
   return `Deleted ${title}`;
 }
+
+const minutesOfDay = (d: Date) => d.getHours() * 60 + d.getMinutes();
+
+/** `series` moved by the wall-clock delta from `shown` to `next`. */
+function shifted(series: Date, shown: Date, next: Date): Date {
+  const days = differenceInCalendarDays(next, shown);
+  const minutes = minutesOfDay(next) - minutesOfDay(shown);
+  return new Date(
+    series.getFullYear(),
+    series.getMonth(),
+    series.getDate() + days,
+    series.getHours(),
+    series.getMinutes() + minutes,
+    series.getSeconds(),
+    series.getMilliseconds(),
+  );
+}
+
+/**
+ * CAL-025 Contract, Block 5 (AC-6, PO decisions 6 and 8). The series' span
+ * after "All events" moves the occurrence `shown` to `next`: start and end
+ * each by their own delta, in device-local WALL TIME - calendar days plus
+ * minutes of the day - so a series keeps its clock time across a DST change,
+ * and never takes the occurrence's own dates.
+ */
+export function seriesSpan(series: Span, shown: Span, next: Span): Span {
+  return {
+    startsAt: shifted(series.startsAt, shown.startsAt, next.startsAt),
+    endsAt: shifted(series.endsAt, shown.endsAt, next.endsAt),
+  };
+}
+
+/** "Deleted {title} and all its occurrences" (voice.md, Toasts). */
+export function deletedSeriesLabel(title: string): string {
+  return `Deleted ${title} and all its occurrences`;
+}

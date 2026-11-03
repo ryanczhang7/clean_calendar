@@ -9,19 +9,23 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useLocation, useNavigate } from "react-router";
+import type { Result } from "../data/result";
 import type { Event } from "../data/rows";
 import { dayKey, monthGrid } from "../domain/monthGrid";
 import {
   deletedLabel,
-  moveEvent,
+  deletedSeriesLabel,
   movedLabel,
+  moveEvent,
   moveToDay,
   moveToSlot,
   resizeBy,
   resizedLabel,
-  STEP_MINUTES,
   type Span,
+  STEP_MINUTES,
+  seriesSpan,
 } from "../domain/moveEvent";
+import { type EditScope, EditScopeDialog } from "../events/EditScopeDialog";
 import {
   EventSheet,
   SAVE_FAILED,
@@ -30,17 +34,18 @@ import {
 import { type EventActions, eventActions } from "../sync/eventActions";
 import { type EventsStore, eventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
-import type { OverridesStore } from "../sync/overridesStore";
+import { type OverrideActions, overrideActions } from "../sync/overrideActions";
+import { type OverridesStore, overridesStore } from "../sync/overridesStore";
 import { useOccurrences } from "../sync/useOccurrences";
+import { useMaybeToast } from "../ui/Toast";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
-import { useBreakpoint } from "./media";
+import type { ChipCommand } from "./EventChip";
 import { eventsOnDay, MonthView } from "./MonthView";
+import { useBreakpoint } from "./media";
 import { type Period, parsePath, periodOf, readView } from "./period";
 import { setSelected, useSelected } from "./selection";
 import { shortcutBlocked } from "./useCalendarKeys";
-import { useMaybeToast } from "../ui/Toast";
-import type { ChipCommand } from "./EventChip";
 import type { DropTarget } from "./useChipDrag";
 import { WeekView } from "./WeekView";
 
@@ -151,32 +156,58 @@ function commandSpan(
   }
 }
 
+/** The pending write an occurrence's edit-scope dialog is asking about. */
+type Pending =
+  | {
+      kind: "move";
+      event: Event;
+      span: Span;
+      text: string;
+      focusAfter: boolean;
+    }
+  | { kind: "delete"; event: Event; focusTarget: HTMLElement | null };
+
 /**
  * Block 8: the writes behind a drop, a chip's command and the sheet's
  * Delete, each toasting with an Undo that runs its write at most once. With
  * no ToastProvider above the page the writes still happen, silently.
+ *
+ * CAL-025 Block 6: on an OCCURRENCE each of them opens the edit-scope dialog
+ * instead, and its answer picks the write - an override of that occurrence,
+ * or the series row (read from the events snapshot), moved by seriesSpan.
  */
 function useEventEdits(
   actions: EventActions,
+  overrides: OverrideActions,
   month: boolean,
+  stores: { events: EventsStore; overrides: OverridesStore },
 ): {
   onDropEvent: OnDropEvent;
   onChipCommand: OnChipCommand;
   onDelete: (event: Event) => void;
+  scopeDialog: JSX.Element;
 } {
   const toast = useMaybeToast();
-  // After a keyboard move the moved chip takes focus, once the render that
-  // shows it in its new place has committed (it may be a new element).
-  const focusId = useRef<string | null>(null);
+  // Focus that must wait for a commit: after a keyboard move the moved chip
+  // (it may be a new element); after a confirmed delete the cell, once the
+  // closing dialog has given focus back to its opener (CAL-025 Block 6).
+  const focusNext = useRef<(() => void) | null>(null);
   const [focusTick, requestFocus] = useReducer((n: number) => n + 1, 0);
+  const [pending, setPending] = useState<Pending | null>(null);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: a focus request is the trigger; the id is read from the ref
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a focus request is the trigger; the target is read from the ref
   useEffect(() => {
-    const id = focusId.current;
-    if (id === null) return;
-    focusId.current = null;
-    document.querySelector<HTMLElement>(`[data-event-id="${id}"]`)?.focus();
+    const focus = focusNext.current;
+    if (focus === null) return;
+    focusNext.current = null;
+    focus();
   }, [focusTick]);
+
+  const focusChip = (id: string) => {
+    focusNext.current = () =>
+      document.querySelector<HTMLElement>(`[data-event-id="${id}"]`)?.focus();
+    requestFocus();
+  };
 
   const failed = () => toast?.showToast({ text: SAVE_FAILED, tone: "alert" });
 
@@ -192,6 +223,32 @@ function useEventEdits(
     };
   };
 
+  /** Awaits a write; ok → `text` with an Undo of `undo(row)`, else the alert. */
+  const written = async <T,>(
+    write: Promise<Result<T>>,
+    text: string,
+    undo: (row: T) => Promise<{ status: string }>,
+  ): Promise<boolean> => {
+    const result = await write;
+    if (result.status !== "ok") {
+      failed();
+      return false;
+    }
+    toast?.showToast({
+      text,
+      action: {
+        label: "Undo",
+        undo: true,
+        onClick: once(() => undo(result.row)),
+      },
+    });
+    return true;
+  };
+
+  /** The stored series row of an occurrence (Block 6). */
+  const seriesOf = (event: Event) =>
+    stores.events.getSnapshot().events.find((e) => e.id === event.id);
+
   const move = async (
     event: Event,
     span: Span,
@@ -199,44 +256,104 @@ function useEventEdits(
     focusAfter: boolean,
   ) => {
     if (sameSpan(event, span)) return;
-    const patch = { startsAt: span.startsAt, endsAt: span.endsAt };
-    const result = await actions.updateEvent(event.id, patch, event.updatedAt);
-    if (result.status !== "ok") {
-      failed();
+    if (event.occurrenceDate !== undefined) {
+      setPending({ kind: "move", event, span, text, focusAfter });
       return;
     }
     const before = { startsAt: event.startsAt, endsAt: event.endsAt };
-    toast?.showToast({
+    const ok = await written(
+      actions.updateEvent(
+        event.id,
+        { startsAt: span.startsAt, endsAt: span.endsAt },
+        event.updatedAt,
+      ),
       text,
-      action: {
-        label: "Undo",
-        undo: true,
-        // The undo carries the token the move produced (Block 3).
-        onClick: once(() =>
-          actions.updateEvent(event.id, before, result.row.updatedAt),
-        ),
-      },
-    });
-    if (focusAfter) {
-      focusId.current = event.id;
-      requestFocus();
-    }
+      // The undo carries the token the move produced (Block 3).
+      (row) => actions.updateEvent(event.id, before, row.updatedAt),
+    );
+    if (ok && focusAfter) focusChip(event.id);
   };
 
-  const remove = async (event: Event) => {
-    const result = await actions.removeEvent(event);
-    if (result.status !== "ok") {
+  const remove = (event: Event) =>
+    written(actions.removeEvent(event), deletedLabel(event.title), (row) =>
+      actions.restoreEvent(row),
+    );
+
+  /** CAL-025 Block 6: the write the dialog's answer picks. */
+  const confirmScope = async (asked: Pending, scope: EditScope) => {
+    const { event } = asked;
+    const date = event.occurrenceDate;
+    if (date === undefined) return;
+    const series = seriesOf(event);
+    if (scope === "series" && series === undefined) {
       failed();
       return;
     }
-    toast?.showToast({
-      text: deletedLabel(event.title),
-      action: {
-        label: "Undo",
-        undo: true,
-        onClick: once(() => actions.restoreEvent(result.row)),
-      },
-    });
+    if (asked.kind === "delete") {
+      if (scope === "occurrence") {
+        await written(
+          overrides.cancelOccurrence(event.id, date),
+          deletedLabel(event.title),
+          (row) => overrides.restoreOccurrence(row),
+        );
+      } else if (series !== undefined) {
+        await written(
+          actions.removeEvent(series),
+          deletedSeriesLabel(series.title),
+          (row) => actions.restoreEvent(row),
+        );
+      }
+      return;
+    }
+    const { span, text } = asked;
+    let ok = false;
+    if (scope === "occurrence") {
+      // PO decision 5: the Undo writes the prior override's times back, null
+      // where it had none.
+      const prior = stores.overrides
+        .getSnapshot()
+        .overrides.find(
+          (o) => o.eventId === event.id && o.occurrenceDate === date,
+        );
+      const before = {
+        startsAt: prior?.startsAt ?? null,
+        endsAt: prior?.endsAt ?? null,
+      };
+      ok = await written(
+        overrides.setOverride(event.id, date, {
+          startsAt: span.startsAt,
+          endsAt: span.endsAt,
+        }),
+        text,
+        () => overrides.setOverride(event.id, date, before),
+      );
+    } else if (series !== undefined) {
+      const before = { startsAt: series.startsAt, endsAt: series.endsAt };
+      ok = await written(
+        actions.updateEvent(
+          event.id,
+          seriesSpan(series, event, span),
+          series.updatedAt,
+        ),
+        text,
+        (row) => actions.updateEvent(event.id, before, row.updatedAt),
+      );
+    }
+    if (ok && asked.focusAfter) focusChip(event.id);
+  };
+
+  const onConfirm = (scope: EditScope) => {
+    const asked = pending;
+    setPending(null);
+    if (asked === null) return;
+    if (asked.kind === "delete" && asked.focusTarget !== null) {
+      // Once the dialog has closed and refocused its opener - the chip that
+      // is about to go (Block 6, amended by RED).
+      const target = asked.focusTarget;
+      focusNext.current = () => target.focus();
+      requestFocus();
+    }
+    void confirmScope(asked, scope);
   };
 
   const onDropEvent: OnDropEvent = (event, target) => {
@@ -257,6 +374,10 @@ function useEventEdits(
             .closest('[role="grid"]')
             ?.querySelector<HTMLElement>('[role="gridcell"][tabindex="0"]') ??
           null);
+      if (event.occurrenceDate !== undefined) {
+        setPending({ kind: "delete", event, focusTarget: target });
+        return;
+      }
       target?.focus();
       void remove(event);
       return;
@@ -266,11 +387,25 @@ function useEventEdits(
     void move(event, next.span, next.text, true);
   };
 
-  return {
-    onDropEvent,
-    onChipCommand,
-    onDelete: (event) => void remove(event),
+  const onDelete = (event: Event) => {
+    if (event.occurrenceDate !== undefined) {
+      setPending({ kind: "delete", event, focusTarget: null });
+      return;
+    }
+    void remove(event);
   };
+
+  const scopeDialog = (
+    <EditScopeDialog
+      open={pending !== null}
+      kind={pending?.kind === "delete" ? "delete" : "change"}
+      moving={pending?.kind === "move"}
+      onCancel={() => setPending(null)}
+      onConfirm={onConfirm}
+    />
+  );
+
+  return { onDropEvent, onChipCommand, onDelete, scopeDialog };
 }
 
 /**
@@ -390,6 +525,8 @@ export function CalendarPage(
     now?: () => Date;
     /** The sheet's writes; default the app's eventActions (tests inject). */
     actions?: EventActions;
+    /** CAL-025 Block 6: an occurrence's writes; default the app's overrideActions. */
+    overrideActions?: OverrideActions;
   } = {},
 ): JSX.Element {
   const { pathname } = useLocation();
@@ -402,8 +539,13 @@ export function CalendarPage(
   const kinds = useKinds(props.kinds);
   const [sheet, setSheet] = useState<SheetRequest | null>(null);
   const actions = props.actions ?? eventActions;
-  const edits = useEventEdits(actions, period.view === "month");
-  useFocusEventFromState(props.events ?? eventsStore);
+  const overrides = props.overrideActions ?? overrideActions;
+  const events = props.events ?? eventsStore;
+  const edits = useEventEdits(actions, overrides, period.view === "month", {
+    events,
+    overrides: props.overrides ?? overridesStore,
+  });
+  useFocusEventFromState(events);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new period is the trigger; `selected` is that render's answer
   useEffect(() => {
@@ -430,7 +572,16 @@ export function CalendarPage(
     });
   };
   const onOpenEvent = (event: Event, chip: HTMLElement) => {
-    setSheet({ mode: "edit", event, opener: chip });
+    // CAL-025 Block 6: an occurrence's sheet carries its stored series row.
+    const series =
+      event.occurrenceDate === undefined
+        ? undefined
+        : events.getSnapshot().events.find((e) => e.id === event.id);
+    setSheet(
+      series === undefined
+        ? { mode: "edit", event, opener: chip }
+        : { mode: "edit", event, opener: chip, series },
+    );
   };
 
   // PO decision 3: N creates an all-day event on the selected day, in every
@@ -497,9 +648,11 @@ export function CalendarPage(
         request={sheet}
         kinds={kinds}
         actions={actions}
+        overrides={overrides}
         onClose={() => setSheet(null)}
         onDelete={edits.onDelete}
       />
+      {edits.scopeDialog}
     </>
   );
 }

@@ -127,14 +127,11 @@ export function EventChip(props: {
     onClickCapture?: MouseEventHandler<HTMLElement>;
   };
 }): JSX.Element {
-  const { event, kind, tabIndex, onActivate, onCommand } = props;
-  // CAL-024 Block 11: an occurrence cannot be moved or deleted until CAL-025,
-  // so its chip has no command keys and no drag. Click, Enter and Space
-  // still open it. Keyed on occurrenceDate: a series row keeps every path.
-  const occurrence = event.occurrenceDate !== undefined;
-  const dragProps = occurrence ? undefined : props.dragProps;
+  const { event, kind, tabIndex, onActivate, onCommand, dragProps } = props;
+  // CAL-025 Block 3: an occurrence chip moves and deletes like any other; the
+  // page asks which events (CAL-024 Block 11's guard is gone).
   const onKeyDown =
-    onCommand === undefined || occurrence
+    onCommand === undefined
       ? undefined
       : (e: KeyboardEvent<HTMLButtonElement>) => {
           const command = commandFor(e);

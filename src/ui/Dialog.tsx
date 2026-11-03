@@ -19,8 +19,10 @@ export function Dialog(props: {
   onClose: () => void;
   children: ReactNode;
   actions?: ReactNode;
+  /** CAL-025 Block 1: "alertdialog" for a question that must be answered. */
+  role?: "dialog" | "alertdialog";
 }): JSX.Element {
-  const { open, title, onClose, children, actions } = props;
+  const { open, title, onClose, children, actions, role = "dialog" } = props;
   const titleId = useId();
   const ref = useRef<HTMLDialogElement>(null);
   const opener = useRef<HTMLElement | null>(null);
@@ -53,6 +55,7 @@ export function Dialog(props: {
   return (
     <dialog
       ref={ref}
+      role={role}
       aria-labelledby={titleId}
       className={styles.dialog}
       onCancel={handleCancel}

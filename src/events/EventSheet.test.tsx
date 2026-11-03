@@ -19,9 +19,10 @@ import {
   vi,
 } from "vitest";
 import type { Result } from "../data/result";
-import type { Event, Kind } from "../data/rows";
+import type { Event, EventOverride, Kind } from "../data/rows";
 import type { EventActions } from "../sync/eventActions";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import type { OverrideActions } from "../sync/overrideActions";
 import { EventSheet, type SheetRequest } from "./EventSheet";
 
 vi.mock(
@@ -986,11 +987,11 @@ describe("the Delete button (CAL-013 AC-4, Block 7)", () => {
     expect(deleteButton()).toBeInTheDocument();
   });
 
-  // CAL-024 Contract, Block 11 (PO decision 5): an occurrence (occurrenceDate
-  // set) cannot be deleted until CAL-025, so its sheet renders no Delete
-  // button even with onDelete. The plain event in the same case, and the
-  // series row without occurrenceDate, still get theirs.
-  describe("an occurrence's sheet (CAL-024 Block 11)", () => {
+  // CAL-025 Contract, Block 4, replacing CAL-024 Block 11's guard: an
+  // occurrence's sheet has its Delete button like any event's, and pressing
+  // it calls onDelete(the occurrence) then onClose - the page decides the
+  // scope (Block 6). The sheet writes nothing and asks nothing itself.
+  describe("an occurrence's sheet has Delete (CAL-025 Block 4)", () => {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     const SERIES = event({
       recurrence: { freq: "weekly", until: null, tz },
@@ -1002,18 +1003,28 @@ describe("the Delete button (CAL-013 AC-4, Block 7)", () => {
       occurrenceDate: "2026-11-18",
     };
 
-    // The plain twin runs first, so in RED it is seen to pass before the
-    // occurrence half fails.
-    it("a plain event with onDelete has its Delete button; an occurrence with onDelete has none, though the sheet and its Save are there", async () => {
-      await openDeleting(edit(DENTIST));
-      expect(deleteButton("Delete Dentist")).toBeInTheDocument();
-      cleanup();
+    it('an occurrence with onDelete has "Delete Dentist" in the header, after the heading', async () => {
       await openDeleting(edit(OCCURRENCE));
       const dialog = sheet("Edit event: Dentist");
-      expect(
-        within(dialog).getByRole("button", { name: "Save" }),
-      ).toBeVisible();
-      expect(screen.queryByRole("button", { name: /^Delete/ })).toBeNull();
+      const button = within(dialog).getByRole("button", {
+        name: "Delete Dentist",
+      });
+      expect(button).toHaveAttribute("type", "button");
+      expect(button.closest("header")).not.toBeNull();
+    });
+
+    it("pressing it calls onDelete(the occurrence, occurrenceDate and all), then onClose, writes nothing and opens no dialog of its own", async () => {
+      const { user, actions, log, onDelete } = await openDeleting(
+        edit(OCCURRENCE),
+      );
+      await user.click(deleteButton("Delete Dentist"));
+      expect(log).toStrictEqual([`delete ${OCCURRENCE.id}`, "close"]);
+      expect(onDelete).toHaveBeenCalledWith(OCCURRENCE);
+      expect(onDelete.mock.calls[0]?.[0]?.occurrenceDate).toBe("2026-11-18");
+      expect(actions.removeEvent).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
     });
 
     it("the series row itself (recurrence set, no occurrenceDate) keeps its Delete button", async () => {
@@ -1133,4 +1144,453 @@ describe("repeating events through the sheet (CAL-024 AC-2)", () => {
     await waitFor(() => expect(title()).toHaveFocus());
     expect(actions.createEvent).not.toHaveBeenCalled();
   });
+});
+
+/**
+ * CAL-025: the per-test budget of a scope-dialog flow at the sheet. Measured
+ * locally in RED (Windows, full unit project under --coverage): the slowest
+ * reached 2.2 s, about 1 s of it a findBy waiting out the dialog that does
+ * not exist yet. The 5 s default is under 4x that; 15 s is not. No CI figure
+ * exists yet.
+ */
+const SCOPE_FLOW_TIMEOUT_MS = 15_000;
+
+// CAL-025 Contract, Block 4 (AC-1, AC-2, AC-4, AC-6 at the sheet; PO
+// decisions 4 and 6). Saving an edit to an OCCURRENCE writes nothing until
+// the edit-scope dialog - a sibling of the sheet, as "Discard changes?" is -
+// says which: "This event only" is overrides.setOverride(series id, the
+// occurrence's date, only the changed fields); "All events in the series" is
+// actions.updateEvent(series id, the patch with startsAt/endsAt moved by the
+// occurrence's delta, the SERIES row's updatedAt). A patch of `recurrence`
+// alone is a series edit with no dialog. The series starts Wed 4 Nov 2026
+// 09:00 - 10:30; its 18 November occurrence is what the sheet edits. The
+// series row carries its own token, distinct from the occurrence's, so the
+// token sent is observably the series'. MECHANICAL: every call is pinned
+// exactly with toStrictEqual.
+
+describe("saving an occurrence asks which events (CAL-025 Block 4)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const DEVICE_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const SERIES_TOKEN = "2026-11-02T09:00:00.000042+00:00";
+  const HELPER =
+    "Moving the whole series moves every occurrence by the same amount.";
+  const nov = (date: number, hour = 0, minute = 0) =>
+    new Date(2026, 10, date, hour, minute);
+
+  const SERIES = event({
+    title: "Spin",
+    location: "Gym hall",
+    notes: null,
+    startsAt: nov(4, 9),
+    endsAt: nov(4, 10, 30),
+    recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+    updatedAt: SERIES_TOKEN,
+  });
+  const OCCURRENCE: Event = {
+    ...SERIES,
+    startsAt: nov(18, 9),
+    endsAt: nov(18, 10, 30),
+    occurrenceDate: "2026-11-18",
+    // What the page's occurrence carries; the token is not the one to send.
+    updatedAt: UPDATED_AT,
+  };
+
+  type FakeOverrides = {
+    setOverride: Mock<OverrideActions["setOverride"]>;
+    cancelOccurrence: Mock<OverrideActions["cancelOccurrence"]>;
+    restoreOccurrence: Mock<OverrideActions["restoreOccurrence"]>;
+  };
+
+  const overrideRow = (fields: Partial<EventOverride> = {}): EventOverride => ({
+    id: "20000000-0000-4000-8000-000000000001",
+    eventId: SERIES.id,
+    occurrenceDate: "2026-11-18",
+    cancelled: false,
+    title: null,
+    kindId: null,
+    startsAt: null,
+    endsAt: null,
+    allDay: null,
+    location: null,
+    notes: null,
+    createdAt: STAMP,
+    updatedAt: STAMP,
+    ...fields,
+  });
+
+  function fakeOverrides(): FakeOverrides {
+    return {
+      setOverride: vi.fn<OverrideActions["setOverride"]>(
+        async (_id, _date, fields) => ({
+          status: "ok",
+          row: overrideRow(fields as Partial<EventOverride>),
+        }),
+      ),
+      cancelOccurrence: vi.fn<OverrideActions["cancelOccurrence"]>(
+        async () => ({ status: "ok", row: overrideRow({ cancelled: true }) }),
+      ),
+      restoreOccurrence: vi.fn<OverrideActions["restoreOccurrence"]>(
+        async (row) => ({ status: "ok", row: { ...row, cancelled: false } }),
+      ),
+    };
+  }
+
+  function ScopeHost(props: {
+    make: Make;
+    actions: FakeActions;
+    overrides: FakeOverrides;
+    onClose: () => void;
+  }): JSX.Element {
+    const [request, setRequest] = useState<SheetRequest | null>(null);
+    return (
+      <>
+        <button
+          type="button"
+          onClick={(e) => setRequest(props.make(e.currentTarget))}
+        >
+          Open
+        </button>
+        <EventSheet
+          request={request}
+          kinds={KINDS}
+          actions={props.actions}
+          overrides={props.overrides}
+          onClose={() => {
+            props.onClose();
+            setRequest(null);
+          }}
+        />
+      </>
+    );
+  }
+
+  /** The occurrence's sheet, with `series` on the request as Block 6 fills it. */
+  const editOccurrence =
+    (occurrence: Event = OCCURRENCE, series: Event = SERIES): Make =>
+    (opener) => ({ mode: "edit", event: occurrence, series, opener });
+
+  async function openScoped(make: Make = editOccurrence()) {
+    const user = userEvent.setup();
+    const actions = fakeActions();
+    const overrides = fakeOverrides();
+    const onClose = vi.fn<() => void>();
+    render(
+      <MemoryRouter>
+        <ScopeHost
+          make={make}
+          actions={actions}
+          overrides={overrides}
+          onClose={onClose}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await screen.findByRole("dialog", { name: "Edit event: Spin" });
+    return { user, actions, overrides, onClose };
+  }
+
+  const scopeDialog = () =>
+    screen.getByRole("alertdialog", { name: "Change which events?" });
+  const choose = async (
+    user: ReturnType<typeof userEvent.setup>,
+    scope: "This event only" | "All events in the series",
+    confirm = "Save",
+  ) => {
+    const dialog = scopeDialog();
+    await user.click(within(dialog).getByRole("radio", { name: scope }));
+    await user.click(within(dialog).getByRole("button", { name: confirm }));
+  };
+  const noWrites = (actions: FakeActions, overrides: FakeOverrides) => {
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+    expect(overrides.cancelOccurrence).not.toHaveBeenCalled();
+  };
+
+  it('Save on an edited occurrence writes nothing and opens the alertdialog "Change which events?" beside the sheet, "This event only" checked and focused, no helper', async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.type(title(), " hard");
+    await user.click(save());
+    const dialog = await screen.findByRole("alertdialog", {
+      name: "Change which events?",
+    });
+    noWrites(actions, overrides);
+    expect(onClose).not.toHaveBeenCalled();
+    const sheetEl = sheet("Edit event: Spin");
+    expect(sheetEl.contains(dialog)).toBe(false);
+    expect(dialog.contains(sheetEl)).toBe(false);
+    const only = within(dialog).getByRole("radio", { name: "This event only" });
+    expect(only).toBeChecked();
+    await waitFor(() => expect(only).toHaveFocus());
+    expect(
+      within(dialog).getByRole("radio", { name: "All events in the series" }),
+    ).not.toBeChecked();
+    expect(screen.queryByText(HELPER)).toBeNull();
+  });
+
+  it('"This event only" on a title change: setOverride(series id, "2026-11-18", { title }) once, no series write, the sheet closes and the kind is remembered (AC-2)', async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.type(title(), " hard");
+    await user.click(save());
+    await choose(user, "This event only");
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(overrides.setOverride.mock.calls).toStrictEqual([
+      [SERIES.id, "2026-11-18", { title: "Spin hard" }],
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    expect(overrides.cancelOccurrence).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(localStorage.getItem("cc.lastKind")).toBe(GYM.id);
+  });
+
+  it('a time change shows the helper; "This event only" overrides just startsAt, endsAt and the cleared location (AC-2)', async () => {
+    const { user, actions, overrides } = await openScoped();
+    setField("Start time", "11:00");
+    await user.clear(screen.getByRole("textbox", { name: "Location" }));
+    await user.click(save());
+    await screen.findByRole("alertdialog", { name: "Change which events?" });
+    expect(within(scopeDialog()).getByText(HELPER)).toBeInTheDocument();
+    await choose(user, "This event only");
+    await waitFor(() => expect(overrides.setOverride).toHaveBeenCalledTimes(1));
+    expect(overrides.setOverride.mock.calls[0]).toStrictEqual([
+      SERIES.id,
+      "2026-11-18",
+      { startsAt: nov(18, 11), endsAt: nov(18, 12, 30), location: null },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+  });
+
+  it('"All events in the series" on a title change: updateEvent(series id, { title }, the SERIES token) once, no override (AC-4)', async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.type(title(), " hard");
+    await user.click(save());
+    await choose(user, "All events in the series");
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls).toStrictEqual([
+      [SERIES.id, { title: "Spin hard" }, SERIES_TOKEN],
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it('"All events" on a move of the 18th to the 20th moves the series by two days: 6 Nov 09:00 - 10:30, not 20 Nov (AC-6, PO decision 6)', async () => {
+    const { user, actions, overrides } = await openScoped();
+    setField("Start date", "2026-11-20");
+    await user.click(save());
+    await screen.findByRole("alertdialog", { name: "Change which events?" });
+    expect(within(scopeDialog()).getByText(HELPER)).toBeInTheDocument();
+    await choose(user, "All events in the series");
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      SERIES.id,
+      { startsAt: nov(6, 9), endsAt: nov(6, 10, 30) },
+      SERIES_TOKEN,
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it('"All events" on a title and time change: the title verbatim, the times by the delta (11:00 on the 18th -> 11:00 on the 4th)', async () => {
+    const { user, actions } = await openScoped();
+    await user.type(title(), " hard");
+    setField("Start time", "11:00");
+    await user.click(save());
+    await choose(user, "All events in the series");
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      SERIES.id,
+      { title: "Spin hard", startsAt: nov(4, 11), endsAt: nov(4, 12, 30) },
+      SERIES_TOKEN,
+    ]);
+  });
+
+  it("a change to the repeat rule alone is a series edit with no dialog: updateEvent(series id, { recurrence }, the SERIES token) (PO decision 4)", async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Repeat" }),
+      "daily",
+    );
+    await user.click(save());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(actions.updateEvent.mock.calls).toStrictEqual([
+      [
+        SERIES.id,
+        { recurrence: { freq: "daily", until: null, tz: DEVICE_TZ } },
+        SERIES_TOKEN,
+      ],
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it('a title and repeat change with "This event only": the title in the override, the repeat rule on the series (PO decision 4)', async () => {
+    const { user, actions, overrides } = await openScoped();
+    await user.type(title(), " hard");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Repeat" }),
+      "daily",
+    );
+    await user.click(save());
+    await choose(user, "This event only");
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(overrides.setOverride.mock.calls).toStrictEqual([
+      [SERIES.id, "2026-11-18", { title: "Spin hard" }],
+    ]);
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      SERIES.id,
+      { recurrence: { freq: "daily", until: null, tz: DEVICE_TZ } },
+      SERIES_TOKEN,
+    ]);
+  });
+
+  it('a title and repeat change with "All events": one series write carrying both', async () => {
+    const { user, actions, overrides } = await openScoped();
+    await user.type(title(), " hard");
+    await user.selectOptions(
+      screen.getByRole("combobox", { name: "Repeat" }),
+      "daily",
+    );
+    await user.click(save());
+    await choose(user, "All events in the series");
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      SERIES.id,
+      {
+        title: "Spin hard",
+        recurrence: { freq: "daily", until: null, tz: DEVICE_TZ },
+      },
+      SERIES_TOKEN,
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it("Cancel on the dialog returns to the sheet with the edit intact: nothing written, the sheet open", async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.type(title(), " hard");
+    await user.click(save());
+    await user.click(
+      within(scopeDialog()).getByRole("button", { name: "Cancel" }),
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sheet("Edit event: Spin")).toBeInTheDocument();
+    expect(title()).toHaveValue("Spin hard");
+    noWrites(actions, overrides);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("Escape on the dialog cancels it and only it: nothing written, the sheet still open with the edit (AC-6)", async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    setField("Start date", "2026-11-20");
+    await user.click(save());
+    await screen.findByRole("alertdialog", { name: "Change which events?" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sheet("Edit event: Spin")).toBeInTheDocument();
+    expect(field("Start date")).toHaveValue("2026-11-20");
+    expect(
+      screen.queryByRole("dialog", { name: "Discard changes?" }),
+    ).toBeNull();
+    noWrites(actions, overrides);
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a refused override shows "Couldn\'t save. Try again." in the sheet, the dialog closed, the sheet open', async () => {
+    const { user, overrides, onClose } = await openScoped();
+    overrides.setOverride.mockResolvedValue({ status: "offline" });
+    await user.type(title(), " hard");
+    await user.click(save());
+    await choose(user, "This event only");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /^Couldn't save\. Try again\.$/,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(sheet("Edit event: Spin")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it('a refused series write shows the same alert with "All events"', async () => {
+    const { user, actions, onClose } = await openScoped();
+    actions.updateEvent.mockResolvedValue({ status: "conflict" });
+    await user.type(title(), " hard");
+    await user.click(save());
+    await choose(user, "All events in the series");
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /^Couldn't save\. Try again\.$/,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  // AC-1's "no dialog for a non-recurring event", at the sheet. These pass
+  // today (nothing asks); they pin that the dialog is keyed on
+  // occurrenceDate and on a non-empty patch, not shown for every edit.
+  it("Save with no change on an occurrence closes the sheet: no dialog, no write", async () => {
+    const { user, actions, overrides, onClose } = await openScoped();
+    await user.click(save());
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    noWrites(actions, overrides);
+  });
+
+  it("a plain event's edit saves at once: updateEvent(id, { title }, its token), no dialog, no override", async () => {
+    const { user, actions, overrides } = await openScopedPlain(DENTIST);
+    await user.type(title(), "!");
+    await user.click(save());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(actions.updateEvent.mock.calls).toStrictEqual([
+      [DENTIST.id, { title: "Dentist!" }, UPDATED_AT],
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it("the series row itself (recurrence, no occurrenceDate) saves at once too: no dialog", async () => {
+    const { user, actions, overrides } = await openScopedPlain(SERIES);
+    await user.type(title(), "!");
+    await user.click(save());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(actions.updateEvent.mock.calls).toStrictEqual([
+      [SERIES.id, { title: "Spin!" }, SERIES_TOKEN],
+    ]);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  it("a new event saves at once: createEvent, no dialog", async () => {
+    const user = userEvent.setup();
+    const actions = fakeActions();
+    const overrides = fakeOverrides();
+    render(
+      <MemoryRouter>
+        <ScopeHost
+          make={createAllDay(oct(15))}
+          actions={actions}
+          overrides={overrides}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    await user.type(title(), "Swim");
+    await user.click(save());
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+    expect(overrides.setOverride).not.toHaveBeenCalled();
+  });
+
+  async function openScopedPlain(e: Event) {
+    const user = userEvent.setup();
+    const actions = fakeActions();
+    const overrides = fakeOverrides();
+    render(
+      <MemoryRouter>
+        <ScopeHost
+          make={edit(e)}
+          actions={actions}
+          overrides={overrides}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    return { user, actions, overrides };
+  }
 });

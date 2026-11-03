@@ -1,8 +1,8 @@
 import { type JSX, useCallback, useEffect, useState } from "react";
-import type { EventPatch, KindPatch } from "../data/rows";
+import type { EventOverridePatch, EventPatch, KindPatch } from "../data/rows";
 import { Dialog } from "../ui/Dialog";
 import { useMaybeToast } from "../ui/Toast";
-import { type CalendarDb, db as appDb } from "./db";
+import { db as appDb, type CalendarDb } from "./db";
 import { conflictCopy, type Drain, type DrainNotice } from "./drain";
 import {
   cacheTable,
@@ -11,8 +11,8 @@ import {
   type Repos,
   retryOp,
 } from "./outbox";
-import { appDrain, appRepos, installOnlineSync } from "./startSync";
 import styles from "./SyncStatus.module.css";
+import { appDrain, appRepos, installOnlineSync } from "./startSync";
 import {
   type SyncState,
   type SyncStateStore,
@@ -65,6 +65,12 @@ async function readProblems(db: CalendarDb): Promise<Problem[]> {
     if (op.table === "events" || op.table === "kinds") {
       const row = await cacheTable(db, op.table).get(op.id);
       if (row !== undefined) title = "title" in row ? row.title : row.name;
+    } else {
+      // CAL-025 Block 7: an override by its own title, else its series'.
+      const row = await db.overrides.get(op.id);
+      if (row !== undefined) {
+        title = row.title ?? (await db.events.get(row.eventId))?.title ?? "";
+      }
     }
     problems.push({ seq: op.seq, title, message: op.error?.message ?? "" });
   }
@@ -104,7 +110,8 @@ export function SyncStatus(props: {
             action: {
               label: "Redo",
               onClick: () => {
-                // The dropped patch again, over the fresh row, as a new op.
+                // The dropped patch again, over the fresh row, as a new op
+                // on the table it came from (CAL-025 Block 7: overrides too).
                 const redo =
                   notice.table === "events"
                     ? enqueueUpdate(
@@ -113,12 +120,19 @@ export function SyncStatus(props: {
                         notice.id,
                         notice.patch as EventPatch,
                       )
-                    : enqueueUpdate(
-                        db,
-                        "kinds",
-                        notice.id,
-                        notice.patch as KindPatch,
-                      );
+                    : notice.table === "event_overrides"
+                      ? enqueueUpdate(
+                          db,
+                          "event_overrides",
+                          notice.id,
+                          notice.patch as EventOverridePatch,
+                        )
+                      : enqueueUpdate(
+                          db,
+                          "kinds",
+                          notice.id,
+                          notice.patch as KindPatch,
+                        );
                 void redo.then(() => drain.run());
               },
             },
