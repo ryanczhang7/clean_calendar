@@ -137,3 +137,21 @@ pick up the new PATH.
   not established; the two differences observed for the fast run are a
   recent restart and no running containers. If a self-test is far slower
   than ~30 min, try those two before anything else, and record the result.
+- **The `integration` gate needs the local stack - CAL-031, measured
+  2026-11-04 on this machine (Windows 11 Home 26200, Docker 29.8.2, Supabase
+  CLI 2.120.0, Node v24.19.0).** Like `db`, it now needs Docker Desktop
+  running and `pnpm exec supabase start` up (`http://127.0.0.1:54321`)
+  *before* `pnpm exec playwright test`; Playwright never starts or stops that
+  stack. Playwright itself starts three servers (`playwright.config.ts`,
+  `webServer`): the Gemini stub (`node e2e/fixtures/geminiStub.ts`, port
+  4174), `pnpm exec supabase functions serve --env-file e2e/fixtures/functions.env`
+  (which points the capture function's `GEMINI_API_BASE` at the stub through
+  `host.docker.internal`), and `pnpm build && pnpm exec vite preview --port
+  4173`, built with the URL and anon key read from `supabase status -o env`.
+  **Every run resets the local database:** `e2e/global-setup.ts` runs
+  `pnpm exec supabase db reset --local` first (approved by the owner, CAL-031
+  PO decision 5), so anything typed into the local stack by hand is lost.
+  Measured: the full suite, 29 tests, passed in 1.2 min including the reset
+  and the build. Without Docker the run fails at the `functions` server; the
+  gate is optional repo-wide, so that is a WARN on other stories. Stop any
+  stray `vite preview` on 4173 first: locally it is reused, env and all.

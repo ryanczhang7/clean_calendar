@@ -38,6 +38,7 @@ import { type OverrideActions, overrideActions } from "../sync/overrideActions";
 import { type OverridesStore, overridesStore } from "../sync/overridesStore";
 import { useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
+import styles from "./CalendarPage.module.css";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
 import type { ChipCommand } from "./EventChip";
@@ -641,17 +642,21 @@ export function CalendarPage(
       />
     );
   }
+  // CAL-031 PO decision 6: the view and the sheet are siblings in one row,
+  // so on the desktop the docked panel takes 400px and the view the rest.
   return (
     <>
-      {view}
-      <EventSheet
-        request={sheet}
-        kinds={kinds}
-        actions={actions}
-        overrides={overrides}
-        onClose={() => setSheet(null)}
-        onDelete={edits.onDelete}
-      />
+      <div className={styles.page}>
+        <div className={styles.view}>{view}</div>
+        <EventSheet
+          request={sheet}
+          kinds={kinds}
+          actions={actions}
+          overrides={overrides}
+          onClose={() => setSheet(null)}
+          onDelete={edits.onDelete}
+        />
+      </div>
       {edits.scopeDialog}
     </>
   );
