@@ -60,6 +60,13 @@ type FakeEvent = {
   // CAL-022: a fetch event also carries its request and respondWith.
   request?: FakeRequest;
   respondWith?: (r: Promise<Response> | Response) => void;
+  // CAL-028: a notificationclick event carries its notification.
+  notification?: FakeNotification;
+};
+type FakeNotification = { data?: unknown; close: () => void };
+type FakeWindow = {
+  focus: () => Promise<unknown>;
+  navigate: (url: string) => Promise<unknown>;
 };
 type FakeRequest = {
   method: string;
@@ -75,16 +82,39 @@ function fakeSelf() {
     { url: "index.html", revision: "abc123" },
     { url: "assets/index-x1.js", revision: null },
   ];
+  // CAL-028 Block 6: what the push handlers reach through `self`.
+  const windows: FakeWindow[] = [];
   const self = {
     __WB_MANIFEST: injected,
     skipWaiting: vi.fn(async () => {}),
     addEventListener: vi.fn((type: string, listener: Listener) => {
       listeners.set(type, [...(listeners.get(type) ?? []), listener]);
     }),
+    registration: {
+      showNotification: vi.fn(
+        async (_title: string, _options: unknown): Promise<void> => {},
+      ),
+    },
+    clients: {
+      matchAll: vi.fn(async (_options: unknown) => windows),
+      openWindow: vi.fn(async (_url: string): Promise<unknown> => null),
+    },
   };
   return {
     self,
     injected,
+    windows,
+    /**
+     * Deliver one event of `type` built from `fields`, as the browser would;
+     * returns every promise handed to waitUntil, so a test can await them.
+     */
+    deliver(type: string, fields: Partial<FakeEvent>) {
+      const waited: unknown[] = [];
+      for (const l of listeners.get(type) ?? []) {
+        l({ ...fields, waitUntil: (p: unknown) => waited.push(p) });
+      }
+      return waited;
+    },
     /** Deliver one event to every listener of `type`, as the browser would. */
     dispatch(type: string, data?: unknown) {
       for (const l of listeners.get(type) ?? []) {
@@ -185,10 +215,14 @@ describe("the service worker answers the share target, and only it (CAL-022 AC-5
     return { method, url, formData: vi.fn(async () => form) };
   }
 
-  test("adds a fetch listener beside the message listener", async () => {
+  // CAL-028 RED: was two toContain checks for "fetch" and "message"; now the
+  // exact set, so the two CAL-028 listeners (Block 6) are pinned and nothing
+  // else is registered beside them.
+  test("adds a fetch listener beside the message listener (and, CAL-028, push and notificationclick)", async () => {
     const fake = await loadWorker();
-    expect(fake.types()).toContain("fetch");
-    expect(fake.types()).toContain("message");
+    expect([...fake.types()].sort()).toEqual(
+      ["fetch", "message", "notificationclick", "push"].sort(),
+    );
   });
 
   test("POST /share is answered with a 303 to /capture?from=share, and the share is put in the inbox", async () => {
@@ -240,6 +274,134 @@ describe("the service worker answers the share target, and only it (CAL-022 AC-5
       expect(box.openInbox).not.toHaveBeenCalled();
       expect(box.inbox.put).not.toHaveBeenCalled();
       expect(req.formData).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("the service worker shows a reminder and opens it on click (CAL-028 AC-6, Block 6)", () => {
+  // The REAL ./pwa/pushHandlers computes the expected body and url. Held in a
+  // variable for the same reason as SW_MODULE: tsc (DOM lib) does not follow
+  // it, and loading it inside the test keeps every other case in this file
+  // independent of that module. Its own values are pinned by
+  // src/pwa/pushHandlers.test.ts.
+  const HANDLERS_MODULE = "./pwa/pushHandlers";
+  type Handlers = {
+    reminderBody(p: unknown): string;
+    reminderUrl(p: unknown): string;
+  };
+  const handlers = async () =>
+    (await import(/* @vite-ignore */ HANDLERS_MODULE)) as Handlers;
+
+  const PAYLOAD = {
+    eventId: "evt-1",
+    title: "Dentist",
+    startsAt: "2026-11-03T05:30:00Z",
+    allDay: false,
+    location: "12 High Street",
+  };
+  const URL_ = "/day/2026-11-03?event=evt-1";
+
+  function fakeWindow(log: string[]): FakeWindow {
+    return {
+      focus: vi.fn(async () => {
+        log.push("focus");
+      }),
+      navigate: vi.fn(async (url: string) => {
+        log.push(`navigate ${url}`);
+      }),
+    };
+  }
+
+  test("a push with a reminder payload shows its notification inside waitUntil", async () => {
+    const fake = await loadWorker();
+    expect(fake.types()).toContain("push");
+    const waited = fake.deliver("push", { data: { json: () => PAYLOAD } });
+    expect(waited).toHaveLength(1);
+    await Promise.all(waited);
+    const { reminderBody, reminderUrl } = await handlers();
+    const show = fake.self.registration.showNotification;
+    expect(show).toHaveBeenCalledTimes(1);
+    expect(show).toHaveBeenCalledWith("Dentist", {
+      body: reminderBody(PAYLOAD),
+      data: { url: reminderUrl(PAYLOAD) },
+      tag: "evt-1",
+    });
+  });
+
+  test.each<[string, unknown]>([
+    ["no data", undefined],
+    [
+      "data that is not JSON",
+      {
+        json: () => {
+          throw new SyntaxError("Unexpected token");
+        },
+      },
+    ],
+    ["a payload without a title", { json: () => ({ ...PAYLOAD, title: "" }) }],
+  ])("a push with %s shows nothing", async (_label, data) => {
+    const fake = await loadWorker();
+    expect(fake.types()).toContain("push");
+    const waited = fake.deliver("push", { data });
+    await Promise.all(waited);
+    expect(fake.self.registration.showNotification).not.toHaveBeenCalled();
+  });
+
+  test("a click closes the notification, focuses the open window and navigates it to the url", async () => {
+    const fake = await loadWorker();
+    expect(fake.types()).toContain("notificationclick");
+    const log: string[] = [];
+    const first = fakeWindow(log);
+    const second = fakeWindow(log);
+    fake.windows.push(first, second);
+    const close = vi.fn();
+    const waited = fake.deliver("notificationclick", {
+      notification: { data: { url: URL_ }, close },
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(waited).toHaveLength(1);
+    await Promise.all(waited);
+    expect(fake.self.clients.matchAll).toHaveBeenCalledWith({
+      type: "window",
+      includeUncontrolled: true,
+    });
+    expect(log).toEqual(["focus", `navigate ${URL_}`]);
+    expect(second.focus).not.toHaveBeenCalled();
+    expect(fake.self.clients.openWindow).not.toHaveBeenCalled();
+  });
+
+  test("a click with no open window closes the notification and opens one at the url", async () => {
+    const fake = await loadWorker();
+    expect(fake.types()).toContain("notificationclick");
+    const close = vi.fn();
+    const waited = fake.deliver("notificationclick", {
+      notification: { data: { url: URL_ }, close },
+    });
+    expect(close).toHaveBeenCalledTimes(1);
+    await Promise.all(waited);
+    expect(fake.self.clients.openWindow).toHaveBeenCalledTimes(1);
+    expect(fake.self.clients.openWindow).toHaveBeenCalledWith(URL_);
+  });
+
+  test.each<[string, unknown]>([
+    ["no data", undefined],
+    ["data without a url", { eventId: "evt-1" }],
+    ["a numeric url", { url: 5 }],
+  ])(
+    "a click on a notification with %s closes it and does nothing else",
+    async (_label, data) => {
+      const fake = await loadWorker();
+      // The listener must exist, or "does nothing" would hold vacuously.
+      expect(fake.types()).toContain("notificationclick");
+      fake.windows.push(fakeWindow([]));
+      const close = vi.fn();
+      const waited = fake.deliver("notificationclick", {
+        notification: { data, close },
+      });
+      expect(close).toHaveBeenCalledTimes(1);
+      expect(waited).toHaveLength(0);
+      expect(fake.self.clients.matchAll).not.toHaveBeenCalled();
+      expect(fake.self.clients.openWindow).not.toHaveBeenCalled();
     },
   );
 });

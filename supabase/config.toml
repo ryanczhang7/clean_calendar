@@ -412,6 +412,10 @@ verify_jwt = true
 # The hosted bundler (`functions deploy --use-api`) finds a map only if named here or beside index.ts, never supabase/functions/deno.json on its own (measured, CLI 2.120.0).
 import_map = "./functions/deno.json"
 
+[functions.send-reminders]
+verify_jwt = true
+import_map = "./functions/deno.json"
+
 [analytics]
 enabled = true
 port = 54327

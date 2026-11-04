@@ -10,6 +10,7 @@ import {
 } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { openInbox } from "./pwa/inbox";
+import { openReminder, pushData, showReminder } from "./pwa/pushHandlers";
 import { handleShare, isShareRequest } from "./pwa/shareTarget";
 
 declare let self: ServiceWorkerGlobalScope;
@@ -46,4 +47,19 @@ self.addEventListener("message", (event) => {
 self.addEventListener("fetch", (event) => {
   if (!isShareRequest(event.request)) return;
   event.respondWith(handleShare(event.request, openInbox()));
+});
+
+// CAL-028 Contract Block 6: reminders. The push carries the event, and the
+// device formats it in its own zone (src/pwa/pushHandlers.ts).
+self.addEventListener("push", (event) => {
+  event.waitUntil(showReminder(self.registration, pushData(event.data)));
+});
+
+// A tap closes the notification and opens the event's day in the app.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url: unknown = (event.notification.data as { url?: unknown } | null)
+    ?.url;
+  if (typeof url !== "string") return;
+  event.waitUntil(openReminder(self.clients, url));
 });

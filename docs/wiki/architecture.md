@@ -68,8 +68,10 @@ deleted render in `--chip-neutral`.
   across RLS; it is not callable by the browser (checks for the service-role
   claim).
 - **send-reminders → device:** Web Push protocol with VAPID. The payload is
-  `{title, body, url, eventId}`; the service worker shows it and opens the URL
-  on click.
+  `{eventId, title, startsAt, allDay, location}`; the service worker formats
+  the body ("09:30 · 12 High Street", or "All day") and the
+  `/day/{date}?event={id}` URL in the **device's** zone (the server has none;
+  CAL-028 PO decision 1), shows the notification and opens the URL on click.
 - **Postgres → browser (sync):** Realtime `postgres_changes` on `events`,
   `event_overrides`, `kinds`, `reminders`; each change is applied to the Dexie
   cache, which the UI observes through `useLiveQuery`.
@@ -114,8 +116,14 @@ series on 29 February occurs only in leap years.
 **Reminders.** The scheduler runs every minute. It (1) materialises reminder
 rows for occurrences of recurring events falling in the next 48 h that do not
 yet have one, (2) selects rows with `fire_at = occurrence start − minutes_before`
-in `[now − 5 min, now]` and `sent_at is null`, (3) pushes, (4) marks `sent_at`.
-Idempotent: a crash between (3) and (4) resends once, which is the lesser evil.
+in `[now − 5 min, now]` and `sent_at is null` (or `sent_at < fire_at − 5 min`,
+which re-arms a reminder whose event moved later), skipping soft-deleted
+reminders and soft-deleted or recurring-template events, (3) pushes, (4) marks
+`sent_at` whatever the push outcomes, pruning a subscription the push service
+answered 404/410 for. Idempotent: a crash between (3) and (4) resends once,
+which is the lesser evil. The cron job calls a `security definer` function
+that reads the function URL and the service-role JWT from Vault and does
+nothing when either entry is missing, so the local stack's job is harmless.
 Brief open question acknowledged: a closed laptop browser cannot receive push;
 the phone is the reliable device.
 
