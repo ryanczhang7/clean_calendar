@@ -2,6 +2,7 @@ import { execSync } from "node:child_process";
 import { type BrowserContext, test as base, expect } from "@playwright/test";
 import type { Session } from "@supabase/supabase-js";
 import { DEFAULT_KINDS } from "../../src/kinds/defaultKinds.ts";
+import { TEST_PASSWORD } from "../../supabase/tests/helpers.ts";
 
 // CAL-031 Contract Block 2: the owner's session, injected rather than signed
 // in through Google, and a PostgREST helper so a spec does not walk the UI for
@@ -12,8 +13,11 @@ import { DEFAULT_KINDS } from "../../src/kinds/defaultKinds.ts";
 export { expect };
 
 export const OWNER_EMAIL = "owner@example.com";
-/** Local Auth only, not a secret. */
-export const OWNER_PASSWORD = "e2e-owner-password";
+/**
+ * Local Auth only, not a secret. The db suite's password for the same user, so
+ * neither suite invalidates the other on a reused local stack (CAL-031 R2).
+ */
+export const OWNER_PASSWORD = TEST_PASSWORD;
 
 /**
  * supabase-js's default storage key, `sb-<first label of the API host>-auth-token`
@@ -95,8 +99,8 @@ async function failure(what: string, res: Response): Promise<Error> {
 /**
  * The owner's local Auth user, with OWNER_PASSWORD, confirmed. Idempotent: a
  * 422 "already registered" finds the user and resets its password, because a
- * user another suite created (the db tests make one) has a different password
- * and the password grant would then refuse it.
+ * user made some other way may have a different password and the password
+ * grant would then refuse it. (The db suite's user already shares it.)
  */
 export async function ensureOwnerUser(): Promise<void> {
   const { url } = local();
