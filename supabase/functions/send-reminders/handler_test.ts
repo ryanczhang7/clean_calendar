@@ -1,18 +1,28 @@
 import { assert, assertEquals } from "@std/assert";
+import { expand, type Occurrence } from "../../../shared/recurrence.ts";
 import {
+  dueOccurrences,
   dueReminders,
   fireAt,
   handleSendReminders,
   isDue,
   isServiceRole,
   payloadFor,
+  payloadForOccurrence,
   type PushOutcome,
   type PushPayload,
   type ReminderRow,
   type SendDeps,
+  SERIES_QUERY,
   type Subscription,
   WINDOW_MS,
 } from "./handler.ts";
+import type {
+  OccurrenceReminder,
+  OverrideRow,
+  SeriesReminderRow,
+  SeriesRow,
+} from "./materialise.ts";
 
 // CAL-028 Contract Block 2 (AC-1 to AC-4). Same seam as capture/handler_test:
 // every outbound call goes through deps.fetch, answered from a routing table
@@ -39,6 +49,16 @@ const MIN = 60_000;
 const CANDIDATES = `GET ${SUPABASE_URL}/rest/v1/reminders` +
   "?select=id,minutes_before,sent_at,event:events!inner(id,title,starts_at,all_day,location)" +
   "&deleted_at=is.null&occurrence_date=is.null&event.deleted_at=is.null&event.recurrence=is.null";
+/** CAL-029 Block 4 step 1: the series read, verbatim. */
+const SERIES_QUERY_TEXT =
+  "select=id,title,kind_id,starts_at,ends_at,all_day,location,notes,recurrence," +
+  "reminders(id,minutes_before,sent_at,occurrence_date,deleted_at)," +
+  "event_overrides(occurrence_date,cancelled,title,kind_id,starts_at,ends_at,all_day,location,notes)" +
+  "&deleted_at=is.null&recurrence=not.is.null";
+const SERIES = `GET ${SUPABASE_URL}/rest/v1/events?${SERIES_QUERY_TEXT}`;
+/** CAL-029 Block 4 step 2: the materialisation POST. */
+const MATERIALISE =
+  `POST ${SUPABASE_URL}/rest/v1/reminders?on_conflict=event_id,occurrence_date`;
 const SUBSCRIPTIONS =
   `GET ${SUPABASE_URL}/rest/v1/push_subscriptions?select=id,endpoint,p256dh,auth`;
 const patchKey = (id: string) =>
@@ -205,6 +225,13 @@ type WorldOptions = {
   outcomes?: Record<string, PushOutcome[]>;
   deleteRoute?: Route;
   sendPush?: null;
+  /** CAL-029: the series read's rows; every run answers it, `[]` by default. */
+  series?: SeriesRow[];
+  seriesRoute?: Route;
+  /** CAL-029: the materialisation POST; 201 with no body by default. */
+  materialiseRoute?: Route;
+  /** CAL-029: `now` for the run; NOW by default. */
+  now?: Date;
 };
 
 function world(opts: WorldOptions = {}) {
@@ -222,9 +249,17 @@ function world(opts: WorldOptions = {}) {
   const routes: Record<string, Route> = {
     [CANDIDATES]: opts.candidates ?? (() => json(opts.reminders ?? [])),
     [SUBSCRIPTIONS]: opts.subscriptionsRoute ?? (() => json(subs)),
+    [SERIES]: opts.seriesRoute ?? (() => json(opts.series ?? [])),
+    [MATERIALISE]: opts.materialiseRoute ??
+      (() => new Response(null, { status: 201 })),
   };
   for (const r of opts.reminders ?? []) {
     routes[patchKey(r.id)] = () => new Response(null, { status: 204 });
+  }
+  for (const s of opts.series ?? []) {
+    for (const r of s.reminders) {
+      routes[patchKey(r.id)] = () => new Response(null, { status: 204 });
+    }
   }
   for (const s of subs) {
     routes[deleteKey(s.id)] = opts.deleteRoute ??
@@ -266,7 +301,7 @@ function world(opts: WorldOptions = {}) {
   const deps: SendDeps = {
     fetch,
     env: (n: string) => env[n],
-    now: () => new Date(NOW.getTime()),
+    now: () => new Date((opts.now ?? NOW).getTime()),
     sendPush: opts.sendPush === null ? null : sendPush,
     log: (line: string) => {
       log.push(line);
@@ -533,7 +568,13 @@ Deno.test("AC-2: in the control set only the due reminders are pushed and marked
   const w = world({ reminders: CONTROL_SET, subscriptions: [sub("sub-a")] });
   const { status, body } = await run(w);
   assertEquals(status, 200);
-  assertEquals(body, { due: 5, sent: 5, pruned: 0, failed: 0 });
+  assertEquals(body, {
+    due: 5,
+    sent: 5,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
   assertEquals(
     w.pushes.map((p) => p.payload.eventId),
     CONTROL_DUE.map((r) => r.event.id),
@@ -549,16 +590,22 @@ Deno.test("AC-2: in the control set only the due reminders are pushed and marked
   }
 });
 
-Deno.test("step 5: no due reminder is 200 with zero counts and no further read", async () => {
+Deno.test("step 5: no due reminder is 200 with zero counts and no read after the series read - no subscriptions read", async () => {
   const w = world({ reminders: [R_6_AGO, R_IN_1, R_SENT] });
   const { status, body } = await run(w);
   assertEquals(status, 200);
-  assertEquals(body, { due: 0, sent: 0, pruned: 0, failed: 0 });
-  assertEquals(w.keys(), [CANDIDATES]);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.keys(), [CANDIDATES, SERIES]);
   assertEquals(w.pushes.length, 0);
 });
 
-Deno.test("step 4: a failing candidates read is 502 upstream and nothing is pushed or marked", async () => {
+Deno.test("step 4: a failing candidates read is 502 upstream and the series is not read and nothing is pushed or marked", async () => {
   const cases: [string, Route][] = [
     ["a 500", () => json({ message: "boom" }, 500)],
     ["a 401", () => json({ message: "JWT expired" }, 401)],
@@ -591,7 +638,7 @@ Deno.test("step 6: a failing subscriptions read is 502 upstream and the due remi
     const res = await handleSendReminders(request(), w.deps);
     assertEquals(res.status, 502, `${label} was not a 502`);
     assertEquals(await res.json(), { error: "upstream" }, label);
-    assertEquals(w.keys(), [CANDIDATES, SUBSCRIPTIONS], label);
+    assertEquals(w.keys(), [CANDIDATES, SERIES, SUBSCRIPTIONS], label);
     assertEquals(w.pushes.length, 0, label);
   }
 });
@@ -641,7 +688,13 @@ Deno.test("AC-3: one due reminder, two subscriptions - two pushes in order with 
   const w = world({ reminders: [r], subscriptions: subs });
   const { status, body } = await run(w);
   assertEquals(status, 200);
-  assertEquals(body, { due: 1, sent: 2, pruned: 0, failed: 0 });
+  assertEquals(body, {
+    due: 1,
+    sent: 2,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
   const expected: PushPayload = {
     eventId: "evt-1",
     title: "Dentist",
@@ -655,6 +708,7 @@ Deno.test("AC-3: one due reminder, two subscriptions - two pushes in order with 
   ]);
   assertEquals(w.timeline, [
     CANDIDATES,
+    SERIES,
     SUBSCRIPTIONS,
     "push sub-a evt-1",
     "push sub-b evt-1",
@@ -672,9 +726,20 @@ Deno.test("AC-3: with zero subscriptions nothing is pushed and the reminder is s
   const w = world({ reminders: [R_NOW], subscriptions: [] });
   const { status, body } = await run(w);
   assertEquals(status, 200);
-  assertEquals(body, { due: 1, sent: 0, pruned: 0, failed: 0 });
+  assertEquals(body, {
+    due: 1,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
   assertEquals(w.pushes.length, 0);
-  assertEquals(w.keys(), [CANDIDATES, SUBSCRIPTIONS, patchKey(R_NOW.id)]);
+  assertEquals(w.keys(), [
+    CANDIDATES,
+    SERIES,
+    SUBSCRIPTIONS,
+    patchKey(R_NOW.id),
+  ]);
   assertEquals(JSON.parse(w.only(patchKey(R_NOW.id)).body), {
     sent_at: NOW.toISOString(),
   });
@@ -686,9 +751,16 @@ Deno.test("AC-3: two due reminders are sent in response order, each marked befor
     subscriptions: [sub("sub-a"), sub("sub-b")],
   });
   const { body } = await run(w);
-  assertEquals(body, { due: 2, sent: 4, pruned: 0, failed: 0 });
+  assertEquals(body, {
+    due: 2,
+    sent: 4,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
   assertEquals(w.timeline, [
     CANDIDATES,
+    SERIES,
     SUBSCRIPTIONS,
     `push sub-a ${R_4_AGO.event.id}`,
     `push sub-b ${R_4_AGO.event.id}`,
@@ -716,7 +788,13 @@ for (const code of [410, 404] as const) {
     });
     const { status, body } = await run(w);
     assertEquals(status, 200);
-    assertEquals(body, { due: 2, sent: 2, pruned: 1, failed: 0 });
+    assertEquals(body, {
+      due: 2,
+      sent: 2,
+      pruned: 1,
+      failed: 0,
+      materialised: 0,
+    });
     assertEquals(
       w.pushes.filter((p) => p.sub.id === "sub-a").length,
       1,
@@ -754,7 +832,13 @@ Deno.test("AC-4: any other failure keeps the subscription, logs its id, code and
   });
   const { status, body } = await run(w);
   assertEquals(status, 200);
-  assertEquals(body, { due: 2, sent: 3, pruned: 0, failed: 1 });
+  assertEquals(body, {
+    due: 2,
+    sent: 3,
+    pruned: 0,
+    failed: 1,
+    materialised: 0,
+  });
   assertEquals(w.calls.filter((c) => c.method === "DELETE"), []);
   assertEquals(
     w.pushes.filter((p) => p.sub.id === "sub-a").map((p) => p.payload.eventId),
@@ -782,7 +866,13 @@ Deno.test("AC-4: counts over a mixed run - sent, failed, and pruned counting dis
   });
   const { body } = await run(w);
   // r1: a gone, b failed, c sent; r2: b sent, c gone
-  assertEquals(body, { due: 2, sent: 2, pruned: 2, failed: 1 });
+  assertEquals(body, {
+    due: 2,
+    sent: 2,
+    pruned: 2,
+    failed: 1,
+    materialised: 0,
+  });
   assertEquals(
     w.calls.filter((c) => c.method === "DELETE").map((c) => c.key),
     [deleteKey("sub-a"), deleteKey("sub-c")],
@@ -807,7 +897,7 @@ Deno.test("AC-4: a DELETE that fails is logged and changes neither the response 
     assertEquals(res.status, 200, label);
     assertEquals(
       await res.json(),
-      { due: 1, sent: 1, pruned: 1, failed: 0 },
+      { due: 1, sent: 1, pruned: 1, failed: 0, materialised: 0 },
       `${label}: the response differs from a successful delete`,
     );
     assertEquals(
@@ -821,4 +911,698 @@ Deno.test("AC-4: a DELETE that fails is logged and changes neither the response 
       `${label}: the failed delete was not logged with the subscription id`,
     );
   }
+});
+
+// ================================================================ CAL-029
+//
+// CAL-029 Contract Blocks 3 and 4: the run reads the series after the
+// candidates, plans with materialise.ts, POSTs what is missing, then fires the
+// plain rows followed by the due materialised rows. Every instant is read out
+// of Blocks 5 and 6 or derived from the fixture by hand in a comment; every
+// zone is the series' recurrence.tz.
+
+function tmpl(
+  id: string,
+  minutesBefore: number,
+  deletedAt: string | null = null,
+): SeriesReminderRow {
+  return {
+    id,
+    minutes_before: minutesBefore,
+    sent_at: null,
+    occurrence_date: null,
+    deleted_at: deletedAt,
+  };
+}
+
+function mat(
+  id: string,
+  occurrenceDate: string,
+  minutesBefore: number,
+  sentAt: string | null = null,
+  deletedAt: string | null = null,
+): SeriesReminderRow {
+  return {
+    id,
+    minutes_before: minutesBefore,
+    sent_at: sentAt,
+    occurrence_date: occurrenceDate,
+    deleted_at: deletedAt,
+  };
+}
+
+function ovr(
+  occurrenceDate: string,
+  fields: Partial<OverrideRow> = {},
+): OverrideRow {
+  return {
+    occurrence_date: occurrenceDate,
+    cancelled: false,
+    title: null,
+    kind_id: null,
+    starts_at: null,
+    ends_at: null,
+    all_day: null,
+    location: null,
+    notes: null,
+    ...fields,
+  };
+}
+
+function seriesRow(
+  fields: Partial<SeriesRow> & Pick<SeriesRow, "id" | "starts_at" | "ends_at">,
+): SeriesRow {
+  return {
+    title: `Title ${fields.id}`,
+    kind_id: "kind-1",
+    all_day: false,
+    location: null,
+    notes: null,
+    recurrence: { freq: "daily", until: null, tz: "UTC" },
+    reminders: [],
+    event_overrides: [],
+    ...fields,
+  };
+}
+
+function occurrence(fields: Partial<Occurrence> = {}): Occurrence {
+  return {
+    seriesId: "s-1",
+    occurrenceDate: "2026-11-03",
+    title: "Gym",
+    kindId: "kind-1",
+    startsAt: new Date("2026-11-03T09:10:00.000Z"),
+    endsAt: new Date("2026-11-03T10:00:00.000Z"),
+    allDay: false,
+    location: null,
+    notes: null,
+    ...fields,
+  };
+}
+
+function candidate(
+  id: string,
+  minutesBefore: number,
+  sentAt: string | null,
+  occ: Occurrence,
+): OccurrenceReminder {
+  return {
+    id,
+    minutes_before: minutesBefore,
+    sent_at: sentAt,
+    occurrence: occ,
+  };
+}
+
+/**
+ * Daily 10:00-11:00Z from Monday 2 November, template 30. At NOW (Tue 09:00Z)
+ * the range is [Tue 08:55Z, Thu 09:00Z): Monday's has ended, Tuesday's and
+ * Wednesday's are in it, Thursday's starts after the end. Two inserts, none due.
+ */
+const S_INSERTS = seriesRow({
+  id: "s-inserts",
+  starts_at: "2026-11-02T10:00:00+00:00",
+  ends_at: "2026-11-02T11:00:00+00:00",
+  reminders: [tmpl("t-inserts", 30)],
+});
+const S_INSERTS_BODY = [
+  { event_id: "s-inserts", occurrence_date: "2026-11-03", minutes_before: 30 },
+  { event_id: "s-inserts", occurrence_date: "2026-11-04", minutes_before: 30 },
+];
+
+/**
+ * Daily "Gym" 09:10-10:00Z from Monday 2 November, template 30, with Tuesday
+ * and Wednesday materialised at 10 minutes. At NOW the occurrences in range
+ * are Tuesday's and Wednesday's, both with a row, so nothing is inserted;
+ * Tuesday's row fires 09:00 (due now), Wednesday's tomorrow. With the
+ * TEMPLATE's 30 minutes Tuesday's would have fired 08:40 - outside the window.
+ */
+const S_DUE = seriesRow({
+  id: "s-due",
+  title: "Gym",
+  starts_at: "2026-11-02T09:10:00+00:00",
+  ends_at: "2026-11-02T10:00:00+00:00",
+  location: "Leisure centre",
+  reminders: [
+    tmpl("t-due", 30),
+    mat("m-tue", "2026-11-03", 10),
+    mat("m-wed", "2026-11-04", 10),
+  ],
+});
+
+/** Block 5: weekly 09:00 London from Monday 19 October 2026 (BST). */
+const S_LONDON = seriesRow({
+  id: "s-london",
+  starts_at: "2026-10-19T08:00:00+00:00",
+  ends_at: "2026-10-19T09:00:00+00:00",
+  recurrence: { freq: "weekly", until: null, tz: "Europe/London" },
+  reminders: [tmpl("t-london", 30)],
+});
+
+/** What `expand` throws for an unknown zone, read from the expander itself. */
+function unknownZoneMessage(tz: string): string {
+  try {
+    expand(
+      {
+        id: "probe",
+        title: "probe",
+        kindId: "k",
+        startsAt: new Date("2026-11-02T10:00:00Z"),
+        endsAt: new Date("2026-11-02T11:00:00Z"),
+        allDay: false,
+        location: null,
+        notes: null,
+        recurrence: { freq: "daily", until: null, tz },
+      },
+      [],
+      { start: NOW, end: new Date(NOW.getTime() + 60 * MIN) },
+    );
+  } catch (err) {
+    return String((err as Error).message);
+  }
+  throw new Error(`expand accepted the zone ${tz}`);
+}
+
+const posts = (w: ReturnType<typeof world>) =>
+  w.calls.filter((c) => c.method === "POST");
+const patches = (w: ReturnType<typeof world>) =>
+  w.calls.filter((c) => c.method === "PATCH").map((c) => c.key);
+
+// ---------------------------------------------------------------- the series read
+
+Deno.test("CAL-029 Block 4: SERIES_QUERY is the series read's query string, verbatim", () => {
+  assertEquals(SERIES_QUERY, SERIES_QUERY_TEXT);
+});
+
+Deno.test("CAL-029 AC-5: the series read is one GET whose query drops soft-deleted series (deleted_at=is.null) and non-recurring events", async () => {
+  const w = world({});
+  await run(w);
+  const call = w.only(SERIES);
+  assertServiceHeaders(call);
+  assertEquals(
+    call.url,
+    `${SUPABASE_URL}/rest/v1/events` +
+      "?select=id,title,kind_id,starts_at,ends_at,all_day,location,notes,recurrence," +
+      "reminders(id,minutes_before,sent_at,occurrence_date,deleted_at)," +
+      "event_overrides(occurrence_date,cancelled,title,kind_id,starts_at,ends_at,all_day,location,notes)" +
+      "&deleted_at=is.null&recurrence=not.is.null",
+  );
+  assertEquals(
+    w.keys(),
+    [CANDIDATES, SERIES],
+    "the series read is step 5, after the candidates",
+  );
+});
+
+Deno.test("CAL-029 step 5: a failing series read is 502 upstream before anything is written or pushed", async () => {
+  const cases: [string, Route][] = [
+    ["a 500", () => json({ message: "boom" }, 500)],
+    ["a 401", () => json({ message: "JWT expired" }, 401)],
+    ["a throw", () => {
+      throw new TypeError("connection refused");
+    }],
+    ["an object body", () => json({ rows: [] })],
+    ["a non-JSON body", () => new Response("<html>", { status: 200 })],
+  ];
+  for (const [label, seriesRoute] of cases) {
+    // a due plain row AND a series with inserts: both must wait for the read
+    const w = world({ reminders: [R_NOW], series: [S_INSERTS], seriesRoute });
+    const res = await handleSendReminders(request(), w.deps);
+    assertEquals(res.status, 502, `${label} was not a 502`);
+    assertEquals(await res.json(), { error: "upstream" }, label);
+    assertEquals(
+      w.keys(),
+      [CANDIDATES, SERIES],
+      `${label}: wrote or read further`,
+    );
+    assertEquals(w.pushes.length, 0, `${label}: pushed`);
+  }
+});
+
+// ---------------------------------------------------------------- AC-1: the POST
+
+Deno.test("CAL-029 AC-1: the missing rows go in ONE POST with on_conflict, ignore-duplicates and the plan as a JSON array", async () => {
+  const w = world({ series: [S_INSERTS] });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 2,
+  });
+  assertEquals(
+    w.keys(),
+    [CANDIDATES, SERIES, MATERIALISE],
+    "nothing due: no subscriptions read after the POST",
+  );
+  const post = w.only(MATERIALISE);
+  assertServiceHeaders(post);
+  assertEquals(
+    post.headers.get("prefer"),
+    "resolution=ignore-duplicates,return=minimal",
+  );
+  assertEquals(post.headers.get("content-type"), "application/json");
+  assertEquals(JSON.parse(post.body), S_INSERTS_BODY);
+});
+
+Deno.test("CAL-029 AC-1 (Block 6): run at Monday 08:00Z, a weekly 08:30 UTC series materialises one row, Monday's, at the template's 30 minutes", async () => {
+  const weekly = seriesRow({
+    id: "s-weekly",
+    starts_at: "2026-11-02T08:30:00+00:00",
+    ends_at: "2026-11-02T09:30:00+00:00",
+    recurrence: { freq: "weekly", until: null, tz: "UTC" },
+    reminders: [tmpl("t-weekly", 30)],
+  });
+  const w = world({
+    series: [weekly],
+    now: new Date("2026-11-02T08:00:00.000Z"),
+  });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 1,
+  });
+  assertEquals(JSON.parse(w.only(MATERIALISE).body), [
+    { event_id: "s-weekly", occurrence_date: "2026-11-02", minutes_before: 30 },
+  ]);
+});
+
+Deno.test("CAL-029 AC-1: a second run, every occurrence already holding a row (one soft-deleted, one sent), makes no POST at all", async () => {
+  const again: SeriesRow = {
+    ...S_INSERTS,
+    reminders: [
+      tmpl("t-inserts", 30),
+      mat("m-tue", "2026-11-03", 30, null, "2026-11-02T20:00:00+00:00"),
+      mat("m-wed", "2026-11-04", 30, "2026-11-02T08:00:00+00:00"),
+    ],
+  };
+  const w = world({ series: [again] });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(
+    posts(w).map((c) => c.key),
+    [],
+    "a POST was made with nothing missing",
+  );
+  assertEquals(w.keys(), [CANDIDATES, SERIES]);
+});
+
+Deno.test("CAL-029 AC-1 step 7: a failed POST is logged with the row count and the run still fires what exists", async () => {
+  const cases: [string, Route, string][] = [
+    ["a 500", () => json({ message: "boom" }, 500), "500"],
+    ["a 409", () => json({ message: "conflict" }, 409), "409"],
+    ["a throw", () => {
+      throw new TypeError("connection refused");
+    }, "connection refused"],
+  ];
+  for (const [label, materialiseRoute, reason] of cases) {
+    const w = world({
+      reminders: [R_NOW],
+      series: [S_INSERTS],
+      materialiseRoute,
+    });
+    const { status, body } = await run(w);
+    assertEquals(status, 200, label);
+    assertEquals(
+      body,
+      { due: 1, sent: 1, pruned: 0, failed: 0, materialised: 2 },
+      `${label}: materialised is the rows the POST carried`,
+    );
+    assertEquals(
+      w.log,
+      [`send-reminders: materialising 2 reminders failed: ${reason}`],
+      label,
+    );
+    assertEquals(
+      w.pushes.map((p) => p.payload.eventId),
+      [R_NOW.event.id],
+      label,
+    );
+    assertEquals(patches(w), [patchKey(R_NOW.id)], label);
+  }
+});
+
+// ---------------------------------------------------------------- step 6: skipped
+
+Deno.test("CAL-029 step 6: a malformed recurrence and an unknown zone each log one skipped line, and the next series is still materialised", async () => {
+  const bad = seriesRow({
+    id: "s-bad",
+    starts_at: "2026-11-02T10:00:00+00:00",
+    ends_at: "2026-11-02T11:00:00+00:00",
+    recurrence: { freq: "monthly", until: null, tz: "UTC" },
+    reminders: [tmpl("t-bad", 30)],
+  });
+  const mars = seriesRow({
+    id: "s-mars",
+    starts_at: "2026-11-02T10:00:00+00:00",
+    ends_at: "2026-11-02T11:00:00+00:00",
+    recurrence: { freq: "daily", until: null, tz: "Mars/Olympus" },
+    reminders: [tmpl("t-mars", 30)],
+  });
+  const message = unknownZoneMessage("Mars/Olympus");
+  assert(
+    message.includes("Mars/Olympus"),
+    `the expander's message: ${message}`,
+  );
+  const w = world({ series: [bad, mars, S_INSERTS] });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(w.log, [
+    "send-reminders: series s-bad skipped: recurrence",
+    `send-reminders: series s-mars skipped: ${message}`,
+  ]);
+  assertEquals(JSON.parse(w.only(MATERIALISE).body), S_INSERTS_BODY);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 2,
+  });
+});
+
+// ---------------------------------------------------------------- AC-3: firing
+
+Deno.test("CAL-029 AC-3: payloadForOccurrence is the series id and the occurrence's fields, startsAt as toISOString, an empty location as null", () => {
+  const o = occurrence({
+    seriesId: "s-1",
+    title: "Gym (late)",
+    startsAt: new Date("2026-11-03T10:00:00Z"),
+    location: "Pool",
+  });
+  assertEquals(payloadForOccurrence(candidate("m-1", 30, null, o)), {
+    eventId: "s-1",
+    title: "Gym (late)",
+    startsAt: "2026-11-03T10:00:00.000Z",
+    allDay: false,
+    location: "Pool",
+  });
+  assertEquals(
+    payloadForOccurrence(candidate("m-1", 30, null, { ...o, location: "" }))
+      .location,
+    null,
+  );
+  assertEquals(
+    payloadForOccurrence(candidate("m-1", 30, null, { ...o, location: null }))
+      .location,
+    null,
+  );
+  assertEquals(
+    payloadForOccurrence(candidate("m-1", 30, null, { ...o, allDay: true }))
+      .allDay,
+    true,
+  );
+});
+
+Deno.test("CAL-029 AC-3: a due materialised row pushes the occurrence's start and the series id, then PATCHes its own row", async () => {
+  const subs = [sub("sub-a"), sub("sub-b")];
+  const w = world({ series: [S_DUE], subscriptions: subs });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 1,
+    sent: 2,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  const expected: PushPayload = {
+    eventId: "s-due",
+    title: "Gym",
+    startsAt: "2026-11-03T09:10:00.000Z",
+    allDay: false,
+    location: "Leisure centre",
+  };
+  assertEquals(w.pushes, [
+    { sub: subs[0]!, payload: expected },
+    { sub: subs[1]!, payload: expected },
+  ]);
+  assertEquals(w.timeline, [
+    CANDIDATES,
+    SERIES,
+    SUBSCRIPTIONS,
+    "push sub-a s-due",
+    "push sub-b s-due",
+    patchKey("m-tue"),
+  ]);
+  const patch = w.only(patchKey("m-tue"));
+  assertServiceHeaders(patch);
+  assertEquals(patch.headers.get("prefer"), "return=minimal");
+  assertEquals(JSON.parse(patch.body), { sent_at: NOW.toISOString() });
+});
+
+Deno.test("CAL-029 step 8: plain rows fire first in response order, then the materialised rows", async () => {
+  const w = world({
+    reminders: [R_4_AGO, R_NOW],
+    series: [S_DUE],
+    subscriptions: [sub("sub-a")],
+  });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 3,
+    sent: 3,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.pushes.map((p) => p.payload.eventId), [
+    R_4_AGO.event.id,
+    R_NOW.event.id,
+    "s-due",
+  ]);
+  assertEquals(patches(w), [
+    patchKey(R_4_AGO.id),
+    patchKey(R_NOW.id),
+    patchKey("m-tue"),
+  ]);
+});
+
+// ---------------------------------------------------------------- dueOccurrences
+
+Deno.test("CAL-029: dueOccurrences fires at the occurrence start minus the ROW's minutes_before, in the closed window, in order", () => {
+  // NOW 09:00. Starts 09:10: 10 min fires 09:00 (due), 30 min fires 08:40 (not).
+  const at0910 = occurrence({ startsAt: new Date("2026-11-03T09:10:00Z") });
+  const c10 = candidate("c-10", 10, null, at0910);
+  const c30 = candidate("c-30", 30, null, at0910);
+  const c14 = candidate("c-14", 14, null, at0910); // 08:56, due
+  const c15 = candidate("c-15", 15, null, at0910); // 08:55, due (closed)
+  const c16 = candidate("c-16", 16, null, at0910); // 08:54, not
+  const c9 = candidate("c-9", 9, null, at0910); // 09:01, not
+  assertEquals(
+    dueOccurrences([c30, c10, c16, c15, c9, c14], NOW).map((
+      c: OccurrenceReminder,
+    ) => c.id),
+    ["c-10", "c-15", "c-14"],
+  );
+  assertEquals(dueOccurrences([], NOW), []);
+});
+
+Deno.test("CAL-029: dueOccurrences re-arms only when sent_at is before fire_at - 5 min, as isDue", () => {
+  const at0910 = occurrence({ startsAt: new Date("2026-11-03T09:10:00Z") });
+  const sentJustAfter = candidate(
+    "c-a",
+    10,
+    "2026-11-03T09:00:00.000Z",
+    at0910,
+  );
+  const sentBeforeMove = candidate(
+    "c-b",
+    10,
+    "2026-11-03T08:50:00.000Z",
+    at0910,
+  );
+  assertEquals(
+    dueOccurrences([sentJustAfter, sentBeforeMove], NOW).map((
+      c: OccurrenceReminder,
+    ) => c.id),
+    ["c-b"],
+  );
+});
+
+// ---------------------------------------------------------------- AC-2 at the handler
+
+Deno.test("CAL-029 AC-2: an occurrence moved to 10:00 fires at 09:30, not at the series' 08:30", async () => {
+  const moved = seriesRow({
+    id: "s-moved",
+    title: "Gym",
+    starts_at: "2026-11-02T09:00:00+00:00",
+    ends_at: "2026-11-02T10:00:00+00:00",
+    recurrence: { freq: "weekly", until: null, tz: "UTC" },
+    reminders: [tmpl("t-moved", 30), mat("m-mon", "2026-11-02", 30)],
+    event_overrides: [ovr("2026-11-02", {
+      starts_at: "2026-11-02T10:00:00+00:00",
+      ends_at: "2026-11-02T11:00:00+00:00",
+    })],
+  });
+  const early = world({
+    series: [moved],
+    now: new Date("2026-11-02T08:30:00.000Z"),
+  });
+  const r1 = await run(early);
+  assertEquals(
+    r1.body,
+    { due: 0, sent: 0, pruned: 0, failed: 0, materialised: 0 },
+    "fired at the unmoved 08:30",
+  );
+  assertEquals(early.pushes.length, 0);
+
+  const late = world({
+    series: [moved],
+    now: new Date("2026-11-02T09:30:00.000Z"),
+  });
+  const r2 = await run(late);
+  assertEquals(r2.body, {
+    due: 1,
+    sent: 1,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(late.pushes.map((p) => p.payload), [{
+    eventId: "s-moved",
+    title: "Gym",
+    startsAt: "2026-11-02T10:00:00.000Z",
+    allDay: false,
+    location: null,
+  }]);
+  assertEquals(patches(late), [patchKey("m-mon")]);
+});
+
+Deno.test("CAL-029 AC-2: a cancelled occurrence's materialised row does not fire", async () => {
+  const cancelled: SeriesRow = {
+    ...S_DUE,
+    event_overrides: [ovr("2026-11-03", { cancelled: true })],
+  };
+  const w = world({ series: [cancelled] });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.pushes.length, 0);
+  assertEquals(posts(w).length, 0, "the cancelled occurrence was materialised");
+  assertEquals(w.keys(), [CANDIDATES, SERIES]);
+});
+
+// ---------------------------------------------------------------- AC-4 at the handler
+
+Deno.test("CAL-029 AC-4: run Saturday 24 October 10:00Z, the 09:00 London series materialises Monday 26 October at 30 minutes", async () => {
+  const w = world({
+    series: [S_LONDON],
+    now: new Date("2026-10-24T10:00:00.000Z"),
+  });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 1,
+  });
+  assertEquals(JSON.parse(w.only(MATERIALISE).body), [
+    { event_id: "s-london", occurrence_date: "2026-10-26", minutes_before: 30 },
+  ]);
+});
+
+Deno.test("CAL-029 AC-4: run Monday 26 October 08:31Z, that row fires for 09:00 GMT (fire_at 08:30Z); UTC expansion would fire 07:30Z and miss it", async () => {
+  const withRow: SeriesRow = {
+    ...S_LONDON,
+    reminders: [tmpl("t-london", 30), mat("m-26", "2026-10-26", 30)],
+  };
+  const now = new Date("2026-10-26T08:31:00.000Z");
+  const w = world({ series: [withRow], now });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 1,
+    sent: 1,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.pushes.map((p) => p.payload.startsAt), [
+    "2026-10-26T09:00:00.000Z",
+  ]);
+  assertEquals(w.pushes.map((p) => p.payload.eventId), ["s-london"]);
+  assertEquals(patches(w), [patchKey("m-26")]);
+  // the instant itself, and the control: UTC expansion's 08:00Z occurrence
+  const london = candidate(
+    "m-26",
+    30,
+    null,
+    occurrence({
+      seriesId: "s-london",
+      occurrenceDate: "2026-10-26",
+      startsAt: new Date("2026-10-26T09:00:00Z"),
+      endsAt: new Date("2026-10-26T10:00:00Z"),
+    }),
+  );
+  assertEquals(
+    fireAt(london.occurrence.startsAt.toISOString(), 30).toISOString(),
+    "2026-10-26T08:30:00.000Z",
+  );
+  const utc = candidate("m-26-utc", 30, null, {
+    ...london.occurrence,
+    startsAt: new Date("2026-10-26T08:00:00Z"),
+  });
+  assertEquals(
+    dueOccurrences([london, utc], now).map((c: OccurrenceReminder) => c.id),
+    ["m-26"],
+  );
+});
+
+// ---------------------------------------------------------------- AC-5 at the handler
+
+Deno.test("CAL-029 AC-5: a soft-deleted template fires nothing and materialises nothing, though a live row is due; restored, it fires", async () => {
+  const deleted: SeriesRow = {
+    ...S_DUE,
+    reminders: [
+      tmpl("t-due", 30, "2026-11-02T20:00:00+00:00"),
+      mat("m-tue", "2026-11-03", 10),
+    ],
+  };
+  const w = world({ series: [deleted] });
+  const { body } = await run(w);
+  assertEquals(body, {
+    due: 0,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.pushes.length, 0);
+  assertEquals(w.keys(), [CANDIDATES, SERIES], "wrote, or read subscriptions");
+
+  // the positive twin: the same rows with the template live (PO decision 3)
+  const restored: SeriesRow = {
+    ...deleted,
+    reminders: [tmpl("t-due", 30), mat("m-tue", "2026-11-03", 10)],
+  };
+  const w2 = world({ series: [restored] });
+  const r2 = await run(w2);
+  assertEquals(r2.body, {
+    due: 1,
+    sent: 1,
+    pruned: 0,
+    failed: 0,
+    materialised: 1,
+  });
+  assertEquals(JSON.parse(w2.only(MATERIALISE).body), [
+    { event_id: "s-due", occurrence_date: "2026-11-04", minutes_before: 30 },
+  ]);
+  assertEquals(w2.pushes.map((p) => p.payload.eventId), ["s-due"]);
 });
