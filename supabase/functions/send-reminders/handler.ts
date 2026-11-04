@@ -3,7 +3,18 @@
 // pushes each to every subscription, prunes the gone ones and marks sent_at.
 // Every outbound call goes through deps.fetch / deps.sendPush.
 
+//
+// CAL-029 Contract Block 3: before the due decision, each run also reads the
+// recurring series, materialises one row per occurrence in the next 48 hours
+// (materialise.ts's plan, one conflict-ignoring POST), and fires the due
+// materialised rows after the plain ones.
+
 import { bearer, jsonResponse } from "../_shared/owner.ts";
+import {
+  type OccurrenceReminder,
+  plan,
+  type SeriesRow,
+} from "./materialise.ts";
 
 export type Subscription = {
   id: string;
@@ -99,6 +110,37 @@ export function payloadFor(row: ReminderRow): PushPayload {
   };
 }
 
+export function dueOccurrences(
+  candidates: readonly OccurrenceReminder[],
+  now: Date,
+): OccurrenceReminder[] {
+  return candidates.filter((c) =>
+    isDue(
+      fireAt(c.occurrence.startsAt.toISOString(), c.minutes_before),
+      c.sent_at,
+      now,
+    )
+  );
+}
+
+/** AC-3: the occurrence's start (overrides applied) and the series id. */
+export function payloadForOccurrence(c: OccurrenceReminder): PushPayload {
+  return {
+    eventId: c.occurrence.seriesId,
+    title: c.occurrence.title,
+    startsAt: c.occurrence.startsAt.toISOString(),
+    allDay: c.occurrence.allDay,
+    location: c.occurrence.location === "" ? null : c.occurrence.location,
+  };
+}
+
+/** CAL-029 Block 4 step 1, the query string from `select=`: GET `${base}/events?${SERIES_QUERY}`. */
+export const SERIES_QUERY =
+  "select=id,title,kind_id,starts_at,ends_at,all_day,location,notes,recurrence," +
+  "reminders(id,minutes_before,sent_at,occurrence_date,deleted_at)," +
+  "event_overrides(occurrence_date,cancelled,title,kind_id,starts_at,ends_at,all_day,location,notes)" +
+  "&deleted_at=is.null&recurrence=not.is.null";
+
 const CANDIDATES_QUERY =
   "select=id,minutes_before,sent_at,event:events!inner(id,title,starts_at,all_day,location)" +
   "&deleted_at=is.null&occurrence_date=is.null&event.deleted_at=is.null&event.recurrence=is.null";
@@ -143,8 +185,66 @@ export async function handleSendReminders(
     auth,
   );
   if (rows === null) return upstream();
-  const due = dueReminders(rows, deps.now());
-  const counts = { due: due.length, sent: 0, pruned: 0, failed: 0 };
+
+  const series = await readArray<SeriesRow>(
+    deps,
+    `${base}/events?${SERIES_QUERY}`,
+    auth,
+  );
+  if (series === null) return upstream();
+
+  const now = deps.now();
+  const p = plan(series, now);
+  for (const s of p.skipped) {
+    deps.log(`send-reminders: series ${s.seriesId} skipped: ${s.reason}`);
+  }
+
+  if (p.inserts.length > 0) {
+    const n = p.inserts.length;
+    try {
+      const res = await deps.fetch(
+        `${base}/reminders?on_conflict=event_id,occurrence_date`,
+        {
+          method: "POST",
+          headers: {
+            ...auth,
+            prefer: "resolution=ignore-duplicates,return=minimal",
+            "content-type": "application/json",
+          },
+          body: JSON.stringify(p.inserts),
+        },
+      );
+      if (!res.ok) {
+        deps.log(
+          `send-reminders: materialising ${n} reminders failed: ${res.status}`,
+        );
+      }
+    } catch (err) {
+      deps.log(
+        `send-reminders: materialising ${n} reminders failed: ${
+          String((err as { message?: unknown })?.message ?? err)
+        }`,
+      );
+    }
+  }
+
+  const due: { id: string; payload: PushPayload }[] = [
+    ...dueReminders(rows, now).map((r) => ({
+      id: r.id,
+      payload: payloadFor(r),
+    })),
+    ...dueOccurrences(p.candidates, now).map((c) => ({
+      id: c.id,
+      payload: payloadForOccurrence(c),
+    })),
+  ];
+  const counts = {
+    due: due.length,
+    sent: 0,
+    pruned: 0,
+    failed: 0,
+    materialised: p.inserts.length,
+  };
   if (due.length === 0) return jsonResponse(counts, 200);
 
   const subs = await readArray<Subscription>(
@@ -156,7 +256,7 @@ export async function handleSendReminders(
 
   const gone = new Set<string>();
   for (const row of due) {
-    const payload = payloadFor(row);
+    const payload = row.payload;
     for (const sub of subs) {
       if (gone.has(sub.id)) continue;
       const outcome = await sendPush(sub, payload);
