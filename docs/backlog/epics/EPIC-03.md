@@ -2,7 +2,7 @@
 id: EPIC-03
 title: A calendar you can browse and edit
 status: todo
-stories: [CAL-009, CAL-010, CAL-011, CAL-012, CAL-013]
+stories: [CAL-009, CAL-010, CAL-011, CAL-012, CAL-013, CAL-059]
 ---
 
 ## Goal
@@ -30,6 +30,7 @@ and undo the delete, and reload to find it all still there.
 3. CAL-011 — navigation, view switching and URL state
 4. CAL-012 — create and edit an event in the sheet
 5. CAL-013 — move by drag and delete with undo
+6. CAL-059 — fix: the docked event sheet fits below the top bar at 1280×800 (found by CAL-031; after CAL-031)
 
 ## Deliberately not in this epic
 
