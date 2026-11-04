@@ -1,0 +1,21 @@
+/* layout.md, "Desktop specifics": from 1024px the event sheet is a 400px
+   side panel docked at the viewport's right edge, and the view reflows to the
+   remaining width (components.md, "Event sheet": it pushes the grid, it does
+   not overlay). Below 1024 both wrappers are plain blocks: the sheet is fixed
+   there (a bottom sheet on the phone, an overlay panel on the tablet) and the
+   page lays out as before. CAL-031, PO decision 6. */
+@media (min-width: 1024px) {
+  .page {
+    display: flex;
+    align-items: flex-start;
+    /* Into the shell's right padding, so the panel is flush with the edge. */
+    margin-right: calc(-1 * var(--space-4));
+  }
+
+  .view {
+    flex: 1;
+    min-width: 0;
+    /* Gives the shell's right padding back to the view. */
+    margin-right: var(--space-4);
+  }
+}

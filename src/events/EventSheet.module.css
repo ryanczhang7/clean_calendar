@@ -14,6 +14,10 @@
   box-shadow: var(--shadow-3);
   font-size: var(--font-size-md);
   line-height: var(--line-height-md);
+  /* tokens.md, Motion: the sheet and the side panel slide over
+     --duration-slow, which reduced motion zeroes (CAL-031 Block 8). Nothing
+     changes `transform` on open yet, so nothing moves. */
+  transition: transform var(--duration-slow) var(--ease-standard);
 }
 
 .header {
