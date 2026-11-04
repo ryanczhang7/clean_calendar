@@ -639,4 +639,62 @@ describe("AC-1/AC-6: updated_at is maintained by a trigger", () => {
     }
     expect(failures).toEqual([]);
   });
+
+  it("a kind updated through the service client with updated_at = 2999-01-01 stores a server stamp, not the client's future one (CAL-033 AC-1)", async () => {
+    const svc = serviceClient(env);
+    const { data: inserted, error } = await svc
+      .from("kinds")
+      .insert(rowFor("kinds", {}))
+      .select("id")
+      .single();
+    expect(error).toBeNull();
+    const id = (inserted as { id: string }).id;
+    const [before] = await sql(env)<{ updated_at: string }[]>`
+      select updated_at::text as updated_at from public.kinds where id = ${id}`;
+    const upd = await svc
+      .from("kinds")
+      .update({ name: "Touched future", updated_at: "2999-01-01T00:00:00Z" })
+      .eq("id", id)
+      .select("id");
+    expect(upd.error).toBeNull();
+    expect(upd.data).toHaveLength(1);
+    // Both comparisons are server-side, against text cast to timestamptz: no
+    // clock skew between this process and Postgres, and no millisecond
+    // truncation of a timestamptz-typed parameter.
+    const [after] = await sql(env)<
+      { later: boolean; bounded: boolean; year: number }[]
+    >`
+      select updated_at > ${before?.updated_at as string}::text::timestamptz as later,
+             updated_at <= now() + interval '1 minute' as bounded,
+             extract(year from updated_at)::int as year
+      from public.kinds where id = ${id}`;
+    expect(after).toEqual({
+      later: true,
+      bounded: true,
+      year: expect.any(Number),
+    });
+    expect(after?.year).not.toBe(2999);
+  });
+
+  it("a kind whose stored updated_at is an hour ahead of the server clock still gets a strictly later updated_at on update (CAL-033 AC-2)", async () => {
+    const db = sql(env);
+    // INSERT has no trigger, so the future stamp is stored as sent.
+    const [ins] = await db<{ id: string; u0: string }[]>`
+      insert into public.kinds (name, color_light, color_dark, updated_at)
+      values ('Ahead of the clock', '#112233', '#445566',
+              clock_timestamp() + interval '1 hour')
+      returning id, updated_at::text as u0`;
+    const [upd] = await db<{ u1: string }[]>`
+      update public.kinds set name = 'Ahead, touched'
+      where id = ${ins?.id as string}
+      returning updated_at::text as u1`;
+    const [cmp] = await db<{ later: boolean }[]>`
+      select ${upd?.u1 as string}::text::timestamptz
+           > ${ins?.u0 as string}::text::timestamptz as later`;
+    expect({ u0: ins?.u0, u1: upd?.u1, later: cmp?.later }).toEqual({
+      u0: ins?.u0,
+      u1: upd?.u1,
+      later: true,
+    });
+  });
 });
