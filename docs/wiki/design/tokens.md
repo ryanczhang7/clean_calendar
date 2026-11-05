@@ -77,7 +77,7 @@ Contrast of the roles that carry text, computed with the WCAG 2.x formula
 | danger on surface | 6.54 | 9.30 |
 | warning on surface | 5.93 | 11.18 |
 | success on surface | 6.57 | 10.54 |
-| border-strong on surface | 4.56 | 5.7 |
+| border-strong on surface | 4.43 | 5.7 |
 | focus on surface | 5.85 | 8.91 |
 | chip-text-light on chip-neutral | 5.07 | — |
 | chip-text-dark on chip-neutral | — | 8.80 |
