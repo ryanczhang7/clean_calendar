@@ -112,6 +112,14 @@ describe("the sign-in card (AC-1)", () => {
     expect(screen.queryByRole("banner")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("gives the sign-in card's <h1> tabindex=-1, focusable but out of the Tab order (CAL-036 AC-6)", async () => {
+    renderAt("/signin");
+    await signInButton();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Clean Calendar" }),
+    ).toHaveAttribute("tabindex", "-1");
+  });
 });
 
 describe("pressing Sign in with Google (AC-2)", () => {
@@ -193,6 +201,21 @@ describe("arriving signed in as the owner (AC-3)", () => {
     expect(router.state.location.pathname).toBe("/settings/notifications");
     expect(screen.getByRole("banner")).toBeInTheDocument();
   });
+
+  // CAL-036 Block 4: the redirect replaces /signin's history entry, so Back
+  // does not return to /signin. Asserted on the router, not a navigate mock.
+  it("replaces /signin's history entry with the remembered path, so going back stays on it (CAL-036 AC-4)", async () => {
+    sessionStorage.setItem("cc.returnTo", "/kinds");
+    fake.setSession(sessionFor(OWNER_EMAIL));
+    const router = renderAt("/signin");
+    await screen.findByRole("heading", { level: 1, name: "Event kinds" });
+    expect(router.state.location.pathname).toBe("/kinds");
+    expect(router.state.historyAction).toBe("REPLACE");
+    await act(async () => {
+      await router.navigate(-1);
+    });
+    expect(router.state.location.pathname).toBe("/kinds");
+  });
 });
 
 describe("arriving at /signin signed in as someone else (AC-4)", () => {
@@ -227,6 +250,15 @@ describe("arriving at /signin signed in as someone else (AC-4)", () => {
     expect(await signInButton()).toBeInTheDocument();
     expect(screen.queryByRole("alert")).toBeNull();
     expect(router.state.location.pathname).toBe("/signin");
+  });
+
+  it("gives the refusal's <h1> tabindex=-1, focusable but out of the Tab order (CAL-036 AC-6)", async () => {
+    fake.setSession(sessionFor("someone@else.test"));
+    renderAt("/signin");
+    await screen.findByRole("alert");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Clean Calendar" }),
+    ).toHaveAttribute("tabindex", "-1");
   });
 });
 

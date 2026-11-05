@@ -128,6 +128,13 @@ describe("routes (AC-2)", () => {
     );
   });
 
+  it("gives the not-found page's <h1> tabindex=-1, focusable but out of the Tab order (CAL-036 AC-6)", async () => {
+    await renderAt("/unknown/x");
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Nothing here" }),
+    ).toHaveAttribute("tabindex", "-1");
+  });
+
   it("takes the user to today's calendar from the not-found page", async () => {
     const user = userEvent.setup();
     await renderAt("/unknown/x");

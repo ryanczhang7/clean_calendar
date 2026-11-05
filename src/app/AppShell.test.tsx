@@ -134,6 +134,55 @@ describe("app shell top bar (AC-3)", () => {
     expect(account).toHaveFocus();
   });
 
+  // CAL-036 Block 1: a press outside the menu and its button closes it; a
+  // press inside does not. The inside half is the control that keeps the
+  // outside half from passing on a menu that closes on any pointerdown.
+  it("closes the Account menu on a pointerdown outside it and its button (CAL-036 AC-1)", async () => {
+    const user = userEvent.setup();
+    await renderAt("/month/2026-10");
+    const account = screen.getByRole("button", { name: "Account" });
+    await user.click(account);
+    expect(screen.getByRole("menu", { name: "Account" })).toBeInTheDocument();
+    await user.pointer({
+      keys: "[MouseLeft>]",
+      target: screen.getByRole("main"),
+    });
+    expect(screen.queryByRole("menu", { name: "Account" })).toBeNull();
+    expect(account).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("keeps the Account menu open on a pointerdown inside it (CAL-036 AC-1)", async () => {
+    const user = userEvent.setup();
+    await renderAt("/month/2026-10");
+    const account = screen.getByRole("button", { name: "Account" });
+    await user.click(account);
+    const menu = screen.getByRole("menu", { name: "Account" });
+    await user.pointer({
+      keys: "[MouseLeft>]",
+      target: within(menu).getByRole("menuitem", { name: "Kinds" }),
+    });
+    expect(screen.getByRole("menu", { name: "Account" })).toBeInTheDocument();
+    expect(account).toHaveAttribute("aria-expanded", "true");
+  });
+
+  // CAL-036 Block 2: only Escape closes the menu from the keyboard. The
+  // Escape test above is the positive half.
+  it("keeps the Account menu open when ArrowDown or Tab is pressed inside it (CAL-036 AC-2)", async () => {
+    const user = userEvent.setup();
+    await renderAt("/month/2026-10");
+    const account = screen.getByRole("button", { name: "Account" });
+    await user.click(account);
+    within(screen.getByRole("menu"))
+      .getByRole("menuitem", { name: "Kinds" })
+      .focus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menu", { name: "Account" })).toBeInTheDocument();
+    expect(account).toHaveAttribute("aria-expanded", "true");
+    await user.keyboard("{Tab}");
+    expect(screen.getByRole("menu", { name: "Account" })).toBeInTheDocument();
+    expect(account).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("closes the Account menu and navigates when an item is chosen", async () => {
     const user = userEvent.setup();
     await renderAt("/month/2026-10");
@@ -143,6 +192,23 @@ describe("app shell top bar (AC-3)", () => {
       await screen.findByRole("heading", { level: 1, name: "Event kinds" }),
     ).toBeInTheDocument();
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+
+  // CAL-036 Block 3: the Notifications item closes the menu too.
+  it("closes the Account menu and lands on /settings/notifications when Notifications is chosen (CAL-036 AC-3)", async () => {
+    const user = userEvent.setup();
+    const router = await renderAt("/month/2026-10");
+    await user.click(screen.getByRole("button", { name: "Account" }));
+    await user.click(screen.getByRole("menuitem", { name: "Notifications" }));
+    expect(
+      await screen.findByRole("heading", { level: 1, name: "Notifications" }),
+    ).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/settings/notifications");
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(screen.getByRole("button", { name: "Account" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 });
 

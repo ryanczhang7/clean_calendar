@@ -114,6 +114,37 @@ describe("Dialog (AC-6)", () => {
     expect(opener).toHaveFocus();
   });
 
+  // CAL-036 Block 7: the parent owns `open`. Escape asks it to close; the
+  // browser's own close is prevented, so a parent that ignores the request
+  // keeps the dialog open rather than drifting out of step with it.
+  it("stays open after Escape when the parent ignores onClose (CAL-036 AC-7)", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+    function IgnoringHarness() {
+      const [open, setOpen] = useState(false);
+      return (
+        <>
+          <button type="button" onClick={() => setOpen(true)}>
+            Delete kind
+          </button>
+          <Dialog open={open} title="Delete Flight?" onClose={onClose}>
+            <p>Events of this kind keep their details.</p>
+          </Dialog>
+        </>
+      );
+    }
+    render(<IgnoringHarness />);
+    await user.click(screen.getByRole("button", { name: "Delete kind" }));
+    const dialog = screen.getByRole("dialog", { name: "Delete Flight?" });
+    expect(dialog).toHaveAttribute("open");
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledTimes(1);
+    expect(dialog).toHaveAttribute("open");
+    expect(
+      screen.getByRole("dialog", { name: "Delete Flight?" }),
+    ).toBeInTheDocument();
+  });
+
   it("closes and returns focus to the opener when the parent sets open to false", async () => {
     const { user, opener } = await openFromButton();
     await user.click(screen.getByRole("button", { name: "Cancel" }));
