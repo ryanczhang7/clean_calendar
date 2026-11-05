@@ -121,6 +121,22 @@ describe("events rows map to camelCase domain objects and back (AC-1)", () => {
     ).toStrictEqual([]);
   });
 
+  test.each(["daily", "yearly"] as const)(
+    "a %s recurrence is kept exactly and survives the round trip (CAL-035 AC-3)",
+    (freq) => {
+      const recurrence = { freq, until: null, tz: "Europe/London" };
+      const row = { ...eventRowFull, recurrence };
+      expect(toEvent(row).recurrence).toStrictEqual({
+        freq,
+        until: null,
+        tz: "Europe/London",
+      });
+      expect(
+        roundTripMismatches(row, fromEvent(toEvent(row)), EVENT_INSTANTS),
+      ).toStrictEqual([]);
+    },
+  );
+
   test.each([
     ["an unknown freq", { freq: "monthly", until: null, tz: "UTC" }],
     ["a missing tz", { freq: "daily", until: null }],
@@ -215,6 +231,66 @@ describe("patches carry only the columns the caller named", () => {
       starts_at: "2026-10-20T10:00:00.000Z",
       recurrence: null,
       capture_job_id: null,
+    });
+  });
+
+  test("every events patch field maps to its own snake_case column (CAL-035 AC-1)", () => {
+    expect(
+      fromEventPatch({
+        title: "Patch title",
+        kindId: "kind-patch",
+        startsAt: new Date("2026-11-02T08:15:00Z"),
+        endsAt: new Date("2026-11-02T09:45:00Z"),
+        allDay: true,
+        location: "Patch location",
+        notes: "Patch notes",
+        recurrence: {
+          freq: "weekly",
+          until: "2026-12-31",
+          tz: "Europe/London",
+        },
+        origin: "capture",
+        captureJobId: "capture-job-patch",
+      }),
+    ).toStrictEqual({
+      title: "Patch title",
+      kind_id: "kind-patch",
+      starts_at: "2026-11-02T08:15:00.000Z",
+      ends_at: "2026-11-02T09:45:00.000Z",
+      all_day: true,
+      location: "Patch location",
+      notes: "Patch notes",
+      recurrence: { freq: "weekly", until: "2026-12-31", tz: "Europe/London" },
+      origin: "capture",
+      capture_job_id: "capture-job-patch",
+    });
+  });
+
+  test("every event_overrides patch field maps to its own snake_case column (CAL-035 AC-2)", () => {
+    expect(
+      fromEventOverridePatch({
+        eventId: "event-override-patch",
+        occurrenceDate: "2026-11-03",
+        cancelled: true,
+        title: "Override title",
+        kindId: "kind-override-patch",
+        startsAt: new Date("2026-11-03T13:00:00Z"),
+        endsAt: new Date("2026-11-03T14:20:00Z"),
+        allDay: false,
+        location: "Override location",
+        notes: "Override notes",
+      }),
+    ).toStrictEqual({
+      event_id: "event-override-patch",
+      occurrence_date: "2026-11-03",
+      cancelled: true,
+      title: "Override title",
+      kind_id: "kind-override-patch",
+      starts_at: "2026-11-03T13:00:00.000Z",
+      ends_at: "2026-11-03T14:20:00.000Z",
+      all_day: false,
+      location: "Override location",
+      notes: "Override notes",
     });
   });
 
