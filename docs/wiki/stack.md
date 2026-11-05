@@ -70,8 +70,8 @@ for `supabase/functions/**`. The gates below are the union, with distinct ids.
 
 | Role | Tool | Version |
 |---|---|---|
-| Lint + format | Biome | 2.5.15 — one tool, prints `Checked N files` (evidence). `biome.json` lists what it reads in `files.includes` and excludes `.claude`, `docs`, `scripts`, `supabase`, `dist`, `coverage` (HARNESS-049). Biome 2.2+ wants `!dir`, not `!dir/**`, and 2.5 spells the rule set `"preset": "recommended"`. The lint gate runs with `--error-on-warnings`: biome exits 0 on a warning (probed in CAL-001). |
-| Type check (client) | `tsc --noEmit -p tsconfig.json` | TypeScript 5.9.3; one `tsconfig.json` covers `src`, `shared`, `e2e` and the three `*.config.ts` (no `tsconfig.node.json`). |
+| Lint + format | Biome | 2.5.15 — one tool, prints `Checked N files` (evidence). `biome.json` lists what it reads in `files.includes` and excludes `.claude`, `docs`, `scripts`, `dist`, `coverage` (HARNESS-049). Under `supabase/` it reads `supabase/tests/**` (the db suites and `helpers.ts`, CAL-060) and excludes `supabase/functions` (Deno, judged by `deno-check`); migrations, `seed.sql` and `config.toml` match no positive glob. Biome 2.2+ wants `!dir`, not `!dir/**`, and 2.5 spells the rule set `"preset": "recommended"`. The lint gate runs with `--error-on-warnings`: biome exits 0 on a warning (probed in CAL-001). |
+| Type check (client) | `tsc --noEmit -p tsconfig.json` | TypeScript 5.9.3; one `tsconfig.json` covers `src`, `shared`, `e2e`, `supabase/tests` (CAL-060) and the three `*.config.ts` (no `tsconfig.node.json`); `supabase/functions` is not in it (Deno, `deno check`). |
 | Type check (functions) | `deno check` | Deno 2.9.7 |
 | Unit tests (client) | Vitest 5.0.4 with jsdom 30, Testing Library (`@testing-library/react` 16.3, `@testing-library/user-event` 14.6, `@testing-library/jest-dom` 6.9, `@testing-library/dom` 10.4), MSW 2.15 for the network boundary | Vitest 5 is the current major (planning said 3). Projects are `test.projects` with `test.name` in `vitest.config.ts`; `--project unit` works as planned. |
 | Coverage | `@vitest/coverage-v8` 5.0.4, thresholds in `vitest.config.ts` | lines/branches/functions/statements 80, project-wide; raised by the story that justifies it. Vitest 5's text report hides fully covered files ("2 files fully covered"). |
@@ -120,8 +120,9 @@ The authoritative copy is `.claude/harness/project.conf`; this is what it says.
     slow | db, build, integration, mutation          (one line each in project.conf)
     ondemand | mutation
 
-    covers | lint        | src/**, shared/**, e2e/**, index.html
-    covers | typecheck   | src/**, shared/**, e2e/**
+    covers | format      | supabase/tests/**
+    covers | lint        | src/**, shared/**, e2e/**, index.html, supabase/tests/**
+    covers | typecheck   | src/**, shared/**, e2e/**, supabase/tests/**
     covers | unit        | src/**, shared/**
     covers | coverage    | src/**, shared/**
     covers | deno-check  | supabase/functions/**
@@ -135,6 +136,7 @@ The authoritative copy is `.claude/harness/project.conf`; this is what it says.
     discovery | deno   | supabase/functions | deno test --allow-read --filter __discovery_lists_modules_only__ --reporter=tap 2>&1 | grep "_test\.ts" > /dev/null
     discovery | e2e    | . | pnpm exec playwright test --list | grep "\.spec\.ts" > /dev/null
     (db discovery is added by CAL-004, once a *.db.test.ts exists)
+    (typecheck-db and biome-db discovery are added by CAL-060; see project.conf)
 
     task | install          | - | . | pnpm install --frozen-lockfile
     task | dev              | - | . | pnpm dev

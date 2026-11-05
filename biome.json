@@ -22,7 +22,8 @@
       "!.claude",
       "!docs",
       "!scripts",
-      "!supabase",
+      "supabase/tests/**",
+      "!supabase/functions",
       "!dist",
       "!coverage"
     ]
