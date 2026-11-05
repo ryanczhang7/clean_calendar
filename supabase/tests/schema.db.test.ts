@@ -278,7 +278,9 @@ describe("AC-1: uniqueness rules", () => {
     await db`update public.reminders set deleted_at = now() where id = ${row?.id as string}`;
     await db`update public.reminders set deleted_at = null, minutes_before = 30
              where id = ${row?.id as string}`;
-    const rows = await db<{ id: string; minutes_before: number; deleted_at: string | null }[]>`
+    const rows = await db<
+      { id: string; minutes_before: number; deleted_at: string | null }[]
+    >`
       select id, minutes_before, deleted_at from public.reminders
       where event_id = ${eventId as string}`;
     expect(rows).toEqual([
