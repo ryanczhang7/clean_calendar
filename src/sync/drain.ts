@@ -5,6 +5,7 @@ import {
   type CacheTable,
   cacheTable,
   enqueueDelete,
+  enqueueRestore,
   type Repos,
 } from "./outbox";
 
@@ -17,8 +18,13 @@ import {
 // earlier in the pass has already written the server's new one.
 //
 //   ok        → the cache row takes the server's stamps only, the op goes.
-//   conflict  → get(id): deleted there → replaced, dropped, silent (AC-4);
+//   conflict  → get(id): deleted there and ours a restore → replaced, restore
+//                 queued again over the fresh row, the row live, silent
+//                 (CAL-044 AC-1: the owner's undo is kept);
+//               deleted there otherwise → replaced, dropped, silent (AC-4);
 //               live and ours a delete → replaced, delete queued again (AC-4);
+//               live and ours a restore → replaced, dropped, silent (CAL-044
+//                 AC-2: another device restored it first);
 //               live otherwise → replaced, dropped, `conflict` notice (AC-3).
 //   4xx       → marked failed, `failed` notice, the pass goes on (AC-5).
 //   5xx, no http status, offline → left queued untouched, the pass stops (AC-6).
@@ -222,8 +228,17 @@ export function createDrain(
         if (isLive(row) && op.op === "delete" && table !== "event_overrides") {
           await enqueueDelete(db, table, op.id);
         }
+        // An undo is not an edit (CAL-044 AC-1): ours goes again, over the
+        // fresh stamp. Only events and reminders have a restore.
+        if (
+          !isLive(row) &&
+          op.op === "restore" &&
+          (table === "events" || table === "reminders")
+        ) {
+          await enqueueRestore(db, table, op.id);
+        }
       });
-      if (isLive(row) && op.op !== "delete") {
+      if (isLive(row) && op.op !== "delete" && op.op !== "restore") {
         const title = await noticeTitle(table, row, op.patch);
         emit({
           kind: "conflict",
