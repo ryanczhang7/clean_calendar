@@ -20,7 +20,7 @@ story is measured against, specific to this product; the generic floor is the
   also conveyed elsewhere or is not required to operate the product (weekday
   headers are still 6.05:1).
 - Grid lines (`--color-border`) are decorative and exempt; control boundaries
-  use `--color-border-strong` (4.56:1 light, 5.7:1 dark).
+  use `--color-border-strong` (4.43:1 light, 5.7:1 dark).
 
 ## Focus
 

@@ -99,3 +99,31 @@ export function declaredAt(
   }
   return merged;
 }
+
+/** One sRGB channel (0-255) linearised per WCAG 2.x. */
+function linear(n: number): number {
+  const c = n / 255;
+  return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+}
+
+/**
+ * WCAG 2.x relative luminance of a `#rrggbb` colour (case-insensitive).
+ * Throws on anything else - `#rgb`, `rgba(...)`, a name - so a token that
+ * changes shape fails loudly instead of being read as black (CAL-037).
+ */
+export function relativeLuminance(hex: string): number {
+  const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
+  if (m === null)
+    throw new Error(`not a #rrggbb colour: ${JSON.stringify(hex)}`);
+  const [r, g, b] = [m[1], m[2], m[3]].map((h) =>
+    linear(Number.parseInt(h ?? "", 16)),
+  );
+  return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+}
+
+/** WCAG 2.x contrast ratio, lighter over darker: symmetric and >= 1. */
+export function contrastRatio(a: string, b: string): number {
+  const la = relativeLuminance(a);
+  const lb = relativeLuminance(b);
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05);
+}
