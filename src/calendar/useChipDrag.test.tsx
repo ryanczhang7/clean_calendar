@@ -126,6 +126,36 @@ describe("the threshold: 3 px is a click, 4 px is a drag (Block 4)", () => {
       start: SLOT_15_14,
     });
   });
+
+  // CAL-040 AC-1: the threshold is a distance, so a negative dx or dy counts.
+  it("4 px to the left starts a drag too (an event dragged to an earlier day); pointerup on the 16 Oct cell drops there", () => {
+    const { onDrop, chip } = setup();
+    pressAndMove(chip, -4, 0);
+    expect(chip).toHaveAttribute("data-dragging", "true");
+    release(screen.getByTestId("day"));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith(SWIM, { kind: "day", day: DAY_16 });
+  });
+
+  it("4 px up starts a drag too (an event dragged to an earlier time); pointerup on the 16 Oct cell drops there", () => {
+    const { onDrop, chip } = setup();
+    pressAndMove(chip, 0, -4);
+    expect(chip).toHaveAttribute("data-dragging", "true");
+    release(screen.getByTestId("day"));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(onDrop).toHaveBeenCalledWith(SWIM, { kind: "day", day: DAY_16 });
+  });
+
+  it.each([
+    ["left", -3, 0],
+    ["up", 0, -3],
+  ])("3 px %s is still a click: not dragging, no drop", (_dir, dx, dy) => {
+    const { onDrop, chip } = setup();
+    pressAndMove(chip, dx, dy);
+    expect(chip).toHaveAttribute("data-dragging", "false");
+    release(screen.getByTestId("day"), dx, dy);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
 });
 
 describe("where a drag lands (Block 4)", () => {
@@ -234,6 +264,104 @@ describe("cancelling and finishing (Block 4)", () => {
       outside.remove();
     }
   });
+
+  // CAL-040 AC-2: a press that never became a drag leaves no pointermove
+  // listener behind to turn later, buttonless movement into a drag.
+  it("after a press released below the threshold, a later 30 px move with no button down does not start a drag, and the next release drops nothing", () => {
+    const { onDrop, chip } = setup();
+    pressAndMove(chip, 3, 0);
+    release(screen.getByTestId("day"), 3, 0);
+    expect(onDrop).not.toHaveBeenCalled();
+    expect(chip).toHaveAttribute("data-dragging", "false");
+    fireEvent.pointerMove(document, { clientX: X + 30, clientY: Y });
+    expect(chip).toHaveAttribute("data-dragging", "false");
+    release(screen.getByTestId("day"), 30, 0);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
+  // CAL-040 AC-5: only Escape cancels.
+  it.each(["Shift", "ArrowRight"])(
+    "pressing %s during a drag does not cancel it: still dragging, and the pointerup drops",
+    (key) => {
+      const { onDrop, chip } = setup();
+      pressAndMove(chip, 30, 0);
+      fireEvent.keyDown(document, { key });
+      expect(chip).toHaveAttribute("data-dragging", "true");
+      release(screen.getByTestId("day"));
+      expect(onDrop).toHaveBeenCalledTimes(1);
+      expect(onDrop).toHaveBeenCalledWith(SWIM, { kind: "day", day: DAY_16 });
+    },
+  );
+});
+
+// CAL-040 AC-3: whichever way a press ends, each of the three listeners it
+// put on document is taken off again - by the same type and the same function.
+// React registers listeners of its own, so this asserts containment.
+describe("whichever way a press ends, document keeps none of its listeners (CAL-040 AC-3)", () => {
+  const TYPES = ["pointermove", "pointerup", "keydown"] as const;
+  let add: ReturnType<typeof spyAdd> | undefined;
+  let remove: ReturnType<typeof spyRemove> | undefined;
+
+  function spyAdd() {
+    return vi.spyOn(document, "addEventListener");
+  }
+  function spyRemove() {
+    return vi.spyOn(document, "removeEventListener");
+  }
+
+  afterEach(() => {
+    add?.mockRestore();
+    remove?.mockRestore();
+    add = undefined;
+    remove = undefined;
+  });
+
+  /** Runs `press`, then `end`; checks every listener the press added was removed in kind. */
+  function expectAllRemoved(
+    press: (chip: HTMLElement) => void,
+    end: () => void,
+  ) {
+    add = spyAdd();
+    remove = spyRemove();
+    const { chip } = setup();
+    const addedBefore = add.mock.calls.length;
+    press(chip);
+    const added = add.mock.calls.slice(addedBefore);
+    end();
+    const removed = remove.mock.calls;
+    const leaks: string[] = [];
+    for (const type of TYPES) {
+      const fns = added.filter(([t]) => t === type).map(([, fn]) => fn);
+      // Not vacuous: the press did put one of each on document.
+      expect(fns, `the press added a ${type} listener`).toHaveLength(1);
+      for (const fn of fns) {
+        const gone = removed.some(([t, f]) => t === type && f === fn);
+        if (!gone) leaks.push(type);
+      }
+    }
+    expect(leaks, "listeners left on document").toStrictEqual([]);
+  }
+
+  it("after a drop", () => {
+    expectAllRemoved(
+      (chip) => pressAndMove(chip, 30, 0),
+      () => release(screen.getByTestId("day")),
+    );
+  });
+
+  it("after Escape mid-drag", () => {
+    expectAllRemoved(
+      (chip) => pressAndMove(chip, 30, 0),
+      () => fireEvent.keyDown(document, { key: "Escape" }),
+    );
+  });
+
+  it("after a release below the threshold", () => {
+    expectAllRemoved(
+      (chip) => pressAndMove(chip, 3, 0),
+      () => release(screen.getByTestId("day"), 3, 0),
+    );
+  });
 });
 
 describe("the click after a drag is swallowed, and only that one (Block 4, AC-2: the sheet does not open)", () => {
@@ -267,6 +395,24 @@ describe("the click after a drag is swallowed, and only that one (Block 4, AC-2:
     fireEvent.pointerDown(chip, { clientX: X, clientY: Y, button: 0 });
     fireEvent.pointerUp(chip, { clientX: X, clientY: Y });
     fireEvent.click(chip);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  // CAL-040 AC-4: keyboard Enter/Space fire click with no pointer events.
+  it("a click on a freshly mounted chip with no pointerdown before it (keyboard Enter) reaches onClick and is not cancelled", () => {
+    const { onClick, chip } = setup();
+    expect(fireEvent.click(chip)).toBe(true);
+    expect(onClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a drop swallowed its one click, a second click with no pointerdown (keyboard Enter) reaches onClick", () => {
+    const { onDrop, onClick, chip } = setup();
+    pressAndMove(chip, 30, 0);
+    release(screen.getByTestId("day"));
+    expect(onDrop).toHaveBeenCalledTimes(1);
+    expect(fireEvent.click(chip)).toBe(false);
+    expect(onClick).not.toHaveBeenCalled();
+    expect(fireEvent.click(chip)).toBe(true);
     expect(onClick).toHaveBeenCalledTimes(1);
   });
 });
