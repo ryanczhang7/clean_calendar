@@ -19,11 +19,12 @@ import {
   type Mock,
   vi,
 } from "vitest";
+import { RouteFocus } from "../app/routes";
 import type { EventsRepo } from "../data/events";
 import type { ListResult, Result } from "../data/result";
 import type { Event, EventOverride, Kind, NewEvent } from "../data/rows";
-import type { EventActions } from "../sync/eventActions";
 import type { SeedRepo } from "../kinds/seedKinds";
+import type { EventActions } from "../sync/eventActions";
 import {
   createEventsStore,
   type EventsReader,
@@ -32,7 +33,6 @@ import {
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
 import type { OverrideActions } from "../sync/overrideActions";
 import type { OverridesSnapshot, OverridesStore } from "../sync/overridesStore";
-import { RouteFocus } from "../app/routes";
 import { installMatchMedia } from "../test/media";
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import { CalendarPage } from "./CalendarPage";
@@ -1649,6 +1649,119 @@ describe("moving and resizing from the keyboard (CAL-013 AC-3, Block 8)", () => 
   });
 });
 
+// CAL-041 Contract, Block 3 (AC-2 to AC-6). The keyboard moves CAL-013's
+// cases left unpinned: Alt+↑ in the month and in a time grid, an all-day
+// Alt+↑ in a time grid, focus after a SECOND move, and a move into a week
+// that is not rendered. MECHANICAL: instants from oct(), copy from voice.md.
+describe("keyboard moves up, and focus after a move (CAL-041 AC-2 to AC-6)", () => {
+  it('Alt+↑ on a focused month chip moves it a week earlier: update(id, 8 Oct 07:00 - 08:00, its token), "Moved to Thu 8 Oct, 07:00", focus on it in 8 October', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(1));
+    expect(writes.update.mock.calls[0]).toStrictEqual([
+      swim.id,
+      { startsAt: oct(8, 7), endsAt: oct(8, 8) },
+      STAMP,
+    ]);
+    await expectUndoToast("Moved to Thu 8 Oct, 07:00");
+    await waitFor(() => expectFocusedChip(swim.id, SWIM_NAME));
+    expect(
+      monthCell(grid, "Thursday 8 October").contains(document.activeElement),
+    ).toBe(true);
+  });
+
+  it('Alt+↑ on a focused week block moves it 15 minutes earlier, duration kept: 06:45 - 07:45, "Moved to Thu 15 Oct, 06:45"', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/week/2026-10-14");
+    await settledGrid("Week of 12 October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(1));
+    expect(writes.update.mock.calls[0]).toStrictEqual([
+      swim.id,
+      { startsAt: oct(15, 6, 45), endsAt: oct(15, 7, 45) },
+      STAMP,
+    ]);
+    await expectUndoToast("Moved to Thu 15 Oct, 06:45");
+  });
+
+  it("Alt+↑ on an all-day chip in the week writes nothing and toasts nothing; Alt+→ then moves it", async () => {
+    const hotel = hotel15();
+    useMoves([hotel]);
+    const { user } = renderUndoPage("/week/2026-10-14");
+    await settledGrid("Week of 12 October 2026");
+    (
+      await screen.findByRole("button", { name: "Hotel, Gym, all day" })
+    ).focus();
+    await user.keyboard("{Alt>}{ArrowUp}{/Alt}");
+    await settle();
+    expect(writes.update).not.toHaveBeenCalled();
+    expect(screen.getByRole("status")).not.toHaveTextContent("Moved to");
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(1));
+    expect(writes.update.mock.calls[0]?.[1]).toStrictEqual({
+      startsAt: oct(16),
+      endsAt: oct(17),
+    });
+  });
+
+  it("Alt+→ twice on a month chip: focus is on the moved chip after each move, in 16 and then 17 October", async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(1));
+    await waitFor(() => expectFocusedChip(swim.id, SWIM_NAME));
+    expect(
+      monthCell(grid, "Friday 16 October").contains(document.activeElement),
+    ).toBe(true);
+    const movedToken = tokenOf(swim.id);
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(2));
+    expect(writes.update.mock.calls[1]).toStrictEqual([
+      swim.id,
+      { startsAt: oct(17, 7), endsAt: oct(17, 8) },
+      movedToken,
+    ]);
+    // The second focus request: the constant-reducer mutant fails here.
+    await waitFor(() => expectFocusedChip(swim.id, SWIM_NAME));
+    expect(
+      monthCell(grid, "Saturday 17 October").contains(document.activeElement),
+    ).toBe(true);
+  });
+
+  it("Alt+→ on a Sunday block moves it out of the visible week: update to 19 Oct, the week grid still rendered, nothing thrown or logged", async () => {
+    const swim = timed("Swim", oct(18, 7), oct(18, 8));
+    useMoves([swim]);
+    const { user } = renderUndoPage("/week/2026-10-14");
+    await settledGrid("Week of 12 October 2026");
+    (await swimChip()).focus();
+    const errors = vi.spyOn(console, "error");
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(1));
+    expect(writes.update.mock.calls[0]).toStrictEqual([
+      swim.id,
+      { startsAt: oct(19, 7), endsAt: oct(19, 8) },
+      STAMP,
+    ]);
+    await settle();
+    expect(
+      screen.getByRole("grid", { name: "Week of 12 October 2026" }),
+    ).toBeInTheDocument();
+    expect(errors.mock.calls.flat().some((a) => a instanceof Error)).toBe(
+      false,
+    );
+    errors.mockRestore();
+  });
+});
+
 describe("deleting (CAL-013 AC-4, Block 8)", () => {
   it('the sheet\'s "Delete Swim": the chip is gone while remove is still pending, then "Deleted Swim" with Undo', async () => {
     const swim = swim15();
@@ -1862,6 +1975,119 @@ describe("undo (CAL-013 AC-5, Block 8)", () => {
     writes.update.mockResolvedValueOnce({ status: "conflict" });
     await user.click(undoButton());
     await expectSaveAlert();
+  });
+});
+
+// CAL-041 Contract, Block 3 (AC-1, AC-7). A successful undo shows no alert -
+// each case also shows the undo landed, so the absence is not vacuous - and
+// the page's own once() holds an undo to one write when the toast's Undo
+// click and a Ctrl+Z reach the action before React re-renders.
+describe("the undo's outcome, and once-only undo (CAL-041 AC-1, AC-7)", () => {
+  /** No alert toast, and no "Couldn't save" text anywhere. */
+  function expectNoSaveAlert(): void {
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.queryByText("Couldn't save. Try again.")).toBeNull();
+  }
+
+  it('a successful Undo after a drop shows no "Couldn\'t save. Try again." alert', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    dragTo(await swimChip(), monthCell(grid, "Tuesday 20 October"));
+    await expectUndoToast("Moved to Tue 20 Oct, 07:00");
+    await user.click(undoButton());
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(2));
+    expect(
+      await within(monthCell(grid, "Thursday 15 October")).findByRole(
+        "button",
+        { name: SWIM_NAME },
+      ),
+    ).toBeInTheDocument();
+    await settle();
+    expectNoSaveAlert();
+  });
+
+  it('a successful Ctrl+Z after Alt+→ in the month shows no "Couldn\'t save. Try again." alert', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await expectUndoToast("Moved to Fri 16 Oct, 07:00");
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(writes.update).toHaveBeenCalledTimes(2));
+    expect(
+      await within(monthCell(grid, "Thursday 15 October")).findByRole(
+        "button",
+        { name: SWIM_NAME },
+      ),
+    ).toBeInTheDocument();
+    await settle();
+    expectNoSaveAlert();
+  });
+
+  it('a successful Undo after a chip Delete shows no "Couldn\'t save. Try again." alert', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Delete}");
+    await expectUndoToast("Deleted Swim");
+    await user.click(undoButton());
+    await waitFor(() => expect(writes.restore).toHaveBeenCalledTimes(1));
+    expect(
+      await within(monthCell(grid, "Thursday 15 October")).findByRole(
+        "button",
+        { name: SWIM_NAME },
+      ),
+    ).toBeInTheDocument();
+    await settle();
+    expectNoSaveAlert();
+  });
+
+  it('a successful Ctrl+Z after a chip Delete shows no "Couldn\'t save. Try again." alert', async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    const { user } = renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    (await swimChip()).focus();
+    await user.keyboard("{Delete}");
+    await expectUndoToast("Deleted Swim");
+    await user.keyboard("{Control>}z{/Control}");
+    await waitFor(() => expect(writes.restore).toHaveBeenCalledTimes(1));
+    expect(
+      await within(monthCell(grid, "Thursday 15 October")).findByRole(
+        "button",
+        { name: SWIM_NAME },
+      ),
+    ).toBeInTheDocument();
+    await settle();
+    expectNoSaveAlert();
+  });
+
+  it("Undo clicked and Ctrl+Z pressed before React re-renders write the undo once: update called exactly twice", async () => {
+    const swim = swim15();
+    useMoves([swim]);
+    renderUndoPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    dragTo(await swimChip(), monthCell(grid, "Tuesday 20 October"));
+    await expectUndoToast("Moved to Tue 20 Oct, 07:00");
+    expect(writes.update).toHaveBeenCalledTimes(1);
+    // One synchronous block, outside act and without user-event: the
+    // toast's Ctrl+Z listener is still attached when the keydown arrives.
+    undoButton().click();
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true }),
+    );
+    await settle();
+    expect(writes.update).toHaveBeenCalledTimes(2);
+    expect(writes.update.mock.calls[1]?.[1]).toStrictEqual({
+      startsAt: oct(15, 7),
+      endsAt: oct(15, 8),
+    });
   });
 });
 
