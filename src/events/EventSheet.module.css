@@ -92,6 +92,51 @@
   line-height: var(--line-height-sm);
 }
 
+/* CAL-045 Block 2: a failed outbox op, the .alert treatment plus Retry / Discard. */
+.syncAlert {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
+  background: var(--color-danger-subtle);
+  color: var(--color-danger);
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.syncMessage {
+  flex: 1 1 12rem;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.syncGlyph {
+  font-weight: var(--font-weight-semibold);
+}
+
+.syncActions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+.syncButton {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-3);
+  border: 1px solid currentColor;
+  border-radius: var(--radius-md);
+  background: none;
+  color: var(--color-danger);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.syncButton:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
 .body {
   flex: 1;
   overflow-y: auto;

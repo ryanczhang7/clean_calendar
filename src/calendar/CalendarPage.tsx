@@ -36,6 +36,7 @@ import { type EventsStore, eventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { type OverrideActions, overrideActions } from "../sync/overrideActions";
 import { type OverridesStore, overridesStore } from "../sync/overridesStore";
+import { type SheetSync, sheetSync } from "../sync/sheetSync";
 import { useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
 import styles from "./CalendarPage.module.css";
@@ -528,6 +529,8 @@ export function CalendarPage(
     actions?: EventActions;
     /** CAL-025 Block 6: an occurrence's writes; default the app's overrideActions. */
     overrideActions?: OverrideActions;
+    /** CAL-045 Block 3: the sheet's failed-sync strip; default the app's sheetSync. */
+    sheetSync?: SheetSync;
   } = {},
 ): JSX.Element {
   const { pathname } = useLocation();
@@ -653,6 +656,7 @@ export function CalendarPage(
           kinds={kinds}
           actions={actions}
           overrides={overrides}
+          sync={props.sheetSync ?? sheetSync}
           onClose={() => setSheet(null)}
           onDelete={edits.onDelete}
         />
