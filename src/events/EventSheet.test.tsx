@@ -439,6 +439,30 @@ describe("the dates through the sheet (AC-3, Block 5)", () => {
   });
 });
 
+describe("a cleared start date through the sheet (CAL-043 AC-6)", () => {
+  // A date input reports "" while cleared; the form passes it straight to
+  // moveStart. MECHANICAL: nothing is thrown or logged, the end keeps its
+  // values, and Save shows voice.md's end error instead of sending a request.
+  // The shipped code already does this, so the case passed on arrival and is
+  // earned by the H13 mutate.sh run in the story's Deferred verifications.
+  it("clearing Start date on a timed event: no error logged, End date and End time kept, Save shows the end error and sends nothing", async () => {
+    const { user, actions } = await openSheet(edit(DENTIST));
+    const errors = vi.spyOn(console, "error");
+    setField("Start date", "");
+    expect(field("Start date")).toHaveValue("");
+    expect(field("End date")).toHaveValue("2026-10-14");
+    expect(field("End time")).toHaveValue("10:30");
+    const logged = errors.mock.calls.filter((args) =>
+      args.some((arg) => arg instanceof Error),
+    );
+    expect(logged).toStrictEqual([]);
+    await user.click(save());
+    expect(screen.getByText("End must be after start.")).toBeInTheDocument();
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+});
+
 describe("saving a new event (AC-4, Block 5)", () => {
   it("calls createEvent once with every field, origin manual, blank notes null", async () => {
     const { user, actions } = await openSheet(
