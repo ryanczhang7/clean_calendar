@@ -40,6 +40,7 @@ import {
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
 import type { OverrideActions } from "../sync/overrideActions";
 import type { OverridesSnapshot, OverridesStore } from "../sync/overridesStore";
+import type { SheetSync } from "../sync/sheetSync";
 import { installMatchMedia } from "../test/media";
 import { ToastHost, ToastProvider } from "../ui/Toast";
 import { CalendarPage } from "./CalendarPage";
@@ -1349,6 +1350,8 @@ function renderUndoPage(
   now: Date = NOW,
   /** CAL-024 Block 11: lets a case wrap the actions in spies. */
   wrap: (actions: EventActions) => EventActions = (a) => a,
+  /** CAL-045 Block 3: the sheet's door to the outbox; absent → the page's default. */
+  sheetSync?: SheetSync,
 ) {
   const user = userEvent.setup();
   const kinds: KindsStore = createKindsStore(kindsRepo);
@@ -1360,6 +1363,7 @@ function renderUndoPage(
       overrides={overridesStoreOf()}
       now={() => now}
       actions={wrap(actionsOver(events))}
+      sheetSync={sheetSync}
     />
   );
   render(
@@ -3375,5 +3379,51 @@ describe('"All events in the series" on a move moves the series by the same days
       expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
     }
     expect(spinIn(monthCell(grid, "Friday 20 November"))).toHaveLength(0);
+  });
+});
+
+// CAL-045 Contract, Blocks 3 and 4: the page's one new prop, `sheetSync`,
+// reaches the sheet as its `sync`. CAL-013's renderUndoPage harness with a
+// fake SheetSync of three vi.fns; the event's store row carries
+// `sync: "failed"`, as the cached events store marks it (CAL-015 Block 6), so
+// its chip is "..., not synced". MECHANICAL: voice.md's "{title} couldn't
+// sync.", the fixture's message.
+describe("a failed sync through the page (CAL-045 AC-1, Block 3)", () => {
+  it('clicking a "not synced" chip opens its sheet with the strip: "Swim couldn\'t sync." then "invalid input", Retry and Discard', async () => {
+    const swim: Event = { ...swim15(), sync: "failed" };
+    useWrites([swim]);
+    const sync = {
+      failedOp: vi.fn<SheetSync["failedOp"]>(async () => ({
+        seq: 7,
+        message: "invalid input",
+      })),
+      retry: vi.fn<SheetSync["retry"]>(async () => {}),
+      discard: vi.fn<SheetSync["discard"]>(async () => null),
+    };
+    const { user } = renderUndoPage("/month/2026-10", NOW, (a) => a, sync);
+    await user.click(
+      await screen.findByRole("button", { name: `${SWIM_NAME}, not synced` }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Edit event: Swim",
+    });
+    const strip = await within(dialog).findByRole("alert");
+    const text = strip.textContent ?? "";
+    const lead = "Swim couldn't sync.";
+    const start = text.indexOf(lead);
+    expect(start, `strip text ${JSON.stringify(text)}`).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(
+      text.indexOf("invalid input", start + lead.length),
+      `strip text ${JSON.stringify(text)}`,
+    ).toBeGreaterThan(start);
+    expect(
+      within(strip).getByRole("button", { name: "Retry" }),
+    ).toBeInTheDocument();
+    expect(
+      within(strip).getByRole("button", { name: "Discard" }),
+    ).toBeInTheDocument();
+    expect(sync.failedOp).toHaveBeenCalledWith(swim.id);
   });
 });

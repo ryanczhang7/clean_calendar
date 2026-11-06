@@ -1,4 +1,5 @@
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -23,6 +24,7 @@ import type { Event, EventOverride, Kind } from "../data/rows";
 import type { EventActions } from "../sync/eventActions";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import type { OverrideActions } from "../sync/overrideActions";
+import type { SheetSync } from "../sync/sheetSync";
 import { EventSheet, type SheetRequest } from "./EventSheet";
 
 vi.mock(
@@ -167,6 +169,8 @@ function Host(props: {
   kinds: KindsSnapshot;
   actions: FakeActions;
   onClose: () => void;
+  /** CAL-045 Block 2: the sheet's door to the outbox; absent → the sheet's default. */
+  sync?: SheetSync;
 }): JSX.Element {
   const [request, setRequest] = useState<SheetRequest | null>(null);
   return (
@@ -181,6 +185,7 @@ function Host(props: {
         request={request}
         kinds={props.kinds}
         actions={props.actions}
+        sync={props.sync}
         onClose={() => {
           props.onClose();
           setRequest(null);
@@ -192,7 +197,11 @@ function Host(props: {
 
 async function openSheet(
   make: Make,
-  options: { kinds?: KindsSnapshot; actions?: FakeActions } = {},
+  options: {
+    kinds?: KindsSnapshot;
+    actions?: FakeActions;
+    sync?: SheetSync;
+  } = {},
 ) {
   const user = userEvent.setup();
   const actions = options.actions ?? fakeActions();
@@ -204,6 +213,7 @@ async function openSheet(
         kinds={options.kinds ?? KINDS}
         actions={actions}
         onClose={onClose}
+        sync={options.sync}
       />
     </MemoryRouter>,
   );
@@ -1617,4 +1627,245 @@ describe("saving an occurrence asks which events (CAL-025 Block 4)", {
     await user.click(screen.getByRole("button", { name: "Open" }));
     return { user, actions, overrides };
   }
+});
+
+// CAL-045 Contract, Blocks 2 and 4 (AC-1 to AC-4 at the sheet). An event whose
+// cached copy says `sync: "failed"` asks the injected SheetSync for its failed
+// op and shows it as a role="alert" strip at the top of the form, "{title}
+// couldn't sync." (voice.md, "Sync failed (4xx)") then the stored message,
+// with Retry and Discard (components.md, "Event sheet", error). The SheetSync
+// is three vi.fns; nothing here touches IndexedDB. MECHANICAL: the copy is
+// voice.md's, the values the fixtures'. The two text parts are matched as two
+// needles inside the strip's own text, in that order, so neither can be met by
+// anything else on the page.
+describe("a failed sync in the sheet (CAL-045 AC-1 to AC-4)", () => {
+  type FakeSync = {
+    failedOp: Mock<SheetSync["failedOp"]>;
+    retry: Mock<SheetSync["retry"]>;
+    discard: Mock<SheetSync["discard"]>;
+  };
+
+  const THEIRS_STAMP = "2026-10-21T10:00:00.000009+00:00";
+  /** The optimistic copy the cache holds: the owner's refused edit. */
+  const MINE: Event = { ...DENTIST, title: "Mine", sync: "failed" };
+  /** The server's copy, as discard hands it back: no sync key. */
+  const THEIRS: Event = {
+    ...DENTIST,
+    title: "Theirs",
+    location: "Harbour Rd",
+    updatedAt: THEIRS_STAMP,
+  };
+
+  /** failedOp answers `first`, then null; retry and discard resolve. */
+  function fakeSync(
+    first: { seq: number; message: string } | null = {
+      seq: 7,
+      message: "invalid input",
+    },
+  ): FakeSync {
+    const failedOp = vi.fn<SheetSync["failedOp"]>(async () => null);
+    failedOp.mockResolvedValueOnce(first);
+    return {
+      failedOp,
+      retry: vi.fn<SheetSync["retry"]>(async () => {}),
+      discard: vi.fn<SheetSync["discard"]>(async () => THEIRS),
+    };
+  }
+
+  /** The strip, once failedOp has answered. */
+  const strip = () => screen.findByRole("alert");
+
+  /** "{title} couldn't sync." then the message, both inside the strip, in order. */
+  function expectStripText(el: HTMLElement, lead: string, message: string) {
+    const text = el.textContent ?? "";
+    const start = text.indexOf(lead);
+    expect(start, `strip text ${JSON.stringify(text)}`).toBeGreaterThanOrEqual(
+      0,
+    );
+    expect(
+      text.indexOf(message, start + lead.length),
+      `strip text ${JSON.stringify(text)}`,
+    ).toBeGreaterThan(start);
+  }
+
+  /** Lets a call that should not happen have its chance to. */
+  async function settle(): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    });
+  }
+
+  describe("the strip (AC-1)", () => {
+    it('an event whose op failed shows a role="alert" strip: "Dentist couldn\'t sync." then "invalid input"', async () => {
+      const sync = fakeSync();
+      await openSheet(edit({ ...DENTIST, sync: "failed" }), { sync });
+      const el = await strip();
+      expectStripText(el, "Dentist couldn't sync.", "invalid input");
+      expect(sync.failedOp).toHaveBeenCalledWith(DENTIST.id);
+    });
+
+    it('the strip holds "Retry" and "Discard", both type="button", inside the sheet', async () => {
+      const sync = fakeSync();
+      await openSheet(edit({ ...DENTIST, sync: "failed" }), { sync });
+      const el = await strip();
+      const retry = within(el).getByRole("button", { name: "Retry" });
+      const discard = within(el).getByRole("button", { name: "Discard" });
+      expect(retry).toHaveAttribute("type", "button");
+      expect(discard).toHaveAttribute("type", "button");
+      expect(sheet("Edit event: Dentist").contains(el)).toBe(true);
+    });
+
+    it("the strip comes before the Title field in document order", async () => {
+      await openSheet(edit({ ...DENTIST, sync: "failed" }), {
+        sync: fakeSync(),
+      });
+      const el = await strip();
+      expect(
+        el.compareDocumentPosition(title()) & Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    });
+
+    it("the copy uses the event's own title", async () => {
+      await openSheet(edit({ ...TRIP, sync: "failed" }), {
+        sync: fakeSync({ seq: 3, message: "check violated" }),
+      });
+      expectStripText(await strip(), "Trip couldn't sync.", "check violated");
+    });
+  });
+
+  describe("Retry (AC-2)", () => {
+    it("Retry calls retry(7) once, then the strip is gone when failedOp answers null", async () => {
+      const sync = fakeSync();
+      const { user } = await openSheet(edit({ ...DENTIST, sync: "failed" }), {
+        sync,
+      });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Retry" }));
+      expect(sync.retry.mock.calls).toStrictEqual([[7]]);
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(sync.failedOp).toHaveBeenLastCalledWith(DENTIST.id);
+      expect(sheet("Edit event: Dentist")).toBeInTheDocument();
+    });
+
+    it('Retry refused again: the strip stays, showing the new message "still bad"', async () => {
+      const sync = fakeSync();
+      sync.failedOp.mockResolvedValueOnce({ seq: 7, message: "still bad" });
+      const { user } = await openSheet(edit({ ...DENTIST, sync: "failed" }), {
+        sync,
+      });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toContain("still bad"),
+      );
+      expectStripText(
+        screen.getByRole("alert"),
+        "Dentist couldn't sync.",
+        "still bad",
+      );
+      expect(screen.getByRole("alert").textContent).not.toContain(
+        "invalid input",
+      );
+    });
+  });
+
+  describe("Discard (AC-3)", () => {
+    it("Discard calls discard(7, the event's id); the fields show the server copy and the strip is gone", async () => {
+      const sync = fakeSync();
+      const { user, onClose } = await openSheet(edit(MINE), { sync });
+      expect(title()).toHaveValue("Mine");
+      const el = await strip();
+      expectStripText(el, "Mine couldn't sync.", "invalid input");
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      expect(sync.discard.mock.calls).toStrictEqual([[7, DENTIST.id]]);
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      expect(screen.getByRole("textbox", { name: "Location" })).toHaveValue(
+        "Harbour Rd",
+      );
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+      expect(sheet()).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('after Discard the sheet is clean: Close closes at once, no "Discard changes?"', async () => {
+      const { user, onClose } = await openSheet(edit(MINE), {
+        sync: fakeSync(),
+      });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      await user.click(closeButton());
+      expect(
+        screen.queryByRole("dialog", { name: "Discard changes?" }),
+      ).toBeNull();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("after Discard focus stays inside the sheet", async () => {
+      const { user } = await openSheet(edit(MINE), { sync: fakeSync() });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      await waitFor(() =>
+        expect(sheet().contains(document.activeElement)).toBe(true),
+      );
+    });
+
+    it("after Discard a Save patches against the server copy: only the changed title, with the server's updatedAt", async () => {
+      const { user, actions } = await openSheet(edit(MINE), {
+        sync: fakeSync(),
+      });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      await user.type(title(), " 2");
+      await user.click(save());
+      expect(actions.updateEvent.mock.calls).toStrictEqual([
+        [DENTIST.id, { title: "Theirs 2" }, THEIRS_STAMP],
+      ]);
+    });
+
+    it("Discard of an event that is then gone (discard resolves null) closes the sheet", async () => {
+      const sync = fakeSync();
+      sync.discard.mockResolvedValue(null);
+      const { user, onClose } = await openSheet(edit(MINE), { sync });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  // Pass on arrival: nothing renders a strip today. Earned at GATES by
+  // deferred verification 2 (at the source) - see the story's handoff.
+  describe("no failed op, no strip (AC-4)", () => {
+    const SAVING: Event = { ...DENTIST, sync: "saving" };
+    it.each([
+      ['sync: "saving" (an op merely queued)', SAVING],
+      ["no sync key (no op at all)", DENTIST],
+    ])(
+      "%s: no strip, no Retry, no Discard, and failedOp is never called",
+      async (_name, e) => {
+        const sync = fakeSync();
+        await openSheet(edit(e), { sync });
+        await settle();
+        expect(title()).toHaveValue("Dentist");
+        expect(screen.queryByRole("alert")).toBeNull();
+        expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+        expect(screen.queryByRole("button", { name: "Discard" })).toBeNull();
+        expect(sync.failedOp).not.toHaveBeenCalled();
+      },
+    );
+
+    it("a new event never asks for a failed op", async () => {
+      const sync = fakeSync();
+      await openSheet(createAllDay(oct(15)), { sync });
+      await settle();
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(sync.failedOp).not.toHaveBeenCalled();
+    });
+  });
 });

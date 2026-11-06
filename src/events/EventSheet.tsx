@@ -29,6 +29,7 @@ import {
   type OverrideFields,
   overrideActions,
 } from "../sync/overrideActions";
+import { type FailedOp, type SheetSync, sheetSync } from "../sync/sheetSync";
 import { Dialog } from "../ui/Dialog";
 import { type EditScope, EditScopeDialog } from "./EditScopeDialog";
 import { EventForm } from "./EventForm";
@@ -113,25 +114,45 @@ export function EventSheet(props: {
   onDelete?: (event: Event) => void;
   /** CAL-025 Block 4: an occurrence's "This event only"; default the app's. */
   overrides?: OverrideActions;
+  /** CAL-045 Block 2: a failed op's strip, Retry and Discard; default the app's. */
+  sync?: SheetSync;
 }): JSX.Element | null {
   const {
     request,
     kinds,
     actions = eventActions,
     overrides = overrideActions,
+    sync = sheetSync,
     onClose,
     onDelete,
   } = props;
+  // CAL-045 Block 2, PO decision 5: a Discard that leaves a row reopens the
+  // sheet on it. The replacement belongs to the request it was made for, and
+  // the generation remounts OpenSheet even when the row's stamp is unchanged.
+  const [replaced, setReplaced] = useState<{
+    for: SheetRequest;
+    event: Event;
+    generation: number;
+  } | null>(null);
   if (request === null) return null;
+  const current =
+    replaced !== null && replaced.for === request && request.mode === "edit"
+      ? { ...request, event: replaced.event }
+      : request;
+  const generation = replaced?.for === request ? replaced.generation : 0;
   return (
     <OpenSheet
-      key={keyOf(request)}
-      request={request}
+      key={`${keyOf(current)}:${generation}`}
+      request={current}
       kinds={kinds}
       actions={actions}
       overrides={overrides}
+      sync={sync}
       onClose={onClose}
       onDelete={onDelete}
+      onDiscarded={(fresh) =>
+        setReplaced({ for: request, event: fresh, generation: generation + 1 })
+      }
     />
   );
 }
@@ -163,10 +184,14 @@ function OpenSheet(props: {
   kinds: KindsSnapshot;
   actions: EventActions;
   overrides: OverrideActions;
+  sync: SheetSync;
   onClose: () => void;
   onDelete: ((event: Event) => void) | undefined;
+  /** CAL-045 Block 2: Discard left this row; the outer sheet reopens on it. */
+  onDiscarded: (fresh: Event) => void;
 }): JSX.Element {
-  const { kinds, actions, overrides, onClose, onDelete } = props;
+  const { kinds, actions, overrides, sync, onClose, onDelete, onDiscarded } =
+    props;
   // The request this sheet was opened for; a different one remounts it.
   const [request] = useState(props.request);
   const ids = useId();
@@ -183,8 +208,47 @@ function OpenSheet(props: {
   const root = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
 
+  // CAL-045 Block 2: the event's failed outbox op, once asked for.
+  const [syncFailure, setSyncFailure] = useState<FailedOp | null>(null);
+  const syncBusy = useRef(false);
+
   const kindRemoved = initial.removed && value.kindId === null;
   const dirty = !sameValue(value, initial.value);
+
+  // CAL-045 Block 2, PO decision 3: only an event whose cached copy says its
+  // op failed asks for it; a queued op, a synced event or a new one never do.
+  const failedEventId =
+    request.mode === "edit" && request.event.sync === "failed"
+      ? request.event.id
+      : null;
+  useEffect(() => {
+    if (failedEventId === null) return;
+    let live = true;
+    void sync.failedOp(failedEventId).then((found) => {
+      if (live) setSyncFailure(found);
+    });
+    return () => {
+      live = false;
+    };
+  }, [sync, failedEventId]);
+
+  const retrySync = async (op: FailedOp) => {
+    if (failedEventId === null || syncBusy.current) return;
+    syncBusy.current = true;
+    await sync.retry(op.seq);
+    const found = await sync.failedOp(failedEventId);
+    syncBusy.current = false;
+    setSyncFailure(found);
+  };
+
+  const discardSync = async (op: FailedOp) => {
+    if (failedEventId === null || syncBusy.current) return;
+    syncBusy.current = true;
+    const fresh = await sync.discard(op.seq, failedEventId);
+    syncBusy.current = false;
+    if (fresh === null) onClose();
+    else onDiscarded(fresh);
+  };
 
   // Focus on open: Title for a new event, Close for an existing one. On
   // unmount, focus goes back to whatever opened the sheet, if still there.
@@ -380,6 +444,32 @@ function OpenSheet(props: {
           className={styles.form}
           onSubmit={(e) => void submit(e)}
         >
+          {syncFailure === null || request.mode !== "edit" ? null : (
+            <div role="alert" className={styles.syncAlert}>
+              <p className={styles.syncMessage}>
+                <span aria-hidden="true" className={styles.syncGlyph}>
+                  !
+                </span>{" "}
+                {`${request.event.title} couldn't sync.`} {syncFailure.message}
+              </p>
+              <div className={styles.syncActions}>
+                <button
+                  type="button"
+                  className={styles.syncButton}
+                  onClick={() => void retrySync(syncFailure)}
+                >
+                  Retry
+                </button>
+                <button
+                  type="button"
+                  className={styles.syncButton}
+                  onClick={() => void discardSync(syncFailure)}
+                >
+                  Discard
+                </button>
+              </div>
+            </div>
+          )}
           {failed ? (
             <p role="alert" className={styles.alert}>
               {SAVE_FAILED}
