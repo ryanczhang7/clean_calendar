@@ -916,6 +916,31 @@ describe("moving from the time grid (CAL-013 Block 5)", () => {
     expect(onDropEvent).toHaveBeenCalledTimes(1);
   });
 
+  // CAL-040 AC-2 at the grid: data-dragging is what turns off pointer events
+  // on every block, so a press that never became a drag must not leave the
+  // grid able to acquire it from later, buttonless movement.
+  it("a block pressed, moved 3 px and released, then a 60 px move with no button down: the grid carries no data-dragging", () => {
+    const swim = timed("Swim", 14, [9, 0], [10, 30]);
+    const { onDropEvent } = renderMoving({ events: [swim] });
+    const chip = screen.getByRole("button", {
+      name: "Swim, Gym, 09:00 to 10:30",
+    });
+    const dragRoot = screen.getByRole("grid", { name: WEEK_LABEL })
+      .parentElement as HTMLElement;
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 100, clientY: 103 });
+    fireEvent.pointerUp(chip, { clientX: 100, clientY: 103 });
+    fireEvent.pointerMove(document, { clientX: 100, clientY: 160 });
+    expect(dragRoot).not.toHaveAttribute("data-dragging");
+    expect(onDropEvent).not.toHaveBeenCalled();
+    // Not vacuous: a real press-and-move puts the attribute on this element.
+    fireEvent.pointerDown(chip, { button: 0, clientX: 100, clientY: 100 });
+    fireEvent.pointerMove(document, { clientX: 100, clientY: 160 });
+    expect(dragRoot).toHaveAttribute("data-dragging", "true");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(dragRoot).not.toHaveAttribute("data-dragging");
+  });
+
   it("Alt+ArrowDown and Alt+Shift+ArrowDown on a block reach onChipCommand as down and lengthen, with the block's button", () => {
     const swim = timed("Swim", 14, [10, 0], [11, 15]);
     const { onChipCommand } = renderMoving({ events: [swim] });
