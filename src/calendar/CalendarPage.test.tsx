@@ -9,7 +9,14 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router";
+import {
+  MemoryRouter,
+  type NavigateFunction,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+} from "react-router";
 import {
   afterEach,
   beforeEach,
@@ -167,10 +174,28 @@ function overridesStoreOf(): OverridesStore {
   };
 }
 
+/**
+ * CAL-042 Block 1: the router's navigate, captured by Where so a case can
+ * move the same MemoryRouter to a URL no button reaches in one step (AC-1).
+ */
+let go: NavigateFunction = () => {
+  throw new Error("Where has not rendered");
+};
+
 function Where(): JSX.Element {
-  const { pathname } = useLocation();
-  return <p>at {pathname}</p>;
+  const { pathname, key } = useLocation();
+  go = useNavigate();
+  // CAL-042 AC-2: the history entry's key, which a push of the same path
+  // changes and the pathname does not.
+  return (
+    <>
+      <p>at {pathname}</p>
+      <p data-testid="location-key">{key}</p>
+    </>
+  );
 }
+
+const locationKey = () => screen.getByTestId("location-key").textContent;
 
 function renderPage(
   path: string,
@@ -510,6 +535,79 @@ describe("the month grid's selection through the page (AC-3, AC-5, Block 10)", (
     await screen.findByRole("grid", { name: "October 2026" });
     await user.click(screen.getByRole("radio", { name: "Week" }));
     expect(at()).toBe("at /week/2026-10-12");
+  });
+});
+
+describe("the selection across a year, history, and a view switch after a move (CAL-042 AC-1 to AC-3)", () => {
+  it('October 2027 after October 2026 selects "Friday 1 October" 2027, not the kept 14 October 2026 (AC-1)', async () => {
+    renderPage("/month/2026-10");
+    const october2026 = await settledGrid("October 2026");
+    expect(monthCell(october2026, "Wednesday 14 October")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    act(() => {
+      void go("/month/2027-10");
+    });
+    const october2027 = await settledGrid("October 2027");
+    expect(at()).toBe("at /month/2027-10");
+    const selected = within(october2027)
+      .getAllByRole("gridcell")
+      .filter((cell) => cell.getAttribute("aria-selected") === "true");
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toHaveAccessibleName(/^Friday 1 October, /);
+    expect(selected[0]).toHaveAttribute("tabindex", "0");
+    const fourteenth = monthCell(october2027, "Thursday 14 October");
+    expect(fourteenth).not.toHaveAttribute("aria-selected", "true");
+    expect(fourteenth).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("ArrowRight within October adds no history entry: the location key is unchanged (AC-2)", async () => {
+    const { user } = renderPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    const before = locationKey();
+    monthCell(grid, "Wednesday 14 October").focus();
+    await user.keyboard("{ArrowRight}");
+    const fifteenth = monthCell(grid, "Thursday 15 October");
+    expect(fifteenth).toHaveAttribute("aria-selected", "true");
+    await waitFor(() => expect(fifteenth).toHaveFocus());
+    expect(at()).toBe("at /month/2026-10");
+    expect(locationKey()).toBe(before);
+  });
+
+  // The control for the case above: the key is a needle that can move -
+  // leaving the month is a push, and the key changes with it.
+  it("PageDown out of October pushes one history entry: /month/2026-11 under a new location key (AC-2 control)", async () => {
+    const { user } = renderPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    const before = locationKey();
+    monthCell(grid, "Wednesday 14 October").focus();
+    await user.keyboard("{PageDown}");
+    await screen.findByRole("grid", { name: "November 2026" });
+    expect(at()).toBe("at /month/2026-11");
+    expect(locationKey()).not.toBe(before);
+    expect(locationKey()).not.toBe("");
+  });
+
+  it("Next month, then Week, goes to the week of the November selection: /week/2026-10-26, not 14 October's (AC-3)", async () => {
+    const { user } = renderPage("/month/2026-10");
+    await settledGrid("October 2026");
+    await user.click(screen.getByRole("button", { name: "Next month" }));
+    const november = await settledGrid("November 2026");
+    expect(monthCell(november, "Sunday 1 November")).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await user.click(
+      within(screen.getByRole("radiogroup", { name: "View" })).getByRole(
+        "radio",
+        { name: "Week" },
+      ),
+    );
+    expect(at()).toBe("at /week/2026-10-26");
+    expect(
+      await screen.findByRole("grid", { name: "Week of 26 October 2026" }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -1355,6 +1453,44 @@ async function settle(): Promise<void> {
     for (let i = 0; i < 10; i += 1) await Promise.resolve();
   });
 }
+
+describe("N and the day list's Add return focus to their opener (CAL-042 AC-4)", () => {
+  it('n on a focused "Thursday 15 October", then Close on the clean sheet, puts focus back on that cell', async () => {
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    const fifteenth = monthCell(grid, "Thursday 15 October");
+    fifteenth.focus();
+    expect(fifteenth).toHaveFocus();
+    await user.keyboard("n");
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(monthCell(grid, "Thursday 15 October")).toHaveFocus(),
+    );
+  });
+
+  it("on the phone, the day list's Add, then Close on the clean sheet, puts focus back on Add", async () => {
+    media.set({ width: 375 });
+    useWrites();
+    const { user } = renderSheetPage("/month/2026-10");
+    const grid = await settledGrid("October 2026");
+    await user.click(monthCell(grid, "Thursday 15 October"));
+    const list = await screen.findByRole("region", {
+      name: "Events on Thu 15 Oct",
+    });
+    expect(
+      within(list).getByText("No events on Thu 15 Oct"),
+    ).toBeInTheDocument();
+    const add = within(list).getByRole("button", { name: "Add" });
+    await user.click(add);
+    await screen.findByRole("dialog", { name: "New event" });
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() => expect(add).toHaveFocus());
+  });
+});
 
 describe("a dropped chip moves its event (CAL-013 AC-2, Block 8)", () => {
   it("a month chip dropped on 20 October keeps its time: update(id, 20 Oct 07:00 - 08:00, its token), no sheet, and the Moved toast with Undo", async () => {
