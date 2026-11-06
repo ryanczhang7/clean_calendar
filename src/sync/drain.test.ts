@@ -45,7 +45,12 @@ import {
   type DrainNotice,
   fieldNames,
 } from "./drain";
-import { enqueueDelete, enqueueInsert, enqueueUpdate } from "./outbox";
+import {
+  enqueueDelete,
+  enqueueInsert,
+  enqueueRestore,
+  enqueueUpdate,
+} from "./outbox";
 
 // CAL-015 AC-2 to AC-6, Contract Block 3. MECHANICAL: which repository member
 // is called with which arguments and in which order (`mock.invocationCallOrder`),
@@ -559,6 +564,96 @@ describe("deletes win over edits, in either order (AC-4, PO decision 5)", () => 
     expect(await db.events.get(ROW.id)).toStrictEqual(
       server(ROW, { title: "Theirs", updatedAt: S9, deletedAt: NOW_TS }),
     );
+  });
+});
+
+// CAL-044 AC-1 and AC-2, Contract Block 3. MECHANICAL. The owner's undo of a
+// delete is a restore op; when its conditional write matches zero rows, the
+// deletes-win rule above must not swallow it. "No notice" is pinned as the
+// whole notice stream: the pass's own `changed` signal and nothing else.
+describe("a conflicted restore keeps the owner's undo (CAL-044 AC-1, AC-2)", () => {
+  /** ROW as the cache holds it after the owner's delete landed: deleted, stamp T1. */
+  const deletedRow: Event = { ...ROW, deletedAt: T1 };
+
+  it("a restore that meets a row the other device re-stamped while deleted is queued again over the fresh row, sent by the same pass, and lands silently", async () => {
+    await db.events.put(deletedRow);
+    await enqueueRestore(db, "events", ROW.id);
+    const theirs = server(ROW, { deletedAt: SERVER_DELETED, updatedAt: S9 });
+    const finalRow = server(ROW, { deletedAt: null, updatedAt: S3 });
+    repos.events.restore
+      .mockResolvedValueOnce({ status: "conflict" })
+      .mockResolvedValueOnce(okRow(finalRow));
+    repos.events.get.mockResolvedValue(okRow(theirs));
+    await drain.run();
+    expect(repos.events.restore.mock.calls).toStrictEqual([
+      [ROW.id, T1],
+      [ROW.id, S9],
+    ]);
+    expect(repos.events.get.mock.calls).toStrictEqual([[ROW.id]]);
+    expect(await db.events.get(ROW.id)).toStrictEqual(finalRow);
+    expect(await db.outbox.count()).toBe(0);
+    expect(notices).toStrictEqual([{ kind: "changed" }]);
+  });
+
+  it("the re-queued restore, while it waits, keeps the row live in the views and records the fresh stamp", async () => {
+    await db.events.put(deletedRow);
+    await enqueueRestore(db, "events", ROW.id);
+    const theirs = server(ROW, { deletedAt: SERVER_DELETED, updatedAt: S9 });
+    repos.events.restore
+      .mockResolvedValueOnce({ status: "conflict" })
+      .mockResolvedValueOnce({ status: "offline" });
+    repos.events.get.mockResolvedValue(okRow(theirs));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "offline",
+    });
+    expect(await opsWithoutSeq(db)).toStrictEqual([
+      {
+        op: "restore",
+        table: "events",
+        id: ROW.id,
+        patch: null,
+        baseUpdatedAt: S9,
+        clientTs: NOW_TS,
+        status: "queued",
+      },
+    ]);
+    expect(await db.events.get(ROW.id)).toStrictEqual({
+      ...theirs,
+      deletedAt: null,
+    });
+    expect(notices).toStrictEqual([{ kind: "changed" }]);
+  });
+
+  it("a restore that meets a row another device already restored is dropped without a notice and the cache takes the server copy", async () => {
+    await db.events.bulkPut([deletedRow, OTHER]);
+    await enqueueRestore(db, "events", ROW.id);
+    await enqueueUpdate(db, "events", OTHER.id, { title: "Mine too" });
+    const theirRestore = server(ROW, { deletedAt: null, updatedAt: S9 });
+    const theirEdit = server(OTHER, { title: "Theirs", updatedAt: S9 });
+    repos.events.restore.mockResolvedValue({ status: "conflict" });
+    repos.events.update.mockResolvedValue({ status: "conflict" });
+    repos.events.get.mockImplementation(async (id) =>
+      okRow(id === ROW.id ? theirRestore : theirEdit),
+    );
+    await drain.run();
+    expect(repos.events.restore.mock.calls).toStrictEqual([[ROW.id, T1]]);
+    expect(await db.events.get(ROW.id)).toStrictEqual(theirRestore);
+    expect(await db.outbox.count()).toBe(0);
+    // Silent for the restored row; the ordinary conflict beside it is
+    // announced, so the subscriber was listening.
+    expect(notices).toStrictEqual([
+      {
+        kind: "conflict",
+        table: "events",
+        id: OTHER.id,
+        title: "Theirs",
+        fields: ["title"],
+        patch: { title: "Mine too" },
+        freshUpdatedAt: S9,
+      },
+      { kind: "changed" },
+    ]);
   });
 });
 
