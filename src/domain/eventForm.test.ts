@@ -719,6 +719,128 @@ describe("moveStart and setAllDay from an empty start (CAL-021 Block 3, AC-2)", 
   });
 });
 
+// CAL-043 Contract, Block 4 (AC-1 to AC-5). MECHANICAL: each expected value is
+// the input with one field changed, the error is END_ERROR (voice.md), blank
+// text is null. A date or time input reports "" while cleared or half-typed,
+// and the form passes it straight to moveStart. The shipped module already
+// does this, so every case passed on arrival and is earned by the mutate.sh
+// runs recorded in the story's Deferred verifications.
+
+describe("moveStart with a cleared field, timed (CAL-043 AC-1)", () => {
+  it("the start date cleared: only the start date changes, the end stays 10:30 on the 14th, nothing thrown", () => {
+    const value = timedValue();
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "", "09:00");
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startDate: "" });
+  });
+
+  it("the start time cleared: only the start time changes, the end stays 10:30 on the 14th, nothing thrown", () => {
+    const value = timedValue();
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "2026-10-14", "");
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startTime: "" });
+  });
+
+  it("the end time already cleared: moving the start to 15 Oct 09:00 changes only the start, nothing thrown", () => {
+    const value = timedValue({ endTime: "" });
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "2026-10-15", "09:00");
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startDate: "2026-10-15" });
+  });
+
+  it("the end date already cleared: moving the start to 15 Oct 09:00 changes only the start, nothing thrown", () => {
+    const value = timedValue({ endDate: "" });
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "2026-10-15", "09:00");
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startDate: "2026-10-15" });
+  });
+});
+
+describe("moveStart with a cleared field, all day (CAL-043 AC-2)", () => {
+  it("the start date cleared on a 12 - 14 Oct value: only the start date changes, nothing thrown", () => {
+    const value = allDayValue();
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "", value.startTime);
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startDate: "" });
+  });
+
+  it("the end date already cleared: moving the start to 15 Oct changes only the start, nothing thrown", () => {
+    const value = allDayValue({ endDate: "" });
+    let moved: EventFormValue | undefined;
+    expect(() => {
+      moved = moveStart(value, "2026-10-15", value.startTime);
+    }).not.toThrow();
+    expect(moved).toStrictEqual({ ...value, startDate: "2026-10-15" });
+  });
+});
+
+describe("validate with a cleared end, timed (CAL-043 AC-3)", () => {
+  it("the end date cleared: { end: END_ERROR }, nothing thrown", () => {
+    let errors: ReturnType<typeof validate> | undefined;
+    expect(() => {
+      errors = validate(timedValue({ endDate: "" }));
+    }).not.toThrow();
+    expect(errors).toStrictEqual({ end: END_ERROR });
+  });
+
+  it("the end time cleared: { end: END_ERROR }, nothing thrown", () => {
+    let errors: ReturnType<typeof validate> | undefined;
+    expect(() => {
+      errors = validate(timedValue({ endTime: "" }));
+    }).not.toThrow();
+    expect(errors).toStrictEqual({ end: END_ERROR });
+  });
+});
+
+describe("moveStart on an all-day value that already ends before it starts (CAL-043 AC-4)", () => {
+  it("start 12 Oct, end 10 Oct: moving the start to 15 Oct leaves the end on 10 Oct", () => {
+    const value = allDayValue({ endDate: "2026-10-10" });
+    expect(moveStart(value, "2026-10-15", value.startTime)).toStrictEqual({
+      ...value,
+      startDate: "2026-10-15",
+      endDate: "2026-10-10",
+    });
+  });
+});
+
+describe("location and notes of spaces only are blank (CAL-043 AC-5)", () => {
+  const spaces = () => timedValue({ location: "   ", notes: "   " });
+
+  it("toNewEvent stores both as null", () => {
+    expect(toNewEvent(spaces(), GYM.id)).toStrictEqual({
+      title: "Dentist",
+      kindId: GYM.id,
+      startsAt: oct(14, 9, 0),
+      endsAt: oct(14, 10, 30),
+      allDay: false,
+      location: null,
+      notes: null,
+      origin: "manual",
+      recurrence: null,
+      captureJobId: null,
+    });
+  });
+
+  it("patchOf against a stored row with both null, and nothing else different, is {}", () => {
+    const stored = event({ location: null, notes: null });
+    const patch = patchOf(stored, spaces());
+    expect(patch).not.toHaveProperty("location");
+    expect(patch).not.toHaveProperty("notes");
+    // The whole patch, so the absence above cannot be vacuous.
+    expect(patch).toStrictEqual({});
+  });
+});
+
 // CAL-024 Contract, Block 1 (AC-1, AC-2). MECHANICAL: the helper copy is
 // components.md's ("Every Tuesday") with date-fns' English names, the error
 // is voice.md's "Event form" line, and the stored recurrence is rows.ts's
