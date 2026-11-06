@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import type { Event } from "../data/rows";
 import {
   ALL_DAY_CHIP_HEIGHT,
@@ -25,6 +25,18 @@ import {
 // column assignments are Block 1's examples, one `it` each; the touching
 // case is the deferred verification's target. Every instant is built with
 // the local-time constructor, so the suite holds in any zone.
+//
+// CAL-039 Contract Block 1. The zone is pinned HERE, not left to the
+// machine: Sun 1 Nov 2026 02:00 America/Chicago ends daylight saving, and
+// daysFrom's cases across 24 Oct - 2 Nov only catch days built in 24-hour
+// steps of milliseconds in a zone that changes clocks that night. Under
+// TZ=UTC, where CI runs, they would pass against that bug (audit
+// epic-03-2026-10-21, E-DST). Same pattern as moveEvent.test.ts; node
+// re-reads TZ on assignment, and the first case checks that it did.
+vi.stubEnv("TZ", "America/Chicago");
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
 
 const STAMP = "2026-10-16T08:00:00.000001+00:00";
 
@@ -68,6 +80,13 @@ function ev(
 }
 
 const cols = (column: number, columns: number) => ({ column, columns });
+
+describe("the zone these cases are written for", () => {
+  it("is one where Sun 1 Nov 2026 ends daylight saving: 31 Oct is UTC-5, 2 Nov is UTC-6", () => {
+    expect(new Date(2026, 9, 31, 12).getTimezoneOffset()).toBe(300);
+    expect(new Date(2026, 10, 2, 12).getTimezoneOffset()).toBe(360);
+  });
+});
 
 describe("the exported constants are layout.md's numbers", () => {
   it("MIN_BLOCK_HEIGHT 20, all-day chips 24 + 8 padding, at most 3, fallback hour 8", () => {

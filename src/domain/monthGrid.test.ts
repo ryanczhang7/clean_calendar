@@ -1,5 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import { dayKey, type MonthCell, monthGrid } from "./monthGrid";
+
+// CAL-039 Contract Block 1. The zone is pinned HERE, not left to the
+// machine: Sun 1 Nov 2026 02:00 America/Chicago ends daylight saving, and
+// the October and November 2026 cases below only catch a grid built in
+// 24-hour steps of milliseconds in a zone that changes clocks that night.
+// Under TZ=UTC, where CI runs, they would pass against that bug (audit
+// epic-03-2026-10-21, E-DST). Same pattern as moveEvent.test.ts; node
+// re-reads TZ on assignment, and the first case checks that it did.
+vi.stubEnv("TZ", "America/Chicago");
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
 
 // CAL-009 AC-1, Contract Block 1. SETTLED: the numbers are read out of
 // layout.md ("Grid maths that tests can pin": six rows, 42 cells, weeks start
@@ -32,6 +44,13 @@ const inMonthIndices = (cells: MonthCell[]) =>
 
 const range = (from: number, to: number) =>
   Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+describe("the zone these cases are written for", () => {
+  it("is one where Sun 1 Nov 2026 ends daylight saving: 31 Oct is UTC-5, 2 Nov is UTC-6", () => {
+    expect(new Date(2026, 9, 31, 12).getTimezoneOffset()).toBe(300);
+    expect(new Date(2026, 10, 2, 12).getTimezoneOffset()).toBe(360);
+  });
+});
 
 describe("monthGrid(2026, 10) - October 2026 (AC-1, settled)", () => {
   const cells = monthGrid(2026, 10);
