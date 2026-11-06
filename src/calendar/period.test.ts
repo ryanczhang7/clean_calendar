@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import {
   isCalendarPath,
   moveDay,
@@ -20,6 +28,18 @@ import {
 // accessibility.md ("In the month grid"), not derived with a date library.
 // Every date is built with the local-time constructor; today is Wed 14 Oct
 // 2026 (mid-afternoon, so "today is a date, not an instant").
+//
+// CAL-039 Contract Block 1. The zone is pinned HERE, not left to the
+// machine: Sun 1 Nov 2026 02:00 America/Chicago ends daylight saving, and
+// "ArrowDown from 31 October lands on 7 November" only catches a day step
+// of 24 hours of milliseconds in a zone that changes clocks that night.
+// Under TZ=UTC, where CI runs, it would pass against that bug (audit
+// epic-03-2026-10-21, E-DST). Same pattern as moveEvent.test.ts; node
+// re-reads TZ on assignment, and the first case checks that it did.
+vi.stubEnv("TZ", "America/Chicago");
+afterAll(() => {
+  vi.unstubAllEnvs();
+});
 
 /** Local midnight of `day` `month` (1..12) `year`. */
 const d = (year: number, month: number, day: number) =>
@@ -36,6 +56,13 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   localStorage.clear();
+});
+
+describe("the zone these cases are written for", () => {
+  it("is one where Sun 1 Nov 2026 ends daylight saving: 31 Oct is UTC-5, 2 Nov is UTC-6", () => {
+    expect(new Date(2026, 9, 31, 12).getTimezoneOffset()).toBe(300);
+    expect(new Date(2026, 10, 2, 12).getTimezoneOffset()).toBe(360);
+  });
 });
 
 describe("the stored view preference (AC-6, Block 1)", () => {
