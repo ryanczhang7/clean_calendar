@@ -79,7 +79,12 @@ function kindIdFor(name: string | null, kinds: Kind[]): string | null {
   return match?.id ?? null;
 }
 
-/** Pure: the form's initial value from a proposal. Exported for its tests. */
+/**
+ * Pure: the form's initial value from a proposal. Exported for its tests.
+ * An all-day proposal's end date is its `endsAt` read as the last day
+ * included (CAL-049 Block 4); a missing, unparseable or earlier end leaves
+ * it the start's day.
+ */
 export function proposalToFormValue(
   proposal: Proposal,
   kinds: Kind[],
@@ -92,8 +97,13 @@ export function proposalToFormValue(
     proposedEnd !== null && proposedEnd.getTime() > start.getTime()
       ? proposedEnd
       : new Date(start.getTime() + HOUR_MS);
+  const value = newEventValue(start, end, proposal.allDay, kindId);
+  if (proposal.allDay && proposedEnd !== null) {
+    const lastDay = format(proposedEnd, "yyyy-MM-dd");
+    if (lastDay > value.startDate) value.endDate = lastDay;
+  }
   return {
-    ...newEventValue(start, end, proposal.allDay, kindId),
+    ...value,
     title: proposal.title ?? "",
     location: proposal.location ?? "",
   };
