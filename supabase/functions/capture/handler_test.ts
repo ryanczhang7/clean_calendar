@@ -1269,3 +1269,83 @@ Deno.test("CAL-019: a text body with a stray mime and no image key is still a te
   assertEquals(jobBody(w).input_kind, "text");
   assertEquals(geminiBody(w).contents[0]!.parts.length, 1);
 });
+
+// ---------------------------------------------------------------- CAL-050
+
+Deno.test("CAL-050 AC-1: the job row is posted as application/json, and its body parses as JSON", async () => {
+  const w = world();
+  const { status } = await run(w, post({ text: TEXT }));
+  assertEquals(status, 200);
+  const call = w.call(JOBS);
+  const type = call.headers.get("content-type") ?? "";
+  // A charset parameter is legitimate; the media type is what PostgREST reads.
+  assert(
+    type.toLowerCase().startsWith("application/json"),
+    "the job-row POST is not application/json: " + JSON.stringify(type),
+  );
+  const row = JSON.parse(call.body);
+  assertEquals(row.status, "proposed");
+});
+
+for (const raw of ["null", "42", '"text"']) {
+  Deno.test(`CAL-050 AC-2: a JSON body of ${raw} is 400 bad_request with the CORS header, and nothing is fetched`, async () => {
+    const w = world();
+    const res = await run(w, post(raw));
+    assertEquals(res.status, 400);
+    assertEquals(res.body, { error: "bad_request" });
+    assertEquals(w.calls.length, 0, `fetched ${JSON.stringify(w.keys())}`);
+  });
+}
+
+Deno.test("CAL-050 AC-3: a Gemini 200 whose body is not JSON is 502 unreadable with a discarded job row", async () => {
+  const w = world({
+    gemini: () =>
+      new Response("<html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+  });
+  const res = await run(w, post({ text: TEXT }));
+  assertEquals(res.status, 502);
+  assertEquals(res.body, { error: "unreadable" });
+  assertEquals(w.keys(), [OWNER, KINDS, GEMINI, JOBS]);
+  const row = jobBody(w);
+  assertEquals(row.input_kind, "text");
+  assertEquals(row.input_hash, await sha256Hex(TEXT));
+  assertEquals(row.model, "gemini-3.8-flash");
+  assertEquals(row.status, "discarded");
+  assertEquals(row.proposal, null);
+  assertEquals(row.confidence, null);
+  assertEquals(row.error, "unreadable: not json");
+});
+
+for (const method of ["PUT", "PATCH", "DELETE"]) {
+  Deno.test(`CAL-050 AC-4: a ${method} with a valid bearer and text is 405 method_not_allowed, and nothing is fetched`, async () => {
+    const w = world();
+    const res = await run(
+      w,
+      new Request(`${SUPABASE_URL}/functions/v1/capture`, {
+        method,
+        headers: {
+          "content-type": "application/json",
+          authorization: OWNER_JWT,
+        },
+        body: JSON.stringify({ text: TEXT }),
+      }),
+    );
+    assertEquals(res.status, 405);
+    assertEquals(res.body, { error: "method_not_allowed" });
+    assertEquals(w.calls.length, 0, `fetched ${JSON.stringify(w.keys())}`);
+  });
+}
+
+Deno.test("CAL-050 AC-5: a kindName the model left null still loses the model's duplicate missing entries", async () => {
+  const { body, row } = await captureWith({ kindName: null }, [
+    "title",
+    "kind",
+    "title",
+  ]);
+  assertEquals(body.proposal.kindName, null);
+  assertEquals(body.missing, ["title", "kind"]);
+  assertEquals((row.proposal as { kindName: unknown }).kindName, null);
+});

@@ -363,3 +363,21 @@ Deno.test("CAL-019 AC-1: the image prompt for an owner with no kinds is still a 
   assert(none.length > 0, "the image prompt is empty");
   assert(none !== buildImagePrompt(["Work"]), "the kinds make no difference");
 });
+
+Deno.test("CAL-050 AC-3: a 200 whose body is not JSON resolves as a reply with empty text, and does not reject", async () => {
+  const s = stub(() =>
+    new Response("<html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    })
+  );
+  const out = await callGemini({
+    prompt: "p",
+    apiKey: KEY,
+    base: BASE,
+    fetch: s.fetch,
+    now: s.now,
+  });
+  assertEquals(out, { kind: "reply", text: "", latencyMs: 250 });
+  assertEquals(s.seen.length, 1);
+});
