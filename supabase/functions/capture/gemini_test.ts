@@ -381,3 +381,109 @@ Deno.test("CAL-050 AC-3: a 200 whose body is not JSON resolves as a reply with e
   assertEquals(out, { kind: "reply", text: "", latencyMs: 250 });
   assertEquals(s.seen.length, 1);
 });
+
+// ================================================================ CAL-051
+//
+// CAL-051 (EPIC-05 audit, G13/G16/G20): the response schema's CONTENT, not
+// only its keys. The self-comparison in the generationConfig test above pins
+// the wiring; these pin what the model is held to. All four pass on arrival
+// against the shipped schema and are earned by mutants (story, "Deferred
+// verifications"). AC-4 derives its expectation from the zod proposalSchema,
+// so it is a mirror check and not a second hand-written list.
+
+import { proposalSchema } from "../../../shared/captureSchema.ts";
+
+type SchemaProp = {
+  type?: string;
+  nullable?: boolean;
+  minimum?: number;
+  maximum?: number;
+};
+
+const cal051Proposal = (geminiResponseSchema as {
+  properties: {
+    proposal: { properties: Record<string, SchemaProp>; required: string[] };
+  };
+}).properties.proposal;
+
+const cal051Confidence = (geminiResponseSchema as {
+  properties: { confidence: { properties: Record<string, SchemaProp> } };
+}).properties.confidence;
+
+Deno.test("CAL-051 AC-1: title, startsAt, endsAt, location and kindName are nullable STRINGs, and allDay is a BOOLEAN that is not nullable", () => {
+  const props = cal051Proposal.properties;
+  for (const key of ["title", "startsAt", "endsAt", "location", "kindName"]) {
+    assertEquals(
+      { key, type: props[key]?.type, nullable: props[key]?.nullable },
+      { key, type: "STRING", nullable: true },
+      `proposal.${key} must be a STRING the model may answer null for`,
+    );
+  }
+  assertEquals(
+    { type: props.allDay?.type, nullable: props.allDay?.nullable === true },
+    { type: "BOOLEAN", nullable: false },
+    "proposal.allDay must be a BOOLEAN the model may not answer null for",
+  );
+});
+
+Deno.test("CAL-051 AC-2: every confidence property is a NUMBER bounded to 0..1", () => {
+  const props = cal051Confidence.properties;
+  for (const key of FIELDS) {
+    assertEquals(
+      {
+        key,
+        type: props[key]?.type,
+        minimum: props[key]?.minimum,
+        maximum: props[key]?.maximum,
+      },
+      { key, type: "NUMBER", minimum: 0, maximum: 1 },
+      `confidence.${key} must be a NUMBER with minimum 0 and maximum 1`,
+    );
+  }
+});
+
+Deno.test("CAL-051 AC-3: the proposal's required list is exactly the six proposal fields", () => {
+  // Order-insensitive: sorted on both sides. A duplicate would still fail,
+  // because the arrays are compared element by element after sorting.
+  assertEquals([...cal051Proposal.required].sort(), [
+    "allDay",
+    "endsAt",
+    "kindName",
+    "location",
+    "startsAt",
+    "title",
+  ]);
+});
+
+Deno.test("CAL-051 AC-4: the response schema marks a proposal key nullable exactly when the shared zod proposalSchema accepts null for it", () => {
+  const shape = proposalSchema.shape as Record<
+    string,
+    { safeParse(v: unknown): { success: boolean } }
+  >;
+  const zodKeys = Object.keys(shape).sort();
+  assertEquals(
+    Object.keys(cal051Proposal.properties).sort(),
+    zodKeys,
+    "the response schema's proposal keys differ from proposalSchema's",
+  );
+  const expected = Object.fromEntries(
+    zodKeys.map((k) => [k, shape[k].safeParse(null).success]),
+  );
+  // The probe itself must discriminate: a safeParse that always answered the
+  // same would make the mirror check below vacuous.
+  assert(
+    Object.values(expected).includes(true) &&
+      Object.values(expected).includes(false),
+    `proposalSchema's null probe does not discriminate: ${
+      JSON.stringify(expected)
+    }`,
+  );
+  const actual = Object.fromEntries(
+    zodKeys.map((k) => [k, cal051Proposal.properties[k]?.nullable === true]),
+  );
+  assertEquals(
+    actual,
+    expected,
+    "response-schema nullability (actual) does not mirror proposalSchema's acceptance of null (expected)",
+  );
+});
