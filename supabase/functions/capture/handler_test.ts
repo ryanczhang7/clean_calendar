@@ -354,6 +354,24 @@ Deno.test("AC-4: an owner check that errors (500) is 403, and Gemini is never ca
   assertEquals(w.keys(), [OWNER]);
 });
 
+Deno.test("CAL-052 AC-3: an owner check answering 200 with an HTML body is 403 forbidden; Gemini is never called and no job row is written", async () => {
+  const w = world({
+    owner: () =>
+      new Response("<html>ok</html>", {
+        status: 200,
+        headers: { "content-type": "text/html" },
+      }),
+  });
+  const { status, body } = await run(w, post({ text: TEXT }));
+  assertEquals(
+    status,
+    403,
+    "an HTML 200 from the owner check let the capture through",
+  );
+  assertEquals(body, { error: "forbidden" });
+  assertEquals(w.keys(), [OWNER]);
+});
+
 Deno.test("the body check comes before the owner check: a bad body from a stranger is 400 and nothing is fetched", async () => {
   const w = world({ owner: () => json(false) });
   const { status } = await run(w, post({ text: "" }, "Bearer x-jwt"));

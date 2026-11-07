@@ -195,3 +195,37 @@ Deno.test("an owner check whose fetch throws (network failure) is 403 forbidden,
   assertCors(res);
   assertEquals(await res.json(), { error: "forbidden" });
 });
+
+// CAL-052 (EPIC-05 audit O7, O7b): a 2xx whose body is not JSON is the one
+// fail-closed branch nothing pinned. A proxy or a misconfigured SUPABASE_URL can
+// answer an HTML 200; that must refuse the caller, not admit them.
+
+Deno.test("CAL-052 AC-1: is_owner() answering 200 with an HTML body is 403 forbidden, readable cross-origin, not an admitted caller", async () => {
+  const { fetch, seen } = stubFetch(() =>
+    new Response("<html>ok</html>", {
+      status: 200,
+      headers: { "content-type": "text/html" },
+    })
+  );
+  const res = await requireOwner(request("Bearer owner-jwt"), { fetch, env });
+  assert(res !== null, "an HTML 200 from the owner check admitted the caller");
+  assertEquals(res.status, 403);
+  assertCors(res);
+  assertEquals(await res.json(), { error: "forbidden" });
+  assertEquals(seen.length, 1);
+});
+
+Deno.test("CAL-052 AC-2: is_owner() answering 200 with an empty body is 403 forbidden, not an admitted caller", async () => {
+  const { fetch, seen } = stubFetch(() =>
+    new Response("", {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })
+  );
+  const res = await requireOwner(request("Bearer owner-jwt"), { fetch, env });
+  assert(res !== null, "an empty 200 from the owner check admitted the caller");
+  assertEquals(res.status, 403);
+  assertCors(res);
+  assertEquals(await res.json(), { error: "forbidden" });
+  assertEquals(seen.length, 1);
+});
