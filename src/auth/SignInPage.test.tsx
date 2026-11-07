@@ -39,6 +39,8 @@ const PERIOD_TITLE = /\d{4}$/;
 const REFUSAL =
   "This calendar belongs to another account. Sign out and try the right one.";
 const OFFLINE = "Sign-in needs a connection";
+/** CAL-046: the first owner render under load is slow, never wrong (story Notes). */
+const OWNER_ARRIVAL_MS = 4000;
 
 function renderAt(path: string) {
   const router = createMemoryRouter(routes, { initialEntries: [path] });
@@ -158,7 +160,11 @@ describe("arriving signed in as the owner (AC-3)", () => {
     fake.setSession(sessionFor(OWNER_EMAIL));
     const router = renderAt("/signin");
     expect(
-      await screen.findByRole("heading", { level: 1, name: "Event kinds" }),
+      await screen.findByRole(
+        "heading",
+        { level: 1, name: "Event kinds" },
+        { timeout: OWNER_ARRIVAL_MS },
+      ),
     ).toBeInTheDocument();
     expect(router.state.location.pathname).toBe("/kinds");
     expect(
