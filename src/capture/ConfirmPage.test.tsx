@@ -28,7 +28,7 @@ import type { CaptureResponse, Proposal } from "../../shared/captureSchema";
 import { RouteFocus } from "../app/routes";
 import type { CaptureJobsRepo } from "../data/captureJobs";
 import type { Kind } from "../data/rows";
-import { END_ERROR } from "../domain/eventForm";
+import { END_ERROR, newEventValue, toNewEvent } from "../domain/eventForm";
 import type { SeedRepo } from "../kinds/seedKinds";
 import type { EventActions } from "../sync/eventActions";
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
@@ -1400,5 +1400,216 @@ describe("Repeat on the confirm screen (CAL-024 AC-2)", () => {
     ).toBeInTheDocument();
     expect(field("Repeat until")).toHaveAttribute("aria-invalid", "true");
     expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-049 (EPIC-05 audit, Decided 1; E-RECHECK R1-R5, R15). Test-only: the
+// shipped page is believed correct, so each case passes on arrival and is
+// earned by the audit mutant its AC names (the story's Deferred
+// verifications). Same harness as above; the proposal is PROPOSAL (Tue 3 Nov
+// 2026 19:30, Dining) unless a case says otherwise.
+
+const SAVE_FAILED_TEXT = "Couldn't save. Try again.";
+
+/** Every role="alert" on screen that carries the save-failed copy. */
+const saveFailedAlerts = () =>
+  screen
+    .queryAllByRole("alert")
+    .filter((a) => (a.textContent ?? "").includes(SAVE_FAILED_TEXT));
+
+describe("CAL-049 AC-1: an all-day proposal keeps its own end at Save", () => {
+  it("a 12-14 Nov all-day proposal is saved as the same 12-14 Nov all-day event the sheet would save, not as 12 Nov only", async () => {
+    const { user, actions } = renderConfirm({
+      state: handoff({
+        allDay: true,
+        startsAt: "2026-11-12",
+        endsAt: "2026-11-14",
+      }),
+    });
+    await formReady();
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    const saved = actions.createEvent.mock.calls[0]?.[0];
+    const expected = toNewEvent(
+      {
+        ...newEventValue(nov(12), nov(12), true, DINING.id),
+        endDate: "2026-11-14",
+      },
+      DINING.id,
+    );
+    expect([saved?.allDay, saved?.startsAt, saved?.endsAt]).toStrictEqual([
+      expected.allDay,
+      expected.startsAt,
+      expected.endsAt,
+    ]);
+  });
+
+  it("a 12-14 Nov all-day proposal opens with End date 14 Nov, the last day included", async () => {
+    renderConfirm({
+      state: handoff({
+        allDay: true,
+        startsAt: "2026-11-12",
+        endsAt: "2026-11-14",
+      }),
+    });
+    await formReady();
+    expect([
+      (field("Start date") as HTMLInputElement).value,
+      (field("End date") as HTMLInputElement).value,
+    ]).toStrictEqual(["2026-11-12", "2026-11-14"]);
+  });
+});
+
+describe("CAL-049 AC-2: a partly filled timed end is left to validation, never replaced by start + 1 h", () => {
+  const withEnd = () =>
+    renderConfirm({ state: handoff({ endsAt: nov(3, 21, 0).toISOString() }) });
+
+  it("End time cleared, End date kept: Save creates nothing and shows the end error", async () => {
+    const { user, actions } = withEnd();
+    await formReady();
+    expect(field("End date")).toHaveValue("2026-11-03");
+    fireEvent.change(field("End time"), { target: { value: "" } });
+    await user.click(saveButton());
+    await settle();
+    expect(screen.getByText(END_ERROR)).toBeInTheDocument();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+
+  it("End date cleared, End time kept: Save creates nothing and shows the end error", async () => {
+    const { user, actions } = withEnd();
+    await formReady();
+    expect(field("End time")).toHaveValue("21:00");
+    fireEvent.change(field("End date"), { target: { value: "" } });
+    await user.click(saveButton());
+    await settle();
+    expect(screen.getByText(END_ERROR)).toBeInTheDocument();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe("CAL-049 AC-3: submitting the confirm form never lets the browser submit it", () => {
+  it("a submit of Save's form has its default action prevented (dispatch returns false)", async () => {
+    renderConfirm();
+    await formReady();
+    const form = saveButton().closest("form") as HTMLFormElement;
+    expect(form).not.toBeNull();
+    expect(fireEvent.submit(form)).toBe(false);
+  });
+
+  it("Enter in the Title submits the form with its default action prevented", async () => {
+    const { user } = renderConfirm();
+    await formReady();
+    const form = saveButton().closest("form") as HTMLFormElement;
+    const submits: Event[] = [];
+    const record = (e: Event) => submits.push(e);
+    form.addEventListener("submit", record);
+    try {
+      await user.click(titleBox());
+      await user.keyboard("{Enter}");
+      await settle();
+    } finally {
+      form.removeEventListener("submit", record);
+    }
+    expect(submits).toHaveLength(1);
+    expect(submits[0]?.defaultPrevented).toBe(true);
+  });
+});
+
+describe("CAL-049 AC-4: after a failed save the owner can retry", () => {
+  it("createEvent refused once, then ok: the second Save creates the event, navigates and toasts", async () => {
+    const actions = fakeActions();
+    actions.createEvent.mockResolvedValueOnce({
+      status: "error",
+      code: "42501",
+      message: "denied",
+      http: 403,
+    });
+    const { user } = renderConfirm({ actions });
+    await formReady();
+    await user.click(saveButton());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      SAVE_FAILED_TEXT,
+    );
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(where()).toBe("/month/2026-11"));
+    expect(routerState()).toStrictEqual({ focusEventId: NEW_ID });
+    expect(await screen.findByText("Added Dinner at Lupa")).toBeInTheDocument();
+  });
+});
+
+describe("CAL-049 AC-5: the save-failed alert shows only after a failed save", () => {
+  it("on open, no alert carries the save-failed text", async () => {
+    renderConfirm();
+    await formReady();
+    expect(saveFailedAlerts()).toHaveLength(0);
+    expect(screen.queryByText(SAVE_FAILED_TEXT)).toBeNull();
+  });
+
+  it("after a submit refused by validation (end before start), still no alert carries it", async () => {
+    const { user, actions } = renderConfirm();
+    await formReady();
+    fireEvent.change(field("End time"), { target: { value: "18:00" } });
+    await user.click(saveButton());
+    expect(await screen.findByText(END_ERROR)).toBeInTheDocument();
+    await settle();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+    expect(saveFailedAlerts()).toHaveLength(0);
+    expect(screen.queryByText(SAVE_FAILED_TEXT)).toBeNull();
+  });
+});
+
+describe("CAL-049 AC-6: opened exactly on the hour, a proposal with no start starts now", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("at 14:00:00.000 local on 3 Nov, the start is 3 Nov 14:00, not 15:00", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(2026, 10, 3, 14, 0, 0, 0));
+    renderConfirm({ state: handoff({ startsAt: null, endsAt: null }) });
+    await formReady();
+    expect([
+      (field("Start date") as HTMLInputElement).value,
+      (field("Start time") as HTMLInputElement).value,
+    ]).toStrictEqual(["2026-11-03", "14:00"]);
+  });
+});
+
+describe("CAL-049 AC-7: a submit refused for the end puts focus on End date", () => {
+  it("end before start: after Save, focus is on the End date input", async () => {
+    const { user, actions } = renderConfirm();
+    await formReady();
+    fireEvent.change(field("End time"), { target: { value: "18:00" } });
+    await user.click(saveButton());
+    expect(await screen.findByText(END_ERROR)).toBeInTheDocument();
+    await settle();
+    expect(actions.createEvent).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field("End date"));
+  });
+});
+
+describe("CAL-049 AC-8: the form view's markup", () => {
+  it('"Show what was captured" has aria-controls naming the element that holds the captured text', async () => {
+    renderConfirm();
+    await formReady();
+    const toggle = screen.getByRole("button", {
+      name: "Show what was captured",
+    });
+    const id = toggle.getAttribute("aria-controls") ?? "";
+    expect(id).not.toBe("");
+    const region = document.getElementById(id);
+    expect(region).not.toBeNull();
+    expect(region).toContainElement(
+      screen.getByText("Table for two at Lupa, Tue 3 Nov 19:30"),
+    );
+  });
+
+  it('the heading "Check the details" is out of the tab order: tabindex="-1"', async () => {
+    renderConfirm();
+    await formReady();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Check the details" }),
+    ).toHaveAttribute("tabindex", "-1");
   });
 });
