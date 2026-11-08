@@ -1,7 +1,18 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
-import { createMemoryRouter, RouterProvider } from "react-router";
+import {
+  createMemoryRouter,
+  Outlet,
+  RouterProvider,
+  useLocation,
+} from "react-router";
 import {
   afterEach,
   beforeEach,
@@ -922,6 +933,198 @@ describe("opened from a share (CAL-022 AC-4, Block 5)", () => {
     );
     expect(
       screen.queryByRole("img", { name: "Screenshot preview" }),
+    ).toBeNull();
+    expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
+  });
+});
+
+// CAL-053 (EPIC-05 audit, Decided 5; E-RECHECK R6 to R10). Test-only: the
+// shipped page already satisfies each case, so each is earned by the audit
+// mutant its AC names (story, ## Deferred verifications). MECHANICAL
+// throughout: locations, call counts, roles and the page's own copy.
+
+/** Renders the current pathname, so a test reads the location off the DOM. */
+function LocationProbe(): JSX.Element {
+  return <p data-testid="location">{useLocation().pathname}</p>;
+}
+
+function Elsewhere(): JSX.Element {
+  return <h1>Elsewhere stand-in</h1>;
+}
+
+/**
+ * AC-1 only. renderCapture's route list is fixed at /capture and
+ * /capture/confirm, with no route to leave to and nothing outside the page
+ * that could read the location; existing cases are not edited (Contract), so
+ * this describe builds its own router: the same page and stand-in, plus
+ * /elsewhere, under a layout route that renders a useLocation() probe.
+ */
+function renderCaptureWithElsewhere(propose: Propose) {
+  const user = userEvent.setup();
+  const downscale = vi.fn<typeof downscaleImage>(async () => ({
+    status: "ok",
+    image: DOWNSCALED,
+  }));
+  const router = createMemoryRouter(
+    [
+      {
+        element: (
+          <>
+            <LocationProbe />
+            <Outlet />
+          </>
+        ),
+        children: [
+          {
+            path: "/capture",
+            element: <CapturePage propose={propose} downscale={downscale} />,
+          },
+          { path: "/capture/confirm", element: <Confirmed /> },
+          { path: "/elsewhere", element: <Elsewhere /> },
+        ],
+      },
+    ],
+    { initialEntries: ["/capture"] },
+  );
+  render(<RouterProvider router={router} />);
+  return { user, router };
+}
+
+describe("CAL-053 AC-1: a reply arriving after the owner has left /capture is dropped", () => {
+  it("leaving /capture mid-request and then receiving ok keeps the owner on the route they went to", async () => {
+    const pending = deferred<CaptureOutcome>();
+    const propose = vi.fn<typeof proposeEvent>(() => pending.promise);
+    const { user, router } = renderCaptureWithElsewhere(propose);
+    await user.type(textBox(), "Dinner 3 Nov");
+    await user.click(proposeButton());
+    await screen.findByText(WORKING);
+    expect(propose).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await router.navigate("/elsewhere");
+    });
+    expect(
+      await screen.findByRole("heading", { name: "Elsewhere stand-in" }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/elsewhere$/);
+
+    await act(async () => pending.resolve(OK));
+    await settle();
+    expect(screen.getByTestId("location")).toHaveTextContent(/^\/elsewhere$/);
+    expect(router.state.location.pathname).toBe("/elsewhere");
+    expect(
+      screen.queryByRole("heading", { name: "Confirm stand-in" }),
+    ).toBeNull();
+  });
+});
+
+const RESPONSE_B: CaptureResponse = {
+  ...RESPONSE,
+  proposal: { ...RESPONSE.proposal, title: "Lunch at Padella" },
+  jobId: "5d1e9f3a-8b2c-4e7d-a6f0-1c2b3d4e5f60",
+};
+
+describe("CAL-053 AC-2: a cancelled request's late reply never passes for the next request's", () => {
+  it("Cancel, propose again, then A's ok arrives: no navigation; then B's ok navigates with B's response, not A's", async () => {
+    const a = deferred<CaptureOutcome>();
+    const b = deferred<CaptureOutcome>();
+    const propose = vi.fn<typeof proposeEvent>();
+    propose.mockReturnValueOnce(a.promise);
+    propose.mockReturnValueOnce(b.promise);
+    const { user, router } = renderCapture({ propose });
+    await user.type(textBox(), "Dinner 3 Nov");
+    await user.click(proposeButton());
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    await user.click(proposeButton());
+    await waitFor(() => expect(propose).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(WORKING)).toBeInTheDocument();
+
+    await act(async () => a.resolve(OK));
+    await settle();
+    expect(router.state.location.pathname).toBe("/capture");
+    expect(
+      screen.queryByRole("heading", { name: "Confirm stand-in" }),
+    ).toBeNull();
+    // B is still the request in flight.
+    expect(screen.getByText(WORKING)).toBeInTheDocument();
+
+    await act(async () => b.resolve({ status: "ok", response: RESPONSE_B }));
+    expect(
+      await screen.findByRole("heading", { name: "Confirm stand-in" }),
+    ).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe("/capture/confirm");
+    expect(router.state.location.state).toStrictEqual({
+      response: RESPONSE_B,
+      source: { kind: "text", text: "Dinner 3 Nov" },
+    });
+  });
+});
+
+describe("CAL-053 AC-3: Cancel while the screenshot is being shrunk stops the request", () => {
+  it("a shrink that finishes after Cancel sends nothing: propose is never called", async () => {
+    const shrinking = deferred<Awaited<ReturnType<typeof downscaleImage>>>();
+    const downscale = vi.fn<typeof downscaleImage>(() => shrinking.promise);
+    const { user, propose } = renderCapture({ downscale });
+    await user.upload(fileInput(), png());
+    await user.click(proposeButton());
+    await user.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(downscale).toHaveBeenCalledTimes(1);
+
+    await act(async () =>
+      shrinking.resolve({ status: "ok", image: DOWNSCALED }),
+    );
+    await settle();
+    expect(propose).not.toHaveBeenCalled();
+  });
+});
+
+describe("CAL-053 AC-4: a failed shrink ends the work state", () => {
+  it.each([
+    ["too_large", TOO_LARGE],
+    ["unsupported", COULDNT_READ],
+  ] as const)(
+    "a %s shrink shows the alert with no working status line, no Cancel, and Propose event enabled",
+    async (status, copy) => {
+      const { user, propose } = renderCapture({
+        downscale: vi.fn<typeof downscaleImage>(async () => ({ status })),
+      });
+      await user.upload(fileInput(), png());
+      await user.click(proposeButton());
+      expect(await screen.findByRole("alert")).toHaveTextContent(copy);
+      await settle();
+      const working = screen
+        .queryAllByRole("status")
+        .filter((el) => el.textContent?.includes(WORKING) === true);
+      expect(working).toHaveLength(0);
+      expect(screen.queryByText(WORKING)).toBeNull();
+      expect(screen.queryByRole("button", { name: "Cancel" })).toBeNull();
+      expectEnabled(proposeButton());
+      expect(propose).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe('CAL-053 AC-5: "Remove screenshot" clears the file input', () => {
+  it('after Remove, the file input value is "" so the same file can be chosen again', async () => {
+    const { user } = renderCapture();
+    await user.upload(fileInput(), png());
+    // Precondition: the pick left the input observably non-empty, so ""
+    // afterwards is something Remove did.
+    expect(fileInput().value).not.toBe("");
+    await user.click(
+      await screen.findByRole("button", { name: "Remove screenshot" }),
+    );
+    expect(fileInput().value).toBe("");
+  });
+});
+
+describe("CAL-053 AC-6: a change with an empty FileList attaches nothing", () => {
+  it("a picker dismissed with no file leaves no screenshot: no Remove button, and Propose event still blocked", async () => {
+    renderCapture();
+    fireEvent.change(fileInput(), { target: { files: [] } });
+    await settle();
+    expect(
+      screen.queryByRole("button", { name: "Remove screenshot" }),
     ).toBeNull();
     expect(proposeButton()).toHaveAttribute("aria-disabled", "true");
   });
