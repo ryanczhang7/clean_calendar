@@ -370,17 +370,64 @@ fi
 rm -rf "$OFIX"
 
 # ---------------------------------------------------------------------------
+describe "HARNESS-079 AC-8: a gates.yml split into two jobs is replayed, both halves, in order"
+
+# The split `gates.sh --skip` exists for: one slow gate in a job of its own.
+# Nothing in ci-local.sh knows about jobs - it reads every `run:` line in file
+# order - so this should already hold. The test is here so that it is a fact
+# rather than a claim: a parser that learned to stop at the first job, or to
+# keep one `scripts/gates.sh` step per file, would replay half of CI and call
+# it green.
+SFIX="$(make_project_fixture)"
+mkdir -p "$SFIX/.github/workflows"
+cat > "$SFIX/.github/workflows/gates.yml" <<'YML'
+name: gates
+on: [pull_request]
+jobs:
+  gates:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run gates, all but integration
+        run: bash scripts/gates.sh --skip integration
+  integration:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run the integration gate
+        run: bash scripts/gates.sh --gate integration
+YML
+sout="$( cd "$SFIX" && bash scripts/ci-local.sh --dry-run 2>/dev/null )"; src=$?
+assert_eq "AC-8: --dry-run over a two-job gates.yml exits 0" 0 "$src"
+assert_eq "AC-8: the first job's step is printed, once" 1 \
+  "$(printf '%s\n' "$sout" | grep -cxF -- 'bash scripts/gates.sh --skip integration')"
+assert_eq "AC-8: the second job's step is printed, once" 1 \
+  "$(printf '%s\n' "$sout" | grep -cxF -- 'bash scripts/gates.sh --gate integration')"
+s_at="$(printf '%s\n' "$sout" | grep -nxF -- 'bash scripts/gates.sh --skip integration' | head -1 | cut -d: -f1)"
+i_at="$(printf '%s\n' "$sout" | grep -nxF -- 'bash scripts/gates.sh --gate integration' | head -1 | cut -d: -f1)"
+if [ -n "$s_at" ] && [ -n "$i_at" ] && [ "$s_at" -lt "$i_at" ]; then
+  _ok "AC-8: in file order, the --skip job first"
+else
+  _bad "AC-8: in file order, the --skip job first" "--skip at line ${s_at:-none}, --gate at ${i_at:-none}: $sout"
+fi
+rm -rf "$SFIX"
+
+# ---------------------------------------------------------------------------
 describe "only workflows CI runs on a pull request"
 
-# HARNESS-052. The script's claim is "what PR CI runs", and it read every
-# *.yml. A deploy workflow - push to main, workflow_dispatch, plain-shell
-# `supabase db push` steps - would then be RUN from a developer's machine. So
-# a workflow contributes steps only when its `on:` names `pull_request`.
+# HARNESS-100 (ported from clean_calendar HARNESS-052). The script's claim is
+# "what PR CI runs", and it read every *.yml. A deploy workflow - push to main,
+# workflow_dispatch, plain-shell steps, the shape of upstream's own
+# deploy.yml.template once renamed as its header says - would then be RUN from
+# a developer's machine. So a workflow contributes steps only when its `on:`
+# names `pull_request`.
 #
 # Each step touches its own marker, so the dry listing and the real run are
 # checked against the same names. Matched as WHOLE lines, not substrings: the
 # listing is one command per line, and `touch .m-both` floating inside a longer
-# line is not a step being listed.
+# line is not a step being listed. Through awk over a here-string, never
+# `printf | grep -q`, which a pipefail SIGPIPE can turn into a false miss.
 has_line() { # <exact line> <haystack>
   awk 'BEGIN { n = ARGV[1]; ARGV[1] = "" } $0 == n { h = 1 } END { exit !h }' "$1" <<<"$2"
 }
@@ -405,7 +452,7 @@ jobs:
     steps:
       - run: touch .m-gates
 YML
-# CAL-030's deploy.yml's shape: push to main and a manual trigger, nothing else.
+# deploy.yml.template's shape: push to main and a manual trigger, nothing else.
 cat > "$TFIX/.github/workflows/deploy.yml" <<'YML'
 name: deploy
 on:
@@ -453,6 +500,59 @@ jobs:
         if: github.event_name != 'pull_request'
         run: touch .m-release
 YML
+# The negative control for a filter that matches pull_request as a PREFIX.
+# pull_request_target runs the BASE branch's code, so it is not what this PR
+# runs. Two files, because the inline and the block spellings are read by
+# different branches of a filter and each can be wrong on its own.
+cat > "$TFIX/.github/workflows/target.yml" <<'YML'
+name: target
+on: [pull_request_target]
+jobs:
+  target:
+    runs-on: ubuntu-latest
+    steps:
+      - run: touch .m-target
+YML
+cat > "$TFIX/.github/workflows/target-block.yml" <<'YML'
+name: target-block
+on:
+  pull_request_target:
+jobs:
+  targetblock:
+    runs-on: ubuntu-latest
+    steps:
+      - run: touch .m-targetblock
+YML
+# R-1: a block SEQUENCE under `on:` written in column 0. Valid YAML, accepted
+# by GitHub, and the unindented layout of the `- pull_request` shape the filter
+# already reads - so a filter that ends the block at the first column-0 line
+# drops this workflow and the run still reports green.
+cat > "$TFIX/.github/workflows/compact.yml" <<'YML'
+name: compact
+on:
+- pull_request
+- workflow_dispatch
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    steps:
+    - run: touch .m-compact
+YML
+# Its negative control: the same layout holding only `- push`, then `jobs:`
+# whose own column-0 sequence mentions pull_request (the shape the diff review
+# measured; a parsing control, not a runnable workflow). A filter that never
+# lets a column-0 line end the block reads past `jobs:` as part of `on:` and
+# lists it. The mention has to be in column 0: an indented one is skipped by
+# the first-indentation rule whatever ends the block, so it would control
+# nothing.
+cat > "$TFIX/.github/workflows/compact-push.yml" <<'YML'
+name: compact-push
+on:
+- push
+jobs:
+- pull_request
+- run: touch .m-compact-push
+YML
 
 tout="$( cd "$TFIX" && bash scripts/ci-local.sh --dry-run 2>/dev/null )"
 terr="$( cd "$TFIX" && bash scripts/ci-local.sh --dry-run 2>&1 >/dev/null )"
@@ -480,6 +580,27 @@ if has_line "note: not running release.yml: it does not trigger on pull_request"
 else _bad "AC-6: so is the one that only mentions pull_request" "stderr: $terr"; fi
 if has_text "not running gates.yml" "$terr"; then _bad "AC-6: an included workflow is not reported excluded" "stderr: $terr"
 else _ok "AC-6: an included workflow is not reported excluded"; fi
+# AC-8
+if has_line "touch .m-target" "$tout"; then _bad "AC-8: on: [pull_request_target] is not listed" "stdout: $tout"
+else _ok "AC-8: on: [pull_request_target] is not listed"; fi
+if has_line "touch .m-targetblock" "$tout"; then _bad "AC-8: a block on: holding only pull_request_target: is not listed" "stdout: $tout"
+else _ok "AC-8: a block on: holding only pull_request_target: is not listed"; fi
+if has_line "note: not running target.yml: it does not trigger on pull_request" "$terr"; then
+  _ok "AC-8: the inline pull_request_target workflow is named on stderr"
+else _bad "AC-8: the inline pull_request_target workflow is named on stderr" "stderr: $terr"; fi
+if has_line "note: not running target-block.yml: it does not trigger on pull_request" "$terr"; then
+  _ok "AC-8: the block pull_request_target workflow is named on stderr"
+else _bad "AC-8: the block pull_request_target workflow is named on stderr" "stderr: $terr"; fi
+# R-1: the column-0 block sequence
+if has_line "touch .m-compact" "$tout"; then _ok "R-1: an on: sequence written in column 0 holding - pull_request is listed"
+else _bad "R-1: an on: sequence written in column 0 holding - pull_request is listed" "stdout: $tout"; fi
+if has_text "not running compact.yml" "$terr"; then _bad "R-1: the column-0 pull_request workflow is not reported excluded" "stderr: $terr"
+else _ok "R-1: the column-0 pull_request workflow is not reported excluded"; fi
+if has_line "touch .m-compact-push" "$tout"; then _bad "R-1: a column-0 on: sequence holding only - push is not listed, though jobs: mentions pull_request" "stdout: $tout"
+else _ok "R-1: a column-0 on: sequence holding only - push is not listed, though jobs: mentions pull_request"; fi
+if has_line "note: not running compact-push.yml: it does not trigger on pull_request" "$terr"; then
+  _ok "R-1: the column-0 push-only workflow is named on stderr"
+else _bad "R-1: the column-0 push-only workflow is named on stderr" "stderr: $terr"; fi
 
 # AC-2: a real run. The positive marker is the control that the run happened
 # at all - without it, "no deploy marker" is equally true of a run that

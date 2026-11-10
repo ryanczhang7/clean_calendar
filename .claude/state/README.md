@@ -7,8 +7,11 @@ in here is ever committed; only this file and `.gitkeep` are tracked.
 |---|---|---|---|
 | `current-story.env` | `scripts/phase.sh` | the phase guard, the status line | no |
 | `last-gate-run` | `scripts/gates.sh` | the stop hook | no |
+| `attest.log` | `scripts/attest.sh` | `scripts/attest.sh check`, and the orchestrator | no |
+| `attest-logs/*.log` | `scripts/attest.sh` | you, and the story that quotes it | yes |
 | `gate-logs/*.log` | `scripts/gates.sh` | you, when a gate fails | yes |
 | `gate-logs/*.failed.log` | `scripts/gates.sh` | you, when a failure did not reproduce | yes |
+| `gate-logs/kept/*.log` | `scripts/gates.sh` | you, when an unexplained failure recurs | yes |
 | `mutations/*.bak` | `scripts/mutate.sh` | `scripts/mutate.sh`, to restore the file | yes |
 | `mutations/*.new` | `scripts/mutate.sh` | nothing; scratch for the mutated text | yes |
 | `mutations/log` | `scripts/mutate.sh` | you, and the story that quotes it | yes |
@@ -19,20 +22,21 @@ in here is ever committed; only this file and `.gitkeep` are tracked.
 | `run.lock` | `scripts/gates.sh`, `scripts/selftest.sh` | `scripts/run-lock.sh`, in the next run | yes |
 | `run.lock.<pid>` | `scripts/run-lock.sh` | `ln`, while it takes the lock | yes |
 | `selftest.<pid>/*.out` | `scripts/selftest.sh`, with `SELFTEST_JOBS` above 1 | `scripts/selftest.sh`, to print each suite in order | yes |
+| `check-boundaries/*` | `scripts/check-boundaries.sh` | nothing; scratch for a `git show` result | yes |
 
 ## The `Hand-editable` column is enforced
 
-`.claude/settings.json` denies `Write`, `Edit` and `MultiEdit` on exactly the `no`
-rows, and `.claude/tests/settings.test.sh` checks the two against each other in
-both directions: a `no` row without its rules fails, a `yes` row with rules fails,
+`.claude/settings.json` denies `Edit` on exactly the `no` rows, and
+`.claude/tests/settings.test.sh` checks the two against each other in both
+directions: a `no` row without its `Edit` rule fails, a `yes` row with one fails,
 and a rule for a path this table does not list fails. So a new state file cannot
 be added without somebody deciding which it is.
 
-The tool list lives in that suite as `TOOLS`, and it drives both directions of the
-check — so adding a tool there makes every `no` row demand a rule for it. It is
-not a list of every editing tool: `NotebookEdit` is deliberately absent, because it
-refuses anything that is not a `.ipynb` before any permission check runs and
-nothing in here is a notebook.
+An `Edit(path)` rule is the only file deny rule the runtime matches, and it covers every file-editing tool.
+A rule naming the path under another file-editing tool is not matched: the
+runtime prints a startup warning for it and discards it. So the suite does not
+demand such a rule; it reports one as dead. `NotebookEdit` is covered by the
+`Edit` rule like the rest, and needs no rule of its own.
 
 The rules are per file rather than a glob over the directory. The glob was right
 about the two files below and wrong about everything else: it also covered this
@@ -56,6 +60,18 @@ phase lock is off entirely.
 gate obligation was met, so writing `RESULT=pass` by hand forges precisely what
 law 3 exists to prevent. `bash scripts/gates.sh` is what writes it.
 
+**`attest.log` — not hand-editable.** It is read as evidence: `bash
+scripts/attest.sh check` answers from it whether a subagent's verification run
+was made on the tree as it is now, and the orchestrator skips its own re-run on
+that answer (HARNESS-084). A block written by hand is a run that never
+happened. It is machine-local and never read by CI. Deleting the whole file is
+safe - every `check` then answers `none` and the orchestrator runs the command
+itself - and is the way to prune it.
+
+`attest-logs/<run>.<pid>.log` is the full output of one attested run, named by
+the `log:` line of its record. Exhaust: delete them freely; a record whose log
+is gone still answers `check`, it just has nothing more to show.
+
 ## The exhaust
 
 The `yes` rows are all written by a tool and safe to delete; the next run
@@ -68,6 +84,16 @@ overwritten by every run, so this is the copy the flake-checking re-run cannot
 destroy. The next run that does not pass replaces it whole; a pass never
 removes it, and neither does a run that skips the gate. Delete it by hand once
 the cause is understood.
+
+`gate-logs/kept/<id>.<seq>.<stamp>.log` is a failing run of that gate whose
+log matched one of its `keep-when` lines in `.claude/harness/project.conf` - a
+signature of a failure nobody has explained yet (HARNESS-069). It is written
+beside `<id>.failed.log`, with the same stamp plus two more header lines (the
+regex that matched and the first log line it matched), and unlike that file it
+is never replaced by a later failure. `<seq>` counts up per gate; once a gate
+has more than 5, the lowest `<seq>` is removed; `gates.sh` removes nothing
+else. A pass never writes here. Delete them by hand once the failure is
+explained, and remove its `keep-when` line at the same time.
 
 `mutations/` is `scripts/mutate.sh`'s working area, and the backup path is
 explicit rather than `$TMPDIR` because that variable is unset in some of the

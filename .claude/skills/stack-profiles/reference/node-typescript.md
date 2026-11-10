@@ -50,6 +50,7 @@ work, not that it succeeded.
     # `built in 1.23s`; `tsc -b` prints nothing at all on success, in which case
     # use `-` and say why in the bootstrap story rather than inventing a match.
     evidence | build       | built in [0-9]
+    no-count | build       | `built in 1.23s` is liveness-only; the digits are elapsed seconds
 
 The `unit` and `coverage` lines were verified against vitest 5 and typescript 5
 on Windows; the `mutation` line was not run here - its shape is derived from

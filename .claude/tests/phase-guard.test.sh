@@ -1495,6 +1495,59 @@ assert_eq "AC-4: C:\\elsewhere\\<A's name>\\src\\main.ts is not A's src" "" \
   "$(h035_reason Write file_path "C:\\elsewhere\\${H035_A##*/}\\src\\main.ts")"
 
 # ---------------------------------------------------------------------------
+# HARNESS-063 - after judging a write into another worktree, check_path puts
+# the SESSION's phase back before the next target of the same command.
+#
+# Audit docs/wiki/audits/harness-mutants-2026-10-15.md, survivor G03: deleting
+# `PHASE=$sv_phase` from check_path's restore line survived every case above,
+# because none of them judged a SECOND target after a cross-tree one. Under G03
+# the other tree's phase leaks into the session's tree, and which way it goes
+# depends on the two phases: AC-1 lets a frozen test through (B's RED leaks into
+# A's GREEN), AC-2 refuses a legal write (B's GREEN leaks into A's RED).
+#
+# ORDER IS LOAD-BEARING. `deny` exits at the first refused target and judges
+# nothing after it, so the cross-tree target has to be judged FIRST and be
+# legal there, or the session's target is never reached. The guard judges a
+# Bash command's targets in `sort -u` order, NOT command order (phase-guard.sh,
+# the CANDIDATES pipeline), so the command's own order is not what puts B
+# first: the collation does. The premise below runs that same sort over these
+# two targets and fails, rather than letting AC-1 and AC-2 pass toothless, on
+# a machine whose collation would judge A's target first.
+describe "HARNESS-063: the session's phase is restored after a cross-worktree target"
+
+h063_first="$(printf '%s\n' tests/main.test.ts "$H035_B/tests/main.test.ts" | sort -u | head -n 1)"
+assert_eq "premise: the guard's sort judges B's absolute target before A's relative one" \
+  "$H035_B/tests/main.test.ts" "$h063_first"
+
+# AC-1: A GREEN, B RED. B's test write is legal under B's RED; A's must then be
+# judged under A's GREEN and refused, by A, with no worktree line.
+h035_state "$H035_A" T-A GREEN
+h035_state "$H035_B" T-B RED
+r="$(h035_reason Bash command "printf x > $H035_B/tests/main.test.ts; printf y > tests/main.test.ts")"
+assert_contains "AC-1: after a legal test write into B (RED), A's own test write is refused by A's story" "story:    T-A" "$r"
+assert_contains "AC-1: under A's phase GREEN, not B's RED" "phase:    GREEN" "$r"
+assert_contains "AC-1: on A's own path tests/main.test.ts" "path:     tests/main.test.ts" "$r"
+assert_not_contains "AC-1: judged in the session's own tree, so with no worktree line" "worktree:" "$r"
+
+# AC-2: A RED, B GREEN. B's source write is legal under B's GREEN; A's test
+# write is legal under A's RED. Allowed outright.
+h035_state "$H035_A" T-A RED
+h035_state "$H035_B" T-B GREEN
+assert_eq "AC-2: a source write into B (GREEN) then a test write in A (RED) is allowed" "" \
+  "$(h035_reason Bash command "printf x > $H035_B/src/main.ts; printf y > tests/main.test.ts")"
+
+# AC-2 control: B RED. The same command is refused on its first target, by B -
+# which shows that target IS judged by B's lock. G03 cannot touch it: the
+# refusal comes before anything is restored.
+h035_state "$H035_A" T-A RED
+h035_state "$H035_B" T-B RED
+r="$(h035_reason Bash command "printf x > $H035_B/src/main.ts; printf y > tests/main.test.ts")"
+assert_contains "AC-2 control: with B in RED the command is refused by B's story" "story:    T-B" "$r"
+assert_contains "AC-2 control: under B's phase RED" "phase:    RED" "$r"
+assert_contains "AC-2 control: on B's relative path src/main.ts" "path:     src/main.ts" "$r"
+assert_contains "AC-2 control: naming B as the worktree it was judged in" "worktree: $H035_B" "$r"
+
+# ---------------------------------------------------------------------------
 # HARNESS-045. `git log` and `git diff` take `--output=<file>` (and the two-word
 # `--output <file>`), which writes the command's output - with `--format`,
 # chosen bytes - to that file. Until this story the parser had no rule for it:
@@ -1577,5 +1630,36 @@ assert_blocked "$FIX" 'git mv tests/main.test.ts docs/notes.md' tests/main.test.
 assert_role "$FIX" 'git mv tests/main.test.ts docs/notes.md' \
   'operand:  source of mv (removed by the move)' \
   'HARNESS-045 AC-4: and the frozen test is named as the mv source'
+
+# ---------------------------------------------------------------------------
+describe "HARNESS-053: a paren inside a quoted argument is data (0937c76)"
+# mask_shell_quotes masked every operator inside a quoted span except ( and ),
+# and every extractor treats a paren as a terminator. So a quoted name holding
+# a paren was either truncated at it (redirect, backslash escape) or arrived
+# whole with a literal ( that path_is_implausible declines as a leaked parse
+# (rm, touch, tee, mv destination): allowed, only logged. The six
+# assert_blocked cases are that defect through every extractor; the three
+# assert_allowed cases are false-positive controls for a mask that grew too
+# wide. Commands and paths verbatim from the triage of manhwa-cropper 0937c76.
+# The unquoted subshell control is :509 and is not repeated here.
+set_phase "$FIX" RED
+assert_blocked "$FIX" "echo x > 'src/my (1).ts'" 'src/my (1).ts' \
+  'HARNESS-053 AC-1: quoted redirect target containing parens'
+assert_blocked "$FIX" "rm 'src/x (1).ts'" 'src/x (1).ts' \
+  'HARNESS-053 AC-2: rm of a quoted name containing parens'
+assert_blocked "$FIX" "touch 'src/x (1).ts'" 'src/x (1).ts' \
+  'HARNESS-053 AC-2: touch of a quoted name containing parens'
+assert_blocked "$FIX" "echo x | tee 'src/t (1).ts'" 'src/t (1).ts' \
+  'HARNESS-053 AC-2: tee into a quoted name containing parens'
+assert_blocked "$FIX" "mv docs/notes.md 'src/m (1).ts'" 'src/m (1).ts' \
+  'HARNESS-053 AC-2: mv onto a quoted name containing parens'
+assert_blocked "$FIX" 'rm src/x\ \(1\).ts' 'src/x (1).ts' \
+  'HARNESS-053 AC-3: rm of a backslash-escaped name containing parens'
+assert_allowed "$FIX" "echo x > 'docs/my (1).md'" \
+  'HARNESS-053 AC-4: quoted docs target containing parens'
+assert_allowed "$FIX" "cp 'src/a (1).ts' docs/notes.md" \
+  'HARNESS-053 AC-4: cp from a quoted name containing parens, writing docs'
+assert_allowed "$FIX" "git commit -m \"\$(printf '%s' 'a (b) > c')\"" \
+  'HARNESS-053 AC-4: parens and arrow inside a quoted command substitution'
 
 summary "phase-guard"
