@@ -272,10 +272,21 @@ describe "AC-4/AC-5: the real tree, and the guard blocking a PR"
 run_guard "$REPO_ROOT"
 assert_eq "AC-4: the real tree has no printing fallback" \
   "1" "$(count_prefix "$GUARD_OUT" 'check-grep-count: scanned ')"
-assert_eq "AC-4: and the finding count in that census is zero" \
-  "0" "$(awk 'index($0, "check-grep-count: scanned ") == 1 {
+# HARNESS-073 made this the ONLY place CI learns of a finding - the workflow's
+# own guard step is gone - so its failure has to say WHERE, as the step did.
+# The detail is the guard's output minus its census line: every finding line,
+# `<path>:<line>: ...`, verbatim. Still exactly one _ok or one _bad.
+REAL_FINDINGS="$(awk 'index($0, "check-grep-count: scanned ") == 1 {
                 i = index($0, "file(s), "); if (i == 0) next
                 print substr($0, i + 9) + 0; exit }' <<<"$GUARD_OUT")"
+if [ "$REAL_FINDINGS" = "0" ]; then
+  _ok "AC-4: and the finding count in that census is zero"
+else
+  _bad "AC-4: and the finding count in that census is zero" \
+    "expected: 0 findings
+actual:   ${REAL_FINDINGS:-<no census line>}
+$(awk 'index($0, "check-grep-count: ") != 1' <<<"$GUARD_OUT")"
+fi
 assert_eq "AC-4: so it exits 0 against this tree" "0" "$GUARD_RC"
 
 # The correct idiom is LIVE here, so the clean result above is not the vacuous
@@ -283,6 +294,95 @@ assert_eq "AC-4: so it exits 0 against this tree" "0" "$GUARD_RC"
 assert_eq "AC-4: and the tree does carry || true instances for the rule to judge" \
   "2" "$(awk 'index($0, "|| true") > 0 && index($0, "grep -c") > 0 { n++ } END { print n + 0 }' \
         "$REPO_ROOT/scripts/plan.sh" "$REPO_ROOT/scripts/check-boundaries.sh")"
+
+# ---------------------------------------------------------------------------
+describe "HARNESS-060: a quoted paren inside a quoted substitution does not blind the guard"
+
+# F2 of audit harness-mutants-2026-10-15. Inside `"$( ... )"` the masker
+# counted parens without regard to quoting, so `x="$(f '(a')"` left it inside
+# the substitution for the rest of the file: every `||` below arrived masked
+# and the guard saw prose. On the real tree, gates.test.sh:1812 is such a line,
+# and a printing fallback mutated into line 1894 of that file was not reported.
+# The three openers are the three ways a paren that does not count can sit
+# inside the substitution: a single-quoted span, a double-quoted span, an
+# escape. Each file is EXACTLY the criterion's two lines.
+G60="$(make_project_fixture)"
+mkdir -p "$G60/scripts/h60" "$G60/scripts/h60c" "$G60/scripts/h60p" "$G60/scripts/h60k"
+H060_SQ="x=\"\$(f '(a')\""
+H060_DQ='x="$(f "(a")"'
+H060_BS='x="$(f \()"'
+for _o in SQ DQ BS; do
+  _v="H060_$_o"
+  printf '%s\n' "${!_v}" 'y=$(grep -c x f || printf 0)' > "$G60/scripts/h60/a1_$_o.sh"
+  # AC-1's control, exactly as the criterion states it: `|| true` on line 2.
+  printf '%s\n' "${!_v}" 'y=$(grep -c x f || true)' > "$G60/scripts/h60c/c1_$_o.sh"
+  # The same control with a printing fallback BELOW it, so "line 2 is not
+  # reported" cannot be satisfied by the guard being blind past line 1, which
+  # is exactly how it is silent today.
+  printf '%s\n' "${!_v}" 'y=$(grep -c x f || true)' 'z=$(grep -c x f || printf 0)' \
+    > "$G60/scripts/h60c/s1_$_o.sh"
+  # AC-5: quoted prose after the opener is still data. Line 3 carries a
+  # separator before a counting grep, so it is reported if the quotes stop
+  # masking; line 2 is the criterion's own prose line; line 5 is the positive
+  # that proves the guard is looking.
+  printf '%s\n' "${!_v}" 'echo "a || printf 0"' 'echo "a; grep -c x f || printf 0"' \
+    "echo 'b; grep -c x f || printf 0'" 'z=$(grep -c x f || printf 0)' \
+    > "$G60/scripts/h60p/p5_$_o.sh"
+done
+
+for _o in SQ DQ BS; do
+  run_guard "$G60" "scripts/h60/a1_$_o.sh"
+  assert_flagged "HARNESS-060 AC-1: after the $_o opener, a printing fallback on line 2 is reported" \
+    "scripts/h60/a1_$_o.sh" "2"
+  run_guard "$G60" "scripts/h60c/c1_$_o.sh"
+  assert_flagged "HARNESS-060 AC-1 control: after the $_o opener, || true on line 2 is not reported" \
+    "scripts/h60c/c1_$_o.sh" ""
+  run_guard "$G60" "scripts/h60c/s1_$_o.sh"
+  assert_flagged "HARNESS-060 AC-1 control: after the $_o opener, || true is silent and the printing fallback below it is not" \
+    "scripts/h60c/s1_$_o.sh" "3"
+  run_guard "$G60" "scripts/h60p/p5_$_o.sh"
+  assert_flagged "HARNESS-060 AC-5: after the $_o opener, quoted || prose is not reported and the real fallback after it is" \
+    "scripts/h60p/p5_$_o.sh" "5"
+done
+
+# The census over all three AC-1 files, so a per-file assertion cannot be
+# satisfied by the file going unscanned.
+run_guard "$G60" scripts/h60
+assert_eq "HARNESS-060 AC-1: the census names three files and three findings" \
+  "1" "$(count_prefix "$GUARD_OUT" 'check-grep-count: scanned 3 shell file(s), 3 finding(s)')"
+assert_eq "HARNESS-060 AC-1: and the guard exits non-zero on them" "1" "$GUARD_RC"
+
+# Contract C-3, not an AC: the defect INSIDE a quoted substitution whose
+# pattern holds a quoted paren. unwrap_quoted_subst counted that paren too, so
+# it never found the closing `)` and left the wrapping quotes on - and the
+# masker then blanks the interior wholesale (trap 2). Fixing the masker alone
+# does not reach this line; the unwrap needs the same quote rule. Line 1 is the
+# same defect with a balanced pattern, reported today, so a miss on line 2 is
+# the paren and nothing else.
+printf '%s\n' "m=\"\$(grep -c '(a)' f || printf 0)\"" "n=\"\$(grep -c '(a' f || printf 0)\"" \
+  > "$G60/scripts/h60k/u3.sh"
+run_guard "$G60" scripts/h60k/u3.sh
+assert_flagged "HARNESS-060 C-3: a printing fallback inside a quoted substitution is reported even when its pattern holds a quoted paren" \
+  "scripts/h60k/u3.sh" "1 2"
+
+# F3. The END block folds a backslash-continued group into one logical line
+# but then judged each physical line alone, so the `||` on line 2 had no
+# `grep -c` to its left. Reported at the logical line, line 1.
+printf '%s\n' 'y=$(grep -c x f \' '  || printf 0)' > "$G60/scripts/h60k/k4.sh"
+run_guard "$G60" scripts/h60k/k4.sh
+assert_flagged "HARNESS-060 AC-4: a printing fallback on a continuation line is reported at the logical line" \
+  "scripts/h60k/k4.sh" "1"
+printf '%s\n' 'y=$(grep -c x f \' '  || true)' > "$G60/scripts/h60k/n4.sh"
+run_guard "$G60" scripts/h60k/n4.sh
+assert_flagged "HARNESS-060 AC-4 control: || true on a continuation line is not reported" \
+  "scripts/h60k/n4.sh" ""
+# The control again, with a positive after it in the same file, so its silence
+# is the rule approving rather than the file going unread.
+printf '%s\n' 'y=$(grep -c x f \' '  || true)' 'z=$(grep -c x f || printf 0)' > "$G60/scripts/h60k/m4.sh"
+run_guard "$G60" scripts/h60k/m4.sh
+assert_flagged "HARNESS-060 AC-4 control: || true on a continuation is silent, the line after it is still judged" \
+  "scripts/h60k/m4.sh" "3"
+rm -rf "$G60"
 
 rm -rf "$FIX" "$AC2"
 summary "grep-count"

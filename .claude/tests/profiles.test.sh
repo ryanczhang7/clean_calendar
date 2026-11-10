@@ -59,6 +59,11 @@ profile_problems() {
     # Parsed like `slow`, and judged by the same two rules: it must name a
     # gate the profile configures, and it must say why.
     /^[[:space:]]*ondemand[[:space:]]*\|/  { id = t($2); ondemand[id] = 1; owhy[id] = rest(3); next }
+    # HARNESS-055: `no-count | <id> | <why>` declares that the evidence regex of
+    # a gate proves liveness and measures nothing, so a floor on it compares
+    # against a stopwatch. Parsed like `slow`; judged by the same two rules plus
+    # the refusal of a floor beside it.
+    /^[[:space:]]*no-count[[:space:]]*\|/  { id = t($2); nc[id] = 1; ncwhy[id] = rest(3); next }
     /What `--fast` should leave out/       { fastsec = 1 }
 
     END {
@@ -74,10 +79,21 @@ profile_problems() {
       for (id in fl)   if (!(id in gates)) print "orphan\tfloor names `"    id "`, which this profile does not configure"
       for (id in slow) if (!(id in gates)) print "orphan\tslow names `"     id "`, which this profile does not configure"
       for (id in ondemand) if (!(id in gates)) print "orphan\tondemand names `" id "`, which this profile does not configure"
+      for (id in nc)   if (!(id in gates)) print "orphan\tno-count names `" id "`, which this profile does not configure"
 
       for (id in fl)
         if (!(id in ev))
           print "floor\tfloor on `" id "` has no evidence line to measure it out of"
+
+      # The same refusal gates.sh makes: a floor measured out of a regex that
+      # was declared to measure nothing compares against a stopwatch.
+      for (id in fl)
+        if (id in nc)
+          print "floor\tfloor on `" id "` is declared no-count, so there is no count to compare against"
+
+      for (id in nc)
+        if (ncwhy[id] == "")
+          print "no-count\t`" id "` is marked no-count with no reason"
 
       for (id in slow)
         if (why[id] == "")
@@ -212,6 +228,58 @@ assert_eq "AC-1 control: a profile with no mutation gate is silent on mutation-e
   "$(ondemand_probs mutation-evidence)"
 
 # ---------------------------------------------------------------------------
+describe "the checker recognises a no-count line (HARNESS-055, AC-8)"
+
+# Fixtures first, for the same reason as the two blocks above: the per-profile
+# `floor`, `orphan` and `no-count` checks below are silent on a profile that
+# carries no no-count line, so a rule that never fires would leave every one of
+# them green and empty. base_profile's build gate has evidence `.`.
+nocount_rules() { # every floor, orphan and no-count line, over $WORK/p.md
+  profile_problems "$WORK/p.md" | awk -F'\t' '$1 == "floor" || $1 == "orphan" || $1 == "no-count" { print }'
+}
+base_profile; printf '    no-count | build | seconds\n    floor | build | 5\n' >> "$WORK/p.md"
+assert_eq "a floor on a gate declared no-count is a floor problem" \
+  "floor on \`build\` is declared no-count, so there is no count to compare against" "$(ondemand_probs floor)"
+base_profile; printf '    no-count | nope | why\n' >> "$WORK/p.md"
+assert_eq "a no-count line naming no configured gate is an orphan" \
+  "no-count names \`nope\`, which this profile does not configure" "$(ondemand_probs orphan)"
+base_profile; printf '    no-count | build |\n' >> "$WORK/p.md"
+assert_eq "a no-count line with no reason is a no-count problem" \
+  "\`build\` is marked no-count with no reason" "$(ondemand_probs no-count)"
+# Controls. A floor on a gate whose regex really counts is not refused, and a
+# well-formed no-count line with no floor beside it is not a problem: without
+# these, a checker that fired on every floor, or on every no-count line, would
+# pass the three cases above.
+base_profile; printf '    floor | unit | 40\n' >> "$WORK/p.md"
+assert_eq "control: a floor on a counted gate with no no-count line yields no floor, orphan or no-count line" \
+  "" "$(nocount_rules)"
+base_profile; printf '    no-count | build | seconds\n' >> "$WORK/p.md"
+assert_eq "control: a no-count line with a reason and no floor beside it yields no floor, orphan or no-count line" \
+  "" "$(nocount_rules)"
+
+# ---------------------------------------------------------------------------
+describe "the profiles whose evidence regex counts nothing say so (HARNESS-055, AC-8)"
+
+# nocount_ids <file>   The ids of its `no-count` lines, sorted, space-joined,
+# read with the same field logic profile_problems uses. Without this, deleting
+# every no-count line leaves the per-profile checks below green: "every
+# no-count line carries a reason" is satisfied by a profile carrying none.
+nocount_ids() {
+  awk "$PROFILE_FIELDS"'
+    BEGIN { FS = "|" }
+    /^[[:space:]]*no-count[[:space:]]*\|/ { print t($2) }
+  ' "$1" | sort | tr '\n' ' ' | sed 's/ $//'
+}
+assert_eq "rust-cargo.md declares no-count on exactly build, lint and typecheck (Finished .* profile is a stopwatch)" \
+  "build lint typecheck" "$(nocount_ids "$PROFILE_DIR/rust-cargo.md")"
+assert_eq "node-typescript.md declares no-count on exactly build (built in [0-9] is a stopwatch)" \
+  "build" "$(nocount_ids "$PROFILE_DIR/node-typescript.md")"
+assert_eq "python-uv.md declares no-count on exactly build (Successfully built is followed by a version)" \
+  "build" "$(nocount_ids "$PROFILE_DIR/python-uv.md")"
+assert_eq "web-static.md declares no-count on exactly build (built in is a stopwatch)" \
+  "build" "$(nocount_ids "$PROFILE_DIR/web-static.md")"
+
+# ---------------------------------------------------------------------------
 describe "the profiles that configure a mutation gate are the ones expected (HARNESS-015, AC-3)"
 
 # The per-profile assertion below is derived from the files, so a list that came
@@ -343,8 +411,9 @@ for f in "$PROFILE_DIR"/*.md; do
   }
   check required-gates "configures every required gate"
   check evidence       "every required gate with a command has an evidence line"
-  check orphan         "no evidence, floor, slow or ondemand line names an unconfigured gate"
-  check floor          "every floor has an evidence line to measure"
+  check orphan         "no evidence, floor, no-count, slow or ondemand line names an unconfigured gate"
+  check floor          "every floor has an evidence line, and a count, to measure"
+  check no-count       "every no-count line carries a reason"
   check slow           "every slow line carries a reason"
   check ondemand       "every ondemand line carries a reason"
   check fast-section   "says what --fast should leave out"
@@ -473,5 +542,113 @@ for f in "$NODE" "$RUST"; do
       "ondemand | mutation at line $o, 'Combining this with' at line $c (0 = absent); expected within 4 lines"
   fi
 done
+
+# ---------------------------------------------------------------------------
+describe "the rust profile runs every test binary on its test gates and warns off --ignore-run-fail (HARNESS-058, AC-1..AC-3)"
+
+# The matchers, ONE copy, used on the shipped profile and on the heredoc
+# fixtures alike, so a matcher that cannot fail is caught by the controls
+# below rather than by a later story (C-2).
+# gate_lines <id-ERE> <text>   every `gate | <id> |` line in the text. The id
+# is matched whole, between bars, so `unit` does not also select `unit-x`.
+# `[|]` rather than `\|` because awk -v processes escapes (C-4's reason).
+gate_lines() {
+  printf '%s\n' "$2" | tr -d '\r' \
+    | awk -v re="^[[:space:]]*gate[[:space:]]*[|][[:space:]]*$1[[:space:]]*[|]" '$0 ~ re'
+}
+# word_count <flag> <text>   how many lines carry the flag as a WHOLE word:
+# `--no-fail-fast-x` is not `--no-fail-fast`. grep -c prints 0 itself on no
+# match; `|| true` swallows only its exit status.
+word_count() {
+  grep -cE -- "(^|[[:space:]])$1([[:space:]]|\$)" <<< "$2" || true
+}
+# nonblank <text>   how many non-blank lines.
+nonblank() { grep -c . <<< "$1" || true; }
+# prose_paras_with <needle> <text>   the paragraphs containing the needle that
+# are PROSE: an indented (4-space) block is a configuration block, and a gate
+# line carrying a flag is not a warning about it.
+prose_paras_with() {
+  printf '%s\n' "$2" | paras | awk -v n="$1" 'index($0, n) && $0 !~ /^    /'
+}
+
+RUST_GATES="$(section '## Gate commands for project.conf' "$RUST")"
+RUST_TEXT="$(tr -d '\r' < "$RUST")"
+rust_unit="$(gate_lines unit "$RUST_GATES")"
+rust_cov="$(gate_lines coverage "$RUST_GATES")"
+
+# Preconditions: each line found once, so a flag count of 0 below means the
+# flag is missing, not that the section reader found nothing.
+assert_eq "precondition: the Gate commands section has exactly one \`gate | unit\` line" \
+  1 "$(nonblank "$rust_unit")"
+assert_eq "precondition: the Gate commands section has exactly one \`gate | coverage\` line" \
+  1 "$(nonblank "$rust_cov")"
+
+# AC-1: both test gates run every test binary, and unit keeps --workspace.
+assert_eq "AC-1: the rust \`unit\` gate runs every test binary (--no-fail-fast, as a whole word)" \
+  1 "$(word_count --no-fail-fast "$rust_unit")"
+assert_eq "AC-1: the rust \`unit\` gate still tests every workspace member (--workspace)" \
+  1 "$(word_count --workspace "$rust_unit")"
+assert_eq "AC-1: the rust \`coverage\` gate runs every test binary (--no-fail-fast, as a whole word)" \
+  1 "$(word_count --no-fail-fast "$rust_cov")"
+
+# AC-1 negative controls: the same matchers over a fixture, not over the file.
+FIX_AC1="$(cat <<'FIXTURE'
+## Gate commands for project.conf
+
+    gate | unit      | required | . | cargo test --workspace
+    gate | unit-x    | required | . | cargo test --workspace --no-fail-fast
+    gate | coverage  | required | . | cargo llvm-cov --workspace --no-fail-fast-x --fail-under-lines 100
+    # gate | unit | a comment that mentions --no-fail-fast
+
+Prose that mentions --no-fail-fast is not a gate line.
+FIXTURE
+)"
+assert_eq "AC-1 control: a \`unit\` line of plain \`cargo test --workspace\` is reported missing the flag" \
+  0 "$(word_count --no-fail-fast "$(gate_lines unit "$FIX_AC1")")"
+assert_eq "AC-1 control: \`--no-fail-fast-x\` on the coverage line is not the flag" \
+  0 "$(word_count --no-fail-fast "$(gate_lines coverage "$FIX_AC1")")"
+FIX_AC1_OK='    gate | unit      | required | . | cargo test --workspace --no-fail-fast'
+assert_eq "AC-1 control: the matcher does find the flag on a unit line that carries it" \
+  1 "$(word_count --no-fail-fast "$(gate_lines unit "$FIX_AC1_OK")")"
+
+# AC-2 (guard, green on arrival; earned by DV-2): no gate line, anywhere in the
+# profile, grades a failing test as a pass. The gate lines are counted first so
+# that "none carries it" cannot be "none was read".
+rust_all_gates="$(gate_lines '[^|]*' "$RUST_TEXT")"
+if [ "$(nonblank "$rust_all_gates")" -ge 5 ]; then
+  _ok "precondition: the AC-2 guard reads at least the five required gate lines"
+else
+  _bad "precondition: the AC-2 guard reads at least the five required gate lines" \
+    "read $(nonblank "$rust_all_gates") gate lines"
+fi
+assert_eq "AC-2: no \`gate |\` line in the rust profile carries --ignore-run-fail" \
+  0 "$(word_count --ignore-run-fail "$rust_all_gates")"
+# AC-2 negative control.
+FIX_AC2="$(cat <<'FIXTURE'
+    gate | unit      | required | . | cargo test --workspace --no-fail-fast
+    gate | coverage | required | . | cargo llvm-cov --workspace --ignore-run-fail
+FIXTURE
+)"
+assert_eq "AC-2 control: a coverage gate carrying --ignore-run-fail is refused by the same matcher" \
+  1 "$(word_count --ignore-run-fail "$(gate_lines '[^|]*' "$FIX_AC2")")"
+
+# AC-2 (prose): the profile names --ignore-run-fail with the fact that it exits
+# 0 when tests fail. Matched per paragraph, so the wrap and the bold markers of
+# C-1's `**exits 0** when tests fail` do not matter.
+ignore_para="$(prose_paras_with '--ignore-run-fail' "$RUST_TEXT" | awk 'index($0, "exits 0") && index($0, "tests fail")')"
+assert_eq "AC-2: one prose paragraph names --ignore-run-fail and says it exits 0 when tests fail" \
+  1 "$(nonblank "$ignore_para")"
+
+# AC-3: the reason, after the --workspace paragraph and before Evidence of work.
+WHY_WINDOW="$(tr -d '\r' < "$RUST" | awk '/^\*\*`--workspace` on every command/ { on = 1 } on && /^## Evidence of work$/ { exit } on')"
+assert_contains "precondition: AC-3's window starts at the --workspace paragraph" \
+  '`--workspace` on every command' "${WHY_WINDOW:-<no --workspace paragraph>}"
+assert_eq "AC-3: between the --workspace paragraph and Evidence of work, one paragraph says cargo stops at the 'first test *binary*'" \
+  1 "$(count_paras 'first test *binary*' "$WHY_WINDOW")"
+why_para="$(para_with 'first test *binary*' "$WHY_WINDOW")"
+assert_contains "AC-3: that paragraph says --no-fail-fast still exits non-zero" \
+  'still exits non-zero' "${why_para:-<no paragraph naming first test *binary*>}"
+assert_contains "AC-3: that paragraph says a passing run leaves evidence lines and floors unchanged" \
+  'evidence lines and floors' "${why_para:-<no paragraph naming first test *binary*>}"
 
 summary "profiles"

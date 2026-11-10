@@ -24,12 +24,9 @@
       "Read(./.env)",
       "Read(./.env.*)",
       "Read(./**/secrets/**)",
-      "Write(./.claude/state/current-story.env)",
       "Edit(./.claude/state/current-story.env)",
-      "MultiEdit(./.claude/state/current-story.env)",
-      "Write(./.claude/state/last-gate-run)",
       "Edit(./.claude/state/last-gate-run)",
-      "MultiEdit(./.claude/state/last-gate-run)",
+      "Edit(./.claude/state/attest.log)",
       "Bash(git log *--output*)",
       "Bash(git diff *--output*)"
     ]

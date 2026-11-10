@@ -97,12 +97,68 @@ json_is_true() {
 #
 #   |  -> \001   &  -> \002   ;  -> \003   >  -> \004
 #   <  -> \005   SP -> \006   TAB-> \007   LF -> \010
+#   (  -> \016   )  -> \017
+#
+# Why \016/\017 for the parens and not \013/\014: VT and FF are POSIX
+# [[:space:]], so the redirect and tee extractors' character classes would eat
+# them and the target would truncate in exactly the old place - which is also
+# why SP and TAB are \006/\007. A mask character has to be inert to every
+# character class the extractors use, not merely unusual.
 #
 # Control characters are used because no real command line contains them, so
 # the round trip cannot corrupt a path that had one of them already.
 
+# HARNESS_SUBST_AWK   The paren matcher for the inside of a `$( ... )`, as awk
+# source that a caller PREPENDS to its own program. ONE copy, two callers:
+# mask_shell_quotes below (where a quoted substitution ends) and
+# check-grep-count.sh unwrap_quoted_subst (which quotes to blank). rules.md is
+# explicit about what happens to a rule that gets a private copy per caller,
+# and HARNESS-060 measured the cost here: with a separate copy in the guard, the
+# guard suite stayed green with this matcher broken.
+#
+# THE DEFECT IT REPLACES (HARNESS-060): the matcher counted every paren, quoted
+# or not, so a quoted substitution whose argument held a quoted, unpaired
+# paren - x="$(f Q(aQ)" with Q a single quote - never came back to depth zero, and every operator from there to the end of the file was
+# masked. Both tree guards went blind past such a line.
+#
+# subst_step(s, j)   One unit of text inside a substitution, at column j of s.
+#   SUBST_IN   the inner quoting, held by the CALLER across calls and lines:
+#              "" (code), "s" (a single-quoted span), "d" (a double-quoted
+#              span). Reset it to "" on entering a substitution.
+#   returns    how many characters the unit spans (1, or 2 for an escape pair)
+#   SUBST_D    +1 for a paren that opens, -1 for one that closes, else 0. Only
+#              a paren in code counts; a nested `$(` is a paren and counts.
+# A single-quoted span ends at the next single quote; a double-quoted span at
+# the next double quote not escaped, with the four pairs bash honours there
+# (backslash before dollar, backtick, double quote, backslash) stepped over
+# whole; a backslash in code takes the next character with it. No apostrophe
+# appears in this program: it is a single-quoted shell string.
+HARNESS_SUBST_AWK='
+function subst_step(s, j,   c, nx) {
+  if (_SS_Q == "") { _SS_Q = sprintf("%c", 39); _SS_BS = sprintf("%c", 92) }
+  SUBST_D = 0
+  c = substr(s, j, 1)
+  if (SUBST_IN == "s") { if (c == _SS_Q) SUBST_IN = ""; return 1 }
+  if (SUBST_IN == "d") {
+    if (c == _SS_BS) {
+      nx = substr(s, j + 1, 1)
+      if (nx == "$" || nx == "`" || nx == "\"" || nx == _SS_BS) return 2
+      return 1
+    }
+    if (c == "\"") SUBST_IN = ""
+    return 1
+  }
+  if (c == _SS_BS) return (j < length(s)) ? 2 : 1
+  if (c == _SS_Q)  { SUBST_IN = "s"; return 1 }
+  if (c == "\"")   { SUBST_IN = "d"; return 1 }
+  if (c == "(")    SUBST_D = 1
+  else if (c == ")") SUBST_D = -1
+  return 1
+}
+'
+
 mask_shell_quotes() {
-  awk '
+  awk "$HARNESS_SUBST_AWK"'
     function maskchar(c) {
       if (c == "|")  return "\001"
       if (c == "&")  return "\002"
@@ -111,6 +167,8 @@ mask_shell_quotes() {
       if (c == "<")  return "\005"
       if (c == " ")  return "\006"
       if (c == "\t") return "\007"
+      if (c == "(")  return "\016"
+      if (c == ")")  return "\017"
       return c
     }
     function maskstr(t,   k, o) {
@@ -133,6 +191,16 @@ mask_shell_quotes() {
         # Inside a heredoc body: everything is data until the delimiter line.
         if (delim != "") {
           t = s; gsub(/^[ \t]+|[ \t]+$/, "", t)
+          if (state == "subst") {
+            # A body opened inside a quoted substitution: masked whole, its
+            # delimiter line too, and joined as the substitution was before
+            # HARNESS-060, so the bytes are unchanged and only the state
+            # after it is.
+            out = out maskstr(s)
+            if (t == delim) delim = ""
+            if (i < NR) out = out "\010"
+            continue
+          }
           if (t == delim) { out = out s; delim = "" } else out = out maskstr(s)
           if (i < NR) out = out "\n"
           continue
@@ -170,18 +238,38 @@ mask_shell_quotes() {
             # redirect in there is masked too, which fails open, as the guard
             # already does for any target with a `$` in it.
             if (c == "$" && substr(s, j + 1, 1) == "(") {
-              out = out c "("; state = "subst"; depth = 1; j += 2; continue
+              out = out c "("; state = "subst"; depth = 1; SUBST_IN = ""; j += 2; continue
             }
             if (c == "\"") { out = out c; state = "none" } else out = out maskchar(c)
             j++; continue
           }
           if (state == "subst") {
-            if (c == "(") depth++
-            else if (c == ")") {
+            # Where the substitution ENDS is decided by subst_step, which
+            # steps over quoted spans and escapes (HARNESS-060). What is
+            # emitted is unchanged: every character in here is masked, and
+            # only the closing paren is raw.
+            if (SUBST_IN == "") {
+              # A heredoc opened in here is a BODY, not code: the awk rules of
+              # both tree guards live in "$(cat <<AWKEOF ... )", full of
+              # unpaired quotes. `<<<` is a here-string and opens nothing.
+              if (c == "<" && substr(s, j, 3) == "<<<") { out = out maskstr("<<<"); j += 3; continue }
+              if (c == "<" && substr(s, j + 1, 1) == "<" && match(substr(s, j), HD)) {
+                w = substr(s, j, RLENGTH)
+                out = out maskstr(w)
+                j += RLENGTH
+                sub(/^<<-?[ \t]*/, "", w)
+                gsub("[\"" Q "]", "", w)
+                pending = w
+                continue
+              }
+            }
+            k = subst_step(s, j)
+            if (SUBST_D == 1) depth++
+            else if (SUBST_D == -1) {
               depth--
               if (depth == 0) { out = out c; state = "double"; j++; continue }
             }
-            out = out maskchar(c); j++; continue
+            out = out maskstr(substr(s, j, k)); j += k; continue
           }
 
           # Unquoted. A comment runs to the end of the line and is data: an
@@ -238,7 +326,7 @@ mask_shell_quotes() {
 }
 
 unmask_shell_quotes() {
-  tr '\001\002\003\004\005\006\007\010' '|&;>< \t\n'
+  tr '\001\002\003\004\005\006\007\010\016\017' '|&;>< \t\n()'
 }
 
 # masked_lines <file>   The file's text with every operator inside a quoted,
@@ -1582,3 +1670,117 @@ _session_root() {
   set_harness_root "$__lib_wt"
 }
 _session_root
+
+# --- Work tree hash (HARNESS-084) -------------------------------------------
+
+# work_gated_stdin   gated_stdin's filter MINUS its harness-markdown exclusion:
+# reads "category\tpath", keeps source, test, config and harness - markdown
+# included - and drops docs, vendor, ignored and harness runtime state
+# (.claude/state/, markdown there too). The work hash's own definition of
+# "gated" (HARNESS-084 A-2). gated_stdin leaves harness markdown out because no
+# gate reads a prompt; this repository's own suites do read them, so a
+# verification record that stayed `fresh` across an edit to an agent spec, a
+# command, a skill or CLAUDE.md would vouch for a run that never saw the edit.
+# gated_stdin is NOT widened to match: gate_tree_hash and the CI comparison
+# against it stay as they are (C-10).
+work_gated_stdin() {
+  awk -F'\t' '
+    ($1 == "source" || $1 == "test" || $1 == "config" || $1 == "harness") \
+      && index($2, ".claude/state/") != 1 { print }'
+}
+
+# _work_hash_blob_listing   _hash_blob_listing's shape over work_gated_stdin:
+# reads "blob\tpath" lines, keeps the paths the work filter keeps, prints the
+# hash of their `<blob>  <path>` lines, LC_ALL=C sorted. It cannot simply call
+# _hash_blob_listing, which applies gated_stdin itself. On a tree with no
+# harness markdown the two filters agree, so the two hashes are equal there.
+_work_hash_blob_listing() {
+  local listing
+  listing="$(cat)"
+  [ -n "$listing" ] || { printf 'unavailable'; return 1; }
+  {
+    printf '%s\n' "$listing" | awk -F'\t' '{ print "B\t" $1 "\t" $2 }'
+    printf '%s\n' "$listing" | cut -f2- | classify_stdin | work_gated_stdin | awk -F'\t' '{ print "C\t" $2 }'
+  } | awk -F'\t' '
+      $1 == "B" { blob[$3] = $2; next }
+      $1 == "C" { gated[$2] = 1 }
+      END {
+        for (p in blob) {
+          if (!(p in gated)) continue
+          print blob[p] "  " p
+        }
+      }' | LC_ALL=C sort | git hash-object --stdin
+}
+
+# work_tree_hash   gate_tree_hash's tree PLUS the untracked files, judged by
+# work_gated_stdin rather than gated_stdin: one hash for "the code a
+# verification run just ran against", for scripts/attest.sh. gate_tree_hash
+# leaves untracked files out because a commit contains none of them; a RED
+# subagent's new test file is usually untracked, so a record keyed to that hash
+# alone could not tell its edits apart. It moves on harness markdown too (A-2),
+# and stays only on docs, vendor, ignored and .claude/state/. On a tree with
+# no harness markdown and no untracked file this IS gate_tree_hash - the same
+# listing through the same shape - and an untracked file hashes exactly as it
+# would once `git add`-ed: `<blob>\t<path>`, blob from `git hash-object` with
+# the path's attributes.
+#
+# The temporary index is built as gate_tree_hash builds its own (seeded from a
+# `cp -p` of the real one, then `add -u`; see there for why both matter), under
+# a name of its own. gate_tree_hash is called by gates.sh, check-boundaries.sh
+# and the Stop hook, and returns only the hash, so it is left untouched
+# (HARNESS-084 C-10) rather than split to share the listing; so are
+# untracked_gated and gated_stdin, which define what gates.sh refuses.
+#
+# stdout: one hash, return 0; or `unavailable` once, return 1, when either
+# part cannot be computed. `unavailable` is never a match for anything.
+work_tree_hash() {
+  local idx real listing files blobs
+  idx="$HARNESS_ROOT/.claude/state/.work-index.$$"
+  mkdir -p "$HARNESS_ROOT/.claude/state" 2>/dev/null; rm -f "$idx"
+  real="$(cd "$HARNESS_ROOT" && git rev-parse --git-path index 2>/dev/null)"
+  case "$real" in ''|/*|[A-Za-z]:*) ;; *) real="$HARNESS_ROOT/$real" ;; esac
+  listing="$( ( cd "$HARNESS_ROOT" \
+      && { { [ -n "$real" ] && [ -f "$real" ] && cp -p "$real" "$idx"; } \
+           || { GIT_INDEX_FILE="$idx" git read-tree HEAD >/dev/null 2>&1 || :; }; } \
+      && GIT_INDEX_FILE="$idx" git add -u . >/dev/null 2>&1 \
+      && GIT_INDEX_FILE="$idx" git ls-files -s ) \
+    | awk -F'\t' '{ split($1, a, " "); print a[2] "\t" $2 }' )"
+  rm -f "$idx"
+  [ -n "$listing" ] || { printf 'unavailable'; return 1; }
+  # Untracked, not ignored, kept by the WORK filter - not untracked_gated,
+  # which drops harness markdown.
+  files="$(git -C "$HARNESS_ROOT" ls-files --others --exclude-standard 2>/dev/null \
+    | classify_stdin | work_gated_stdin | cut -f2- | LC_ALL=C sort)"
+  if [ -n "$files" ]; then
+    blobs="$(cd "$HARNESS_ROOT" && printf '%s\n' "$files" | git hash-object --stdin-paths 2>/dev/null)" \
+      || { printf 'unavailable'; return 1; }
+    # Pair blob i with path i; a count mismatch is a part that failed.
+    listing="$listing
+$(printf '%s\n' "$files" | B="$blobs" awk '
+      BEGIN { n = split(ENVIRON["B"], b, "\n") }
+      { print b[NR] "\t" $0 }
+      END { if (NR != n) exit 1 }')" \
+      || { printf 'unavailable'; return 1; }
+  fi
+  printf '%s\n' "$listing" | _work_hash_blob_listing
+}
+
+# story_section <file> <name>   The body of `## <name>`: every line after the
+# heading up to the line before the next column-0 `## ` (a later heading of
+# the same name continues it rather than ending it), heading excluded,
+# fences NOT special. Returns 1, printing nothing, when no heading matches.
+# This is check-boundaries.sh's `section()` reading with one tightening: the
+# name is matched against the WHOLE heading text (trailing spaces and tabs
+# trimmed), not as a prefix, so `Handoff` does not find
+# `## Handoff: RED -> GREEN`. The name goes through ENVIRON rather than
+# `awk -v`, which would expand backslash escapes in it. scripts/story.sh is
+# the caller; converging check-boundaries.sh onto it is a recorded follow-up.
+story_section() {
+  STORY_SECTION_NAME="$2" awk '
+    BEGIN { name = ENVIRON["STORY_SECTION_NAME"] }
+    /^## / { h = substr($0, 4); sub(/[ \t]+$/, "", h) }
+    /^## / && h == name { on = 1; found = 1; next }
+    on && /^## / { exit }
+    on { print }
+    END { exit !found }' "$1"
+}

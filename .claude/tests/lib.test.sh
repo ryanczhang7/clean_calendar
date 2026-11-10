@@ -142,6 +142,14 @@ for cmd in \
   assert_eq "round trip: $cmd" "$cmd" "$(roundtrip "$cmd")"
 done
 
+# HARNESS-053: a paren inside a quoted span is data too. Every extractor stops
+# at ( and ), so a paren that survives masking truncates a quoted file name or
+# leaks into it. Same one-awk shape as has_operator above, for the same reason.
+assert_eq "HARNESS-053 AC-5a: no ( or ) survives masking in: rm 'src/x (1).ts'" "0" \
+  "$(awk '/[()]/ { h = 1 } END { print h + 0 }' <<<"$(mask "rm 'src/x (1).ts'")")"
+assert_eq "HARNESS-053 AC-5b: round trip: rm 'src/x (1).ts'" "rm 'src/x (1).ts'" \
+  "$(roundtrip "rm 'src/x (1).ts'")"
+
 describe "mask_shell_quotes: structure outside quotes is preserved"
 
 for cmd in \
@@ -237,6 +245,151 @@ two="$(printf 'echo hi # it%ss fine\necho x > src/main.ts' "'")"
 assert_contains "a redirect after a commented apostrophe survives" "> src/main.ts" "$(mask "$two")"
 assert_eq "a # inside a word is not a comment" "echo a#b > out.txt" "$(mask 'echo a#b > out.txt' | unmask_shell_quotes)"
 assert_contains "a # inside a word still leaves the redirect" ">" "$(mask 'echo a#b > out.txt')"
+
+# ---------------------------------------------------------------------------
+describe "HARNESS-060: a quoted paren inside a quoted substitution does not hide the next line"
+
+# THE DEFECT (audit harness-mutants-2026-10-15, F2). Inside `"$( ... )"` the
+# masker counted every `(` and `)` to find where the substitution ends, quoted
+# or not. So in `x="$(f '(a')"` the `(` inside the single quotes took the depth
+# to 2, the real `)` brought it back to 1, and the masker never left the
+# substitution: every line after it was masked as quoted text, and both tree
+# guards read the rest of the file as prose. One tree line - gates.test.sh:1812
+# - blinded check-grep-count.sh to the remaining 1,300 lines of that file.
+#
+# The three openers are the three ways a paren that does not count can sit in
+# there: a single-quoted span, a double-quoted span, and a backslash escape.
+#
+# h060_show renders masked text visibly: cat -v turns the mask characters into
+# ^A..^O, and real newlines become <NL>, so a whole result compares as one
+# line and a newline folded to \010 (^H) cannot pass for a line break.
+h060_show() { printf '%s' "$1" | mask_shell_quotes | cat -v | awk '{ printf "%s%s", s, $0; s = "<NL>" } END { print "" }'; }
+h060_line() { awk -v n="$2" 'NR == n' <<<"$1"; }   # line n of real (newline-separated) text
+# The first logical record, past its leading `x="$(`, has nothing visible that
+# the substitution's interior holds: a space, a paren or an operator.
+h060_interior() {
+  awk 'BEGIN { H = sprintf("%c", 8) }
+       NR == 1 { n = index($0, H); s = (n ? substr($0, 1, n - 1) : $0); s = substr(s, 6)
+                 print ((s ~ /[ (|&;<>]/) ? "visible" : "masked"); exit }' <<<"$1"
+}
+
+H060_SQ="x=\"\$(f '(a')\""
+H060_DQ='x="$(f "(a")"'
+H060_BS='x="$(f \()"'
+
+for _o in SQ DQ BS; do
+  _v="H060_$_o"; _opener="${!_v}"
+  _in="$(printf '%s\ny=a || b\necho "a || b"' "$_opener")"
+  _m="$(mask "$_in")"
+  # The criterion. Fails while the masker stays in the substitution: line 2 is
+  # then part of one \010-folded record and there is no line 2 at all.
+  assert_eq "HARNESS-060 AC-1: after $_opener the next line's || is syntax again" \
+    "y=a || b" "$(h060_line "$_m" 2)"
+  # AC-5, the over-unmask control: the fix ends the substitution in the right
+  # place; it does not stop masking. A quoted || after it is still data.
+  assert_eq "HARNESS-060 AC-5: after $_opener a quoted || on a later line is still masked" \
+    'echo "a^F^A^A^Fb"' "$(h060_line "$(cat -v <<<"$_m")" 3)"
+  # Trap 2 (lib.sh, above masked_lines): the INTERIOR of a "$( ... )" stays
+  # blanked wholesale. This story moves where the substitution ends, never what
+  # is visible inside it. Passes today; a fix that unmasked the inner quoted
+  # span would fail it.
+  assert_eq "HARNESS-060 trap 2: inside $_opener nothing in the substitution is visible" \
+    "masked" "$(h060_interior "$_m")"
+  assert_eq "HARNESS-060: round trip of $_opener and the two lines after it" "$_in" "$(roundtrip "$_in")"
+done
+
+# The exact masked text for each opener: interior masked character for
+# character as today, the closing paren and quote ending the substitution, and
+# the next two lines separated by real newlines. Pins C-2 in one comparison.
+assert_eq "HARNESS-060 C-2: the exact mask of the single-quote opener and the lines after it" \
+  "x=\"\$(f^F'^Na')\"<NL>y=a || b<NL>echo \"a^F^A^A^Fb\"" \
+  "$(h060_show "$(printf '%s\ny=a || b\necho "a || b"' "$H060_SQ")")"
+assert_eq "HARNESS-060 C-2: the exact mask of the double-quote opener and the lines after it" \
+  'x="$(f^F"^Na")"<NL>y=a || b<NL>echo "a^F^A^A^Fb"' \
+  "$(h060_show "$(printf '%s\ny=a || b\necho "a || b"' "$H060_DQ")")"
+assert_eq "HARNESS-060 C-2: the exact mask of the backslash opener and the lines after it" \
+  'x="$(f^F\^N)"<NL>y=a || b<NL>echo "a^F^A^A^Fb"' \
+  "$(h060_show "$(printf '%s\ny=a || b\necho "a || b"' "$H060_BS")")"
+
+# A HEREDOC INSIDE A QUOTED SUBSTITUTION - the shape both tree guards use for
+# their rule, `AWK_RULE="$(cat <<'AWKEOF'` ... `AWKEOF` / `)"`. Found in RED:
+# a fix that tracks quotes inside the substitution but not heredocs reads the
+# BODY's apostrophes and parens as code, so a body holding `it's (` leaves the
+# masker inside the substitution exactly as before. The body is data (a quoted
+# heredoc), its delimiter line ends it, and the `)"` after it ends the
+# substitution; the line after that is syntax again. Amended into C-2.
+# A BARE $( here, deliberately: this line itself holds a `)` in single quotes,
+# and wrapped in "$( ... )" it would be the very shape under test, blinding
+# today's masker - and both guards - for the rest of this file.
+_hd_in=$(printf '%s\n' 'X="$(cat <<'"'"'EOF'"'" "it's (a || b" 'EOF' ')"' 'y=a || b')
+_hd_m="$(mask "$_hd_in")"
+assert_eq "HARNESS-060 C-2: after a heredoc inside a quoted substitution, the next line's || is syntax again" \
+  "y=a || b" "$(h060_line "$_hd_m" 2)"
+assert_eq "HARNESS-060 C-2: and the heredoc body inside it is still data" \
+  "0" "$(awk 'NR == 1 { print gsub(/\|\|/, "") + 0 }' <<<"$_hd_m")"
+
+# C-2's byte-identity promise, pinned: every input the mask describes above
+# feed the masker, with its masked text as it is at 4b07ac2, before the fix.
+# A mask | unmask round trip cannot pin this - it is the identity whatever was
+# masked - so the comparison is on the masked text itself. All pass on arrival
+# and are a regression guard: the fix must change none of them.
+H060_FIX=(
+  "sed -i 's|a|b|' f.txt"
+  "awk '/A -> B/' f.txt"
+  "grep -oE 'x>y' f.txt"
+  'git commit -m "fix: a > b"'
+  'echo "a && b; c"'
+  'git commit -m "$(printf "%s\n%s" "GATES -> REVIEW" "set the phase first")"'
+  "rm 'src/x (1).ts'"
+  'echo hi > out.txt'
+  'cat a.txt | tee b.txt'
+  'rm -rf dist && mkdir dist'
+  'sed -i "s/a/b/" f.txt'
+  'cat a | tee b'
+  "$(printf 'cat > notes.md <<%sEOF%s\nrun: cat > src/main.ts\nEOF\n' "'" "'")"
+  'echo a \> b'
+  "$(printf 'grep x <<< "$data"\necho hi > src/main.ts\n')"
+  "$(printf 'cat > notes.md <<%sEOF%s\necho hi > src/main.ts\nEOF\n' "'" "'")"
+  'grep x <<< "a > b"'
+  'echo x > "C:\Users\ryanc\AppData\Local\Temp\claude\n.txt"'
+  'cd "C:\Users\ryanc\AppData\Local\Temp\claude" && rm -rf x'
+  'printf "%s\n" "a\tb"'
+  'echo "a \" > b" > docs/notes.md'
+  "$(printf 'echo hi # it%ss fine\necho x > src/main.ts' "'")"
+  'echo a#b > out.txt'
+)
+_k=0
+while IFS= read -r _gold; do
+  assert_eq "HARNESS-060 C-2: masked text unchanged for: ${H060_FIX[$_k]}" "$_gold" "$(h060_show "${H060_FIX[$_k]}")"
+  _k=$((_k + 1))
+done <<'GOLD'
+sed -i 's^Aa^Ab^A' f.txt
+awk '/A^F-^D^FB/' f.txt
+grep -oE 'x^Dy' f.txt
+git commit -m "fix:^Fa^F^D^Fb"
+echo "a^F^B^B^Fb^C^Fc"
+git commit -m "$(printf^F"%s\n%s"^F"GATES^F-^D^FREVIEW"^F"set^Fthe^Fphase^Ffirst")"
+rm 'src/x^F^N1^O.ts'
+echo hi > out.txt
+cat a.txt | tee b.txt
+rm -rf dist && mkdir dist
+sed -i "s/a/b/" f.txt
+cat a | tee b
+cat > notes.md <<'EOF'<NL>run:^Fcat^F^D^Fsrc/main.ts<NL>EOF
+echo a ^D b
+grep x <<< "$data"<NL>echo hi > src/main.ts
+cat > notes.md <<'EOF'<NL>echo^Fhi^F^D^Fsrc/main.ts<NL>EOF
+grep x <<< "a^F^D^Fb"
+echo x > "C:\Users\ryanc\AppData\Local\Temp\claude\n.txt"
+cd "C:\Users\ryanc\AppData\Local\Temp\claude" && rm -rf x
+printf "%s\n" "a\tb"
+echo "a^F"^F^D^Fb" > docs/notes.md
+echo hi #^Fit's^Ffine<NL>echo x > src/main.ts
+echo a#b > out.txt
+GOLD
+# The census, so a short golden list cannot silently skip fixtures.
+assert_eq "HARNESS-060 C-2: every fixture has a golden, and every golden a fixture" \
+  "${#H060_FIX[@]}" "$_k"
 
 # ---------------------------------------------------------------------------
 describe "json_escape: a backslash is escaped, not dropped"

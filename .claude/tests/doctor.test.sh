@@ -210,14 +210,62 @@ jobs:
 YML
 run_doctor
 # check-sigpipe.sh joined the want-list in release 36 and check-grep-count.sh in
-# 37, so this pair is no longer complete - and that is the assertion, not an
-# inconvenience. .github/workflows is project-owned and a refresh cannot add
-# the step, so doctor naming it is the ONLY way a consuming project learns a
-# guard is not running there.
-assert_contains "a set missing a guard is named" \
-  "no workflow runs scripts/check-sigpipe.sh" "$out"
-assert_eq "and exits non-zero without it" 1 "$rc"
+# 37, and HARNESS-073 took them out again. Not because the guards stopped
+# mattering: because the self-test now carries their verdict. sigpipe.test.sh
+# (C-3) and grep-count.test.sh (AC-4) run each guard over the whole checkout and
+# assert zero findings, so a workflow that runs scripts/selftest.sh already fails
+# on any finding the guard step would have failed on - and selftest.sh is on the
+# want-list. Asking for the guard steps as well was the same check twice, one
+# level up. So this three-script set, with neither guard, is COMPLETE.
+#
+# The ok line is pinned whole and anchored: a substring would also be satisfied
+# by the old wording's longer line, or by any later line that appends to it.
+ci_ok_line='  ok       ci           runs the self-test, the gates and the boundaries check'
+exact_lines() { printf '%s\n' "$2" | awk -v l="$1" '$0 == l { n++ } END { print n+0 }'; }
+assert_eq "the self-test, the gates and the boundaries check, with neither guard, is a complete set" \
+  1 "$(exact_lines "$ci_ok_line" "$out")"
+assert_not_contains "and it prints no MISSING ci line for either guard" "MISSING  ci" "$out"
+assert_eq "and a set without the guards exits 0" 0 "$rc"
 
+# The controls for the three above. Without them, a want-list emptied to
+# nothing passes all three: an empty list is always complete. Each of the two
+# remaining scripts that the guards' departure could plausibly have taken with
+# it is removed in turn, and has to be named, and has to fail doctor.
+cat > "$FIX/.github/workflows/gates.yml" <<'YML'
+name: gates
+on: [pull_request]
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm install --frozen-lockfile
+      - run: bash scripts/gates.sh
+YML
+run_doctor
+assert_eq "control: the same set without the self-test names it" 1 \
+  "$(exact_lines '  MISSING  ci           no workflow runs scripts/selftest.sh' "$out")"
+assert_eq "control: and exits non-zero without the self-test" 1 "$rc"
+
+cat > "$FIX/.github/workflows/gates.yml" <<'YML'
+name: gates
+on: [pull_request]
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm install --frozen-lockfile
+      - run: bash scripts/selftest.sh
+      - run: bash scripts/gates.sh
+YML
+mv "$FIX/.github/workflows/boundaries.yml" "$FIX/boundaries.yml.aside"
+run_doctor
+mv "$FIX/boundaries.yml.aside" "$FIX/.github/workflows/boundaries.yml"
+assert_eq "control: the same set without the boundaries check names it" 1 \
+  "$(exact_lines '  MISSING  ci           no workflow runs scripts/check-boundaries.sh' "$out")"
+assert_eq "control: and exits non-zero without the boundaries check" 1 "$rc"
+
+# A workflow may run more than doctor asks for: the guard-bearing set that was
+# complete before this story is still complete after it.
 cat > "$FIX/.github/workflows/gates.yml" <<'YML'
 name: gates
 on: [pull_request]
@@ -491,5 +539,42 @@ h44_run 'a b' c
 assert_eq "AC-2: an argument with a space arrives as one word: 'a b' then 'c' is two lines, not three" \
   "arg=a b${_nl}arg=c$_nl" "$out"
 assert_eq "AC-2: and task.sh exits 0" "0" "$rc"
+
+# ---------------------------------------------------------------------------
+describe "HARNESS-052 AC-5: a discovery command that reads stdin cannot delete the discovery lines after it"
+
+# doctor.sh evals each `discovery` command inside `done < "$CONF"`, so a command
+# that reads its stdin drains the rest of the manifest and the loop ends: every
+# later discovery line is never checked, and a scope that collapsed to nothing
+# goes unreported - the one thing the check exists to report. Release 94,
+# measured at PLANNED: `ok       eats         discovered`, no `later` line,
+# exit 0.
+#
+# run_doctor_eof   run_doctor with stdin at end-of-input and descriptors 3-9
+# closed, so `cat` in the fixture can only read what doctor.sh gives it, never
+# this suite's terminal or pipe. A variant, so the other blocks' runs are
+# unchanged. Sets $out and $rc, like run_doctor.
+run_doctor_eof() {
+  out="$( cd "$FIX" && bash scripts/doctor.sh 2>&1 </dev/null 3<&- 4<&- 5<&- 6<&- 7<&- 8<&- 9<&- )"; rc=$?
+}
+
+# The control first: `eats` alone exits 0 in this fixture as it now stands, so
+# the exit 1 asserted below can only come from `later` - not from anything an
+# earlier block left in the shared fixture (the CI blocks above write workflows
+# that make doctor exit 1 while they are present).
+write_conf "$FIX" <<'EOF2'
+discovery | eats  | . | cat >/dev/null; true
+EOF2
+run_doctor_eof
+assert_eq "AC-5 control: a stdin-reading discovery line alone exits 0 in this fixture" "0" "$rc"
+
+write_conf "$FIX" <<'EOF2'
+discovery | eats  | . | cat >/dev/null; true
+discovery | later | . | false
+EOF2
+run_doctor_eof
+assert_contains "AC-5: the discovery line after a stdin-reading one is still checked, and reported MISSING" \
+  "MISSING  later" "$out"
+assert_eq "AC-5: and doctor exits 1 for it" "1" "$rc"
 
 summary "doctor"
