@@ -246,12 +246,19 @@ function OpenSheet(props: {
   const original = useReminder(reminderId, reminderStore);
   const originalMinutes = original?.minutesBefore ?? null;
   // null = untouched: the field follows the store. An untouched field is
-  // never written - except a stored "At time" (0 or -540), which counts as
-  // chosen, so an All-day switch rewrites it to the other "At time" value.
+  // never written - except a stored "At time" (0 or -540) when All day was
+  // switched in this sheet: then it counts as chosen and is rewritten to the
+  // other "At time" value. A date whose All day merely differs from the
+  // series' template is not a switch. "This event only" never writes an
+  // untouched reminder either (see writeReminder): the series keeps its own.
   const [chosen, setChosen] = useState<ReminderChoice | null>(null);
   const shownChoice = chosen ?? choiceFor(originalMinutes);
   const effective =
-    chosen ?? (choiceFor(originalMinutes) === "at" ? "at" : null);
+    chosen ??
+    (choiceFor(originalMinutes) === "at" &&
+    value.allDay !== initial.value.allDay
+      ? "at"
+      : null);
   const reminderChanged =
     effective !== null &&
     minutesFor(effective, value.allDay) !== originalMinutes;
@@ -356,7 +363,7 @@ function OpenSheet(props: {
       }
       // CAL-057 Block 4: the reminder alone changed - no scope is asked.
       saving.current = true;
-      const result = await writeReminder(request.event.id);
+      const result = await writeReminder(request.event.id, false);
       saving.current = false;
       if (result.status !== "ok") setFailed(true);
       else onClose();
@@ -379,12 +386,17 @@ function OpenSheet(props: {
   /**
    * CAL-057 Block 4: the reminder's write for `eventId`, once the event's own
    * write succeeded. A new event writes any choice but "None"; an existing
-   * one writes only a changed field that was touched or is a stored "At
-   * time". Nothing to write is `ok`.
+   * one writes only a changed field that was touched, or a stored "At time"
+   * across an All-day switch. On "This event only" (`thisOnly`) only a
+   * touched field is written - to the series. Nothing to write is `ok`.
    */
-  const writeReminder = (eventId: string): Promise<{ status: string }> => {
+  const writeReminder = (
+    eventId: string,
+    thisOnly: boolean,
+  ): Promise<{ status: string }> => {
     const choice = request.mode === "create" ? shownChoice : effective;
     if (request.mode === "edit" && !reminderChanged) return OK();
+    if (thisOnly && chosen === null) return OK();
     const minutes = choice === null ? null : minutesFor(choice, value.allDay);
     if (minutes !== null) return reminders.setReminder(eventId, minutes);
     return request.mode === "create" ? OK() : reminders.clearReminder(eventId);
@@ -396,13 +408,16 @@ function OpenSheet(props: {
    */
   const commit = async (
     write: () => Promise<{ status: string; row?: { id: string } }>,
+    thisOnly = false,
   ) => {
     saving.current = true;
     let result = await write();
     if (result.status === "ok") {
       const eventId =
         request.mode === "edit" ? request.event.id : result.row?.id;
-      if (eventId !== undefined) result = await writeReminder(eventId);
+      if (eventId !== undefined) {
+        result = await writeReminder(eventId, thisOnly);
+      }
     }
     saving.current = false;
     if (result.status !== "ok") {
@@ -447,7 +462,7 @@ function OpenSheet(props: {
       // PO decision 4: a repeat change rides on the series row as well.
       if (result.status !== "ok" || !("recurrence" in patch)) return result;
       return writeSeries({ recurrence: patch.recurrence });
-    });
+    }, true);
   };
 
   const heading =
