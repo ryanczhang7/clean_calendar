@@ -2385,6 +2385,64 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
     });
   });
 
+  // Return to RED 1 (diff review 1, Must fix 1; Contract Block 4, "Amended at
+  // GATES -> RED"): a stored "At time" counts as chosen even untouched, so an
+  // All-day switch rewrites it to what the field and its helper show. With
+  // All day unchanged nothing extra is written.
+  describe('a stored "At time" across an All-day switch (Block 4, amended)', () => {
+    it('a timed event stored "At time" (0), All day turned on, saved with Reminder untouched: setReminder(id, -540) once, clearReminder never', async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 0)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+      await user.click(allDaySwitch());
+      expect(reminderSelect()).toHaveAccessibleDescription(
+        "At 09:00 on the day",
+      );
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent).toHaveBeenCalledTimes(1);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([
+        [DENTIST.id, -540],
+      ]);
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      calledBefore(actions.updateEvent, reminders.setReminder);
+    });
+
+    it('an all-day event stored "At time" (-540), All day turned off, saved with Reminder untouched: setReminder(id, 0) once, clearReminder never', async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(TRIP),
+        { store: remindersStoreOf([template(TRIP.id, -540)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+      await user.click(allDaySwitch());
+      expect(reminderSelect()).not.toHaveAttribute("aria-describedby");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent).toHaveBeenCalledTimes(1);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([[TRIP.id, 0]]);
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      calledBefore(actions.updateEvent, reminders.setReminder);
+    });
+
+    it('a stored "At time" (0) with All day NOT switched and only the title changed: updateEvent once, no reminder write', async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 0)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+      await user.type(title(), "!");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent.mock.calls).toStrictEqual([
+        [DENTIST.id, { title: "Dentist!" }, UPDATED_AT],
+      ]);
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+    });
+  });
+
   describe("an occurrence (Block 4: one template per event, the series')", () => {
     it("shows the series' template, and a reminder-only change writes it on the series id with no scope dialog", async () => {
       const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
