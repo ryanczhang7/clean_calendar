@@ -128,6 +128,8 @@ actionable, no codes. Examples:
 - Buttons: "Allow notifications", "Not now"
 - Denied: "Notifications are blocked for this site. Turn them on in your
   browser's site settings to get reminders here."
+- Allowed (Settings → Notifications only, CAL-027): "Notifications are on for
+  this device."
 
 **Sync status** (labels): "Synced" · "Syncing {n} changes" ("Syncing 1
 change") · "Offline — changes will sync later" · "{n} changes couldn't sync"
