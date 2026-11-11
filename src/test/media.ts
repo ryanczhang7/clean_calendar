@@ -7,13 +7,22 @@
 //   media.restore();                        // in an afterEach
 //
 // It answers `(min-width: Npx)` and `(max-width: Npx)` by comparing N with
-// `width`, and `(prefers-color-scheme: X)` against `colorScheme`; a query
+// `width`, `(prefers-color-scheme: X)` against `colorScheme`, and
+// `(display-mode: X)` against the optional `displayMode` (CAL-027); a query
 // joined with `and` matches when every feature does; anything else is false.
 // It imports nothing from the source tree, so it can be read before the
 // module it serves exists.
 
 type ColorScheme = "light" | "dark";
-type MediaState = { width: number; colorScheme: ColorScheme };
+// CAL-027 Block 2: `(display-mode: X)` matches only when `displayMode` is X.
+// Left unset - every caller before CAL-027 - no display-mode query matches,
+// which is what this helper answered before the option existed.
+type DisplayMode = "standalone" | "browser";
+type MediaState = {
+  width: number;
+  colorScheme: ColorScheme;
+  displayMode?: DisplayMode;
+};
 type ChangeListener = (event: MediaQueryListEvent) => void;
 
 function evaluate(query: string, state: MediaState): boolean {
@@ -28,6 +37,8 @@ function evaluate(query: string, state: MediaState): boolean {
       feature,
     );
     if (scheme !== null) return state.colorScheme === scheme[1];
+    const mode = /^\(\s*display-mode\s*:\s*([a-z-]+)\s*\)$/.exec(feature);
+    if (mode !== null) return state.displayMode === mode[1];
     return false;
   });
 }
@@ -35,9 +46,16 @@ function evaluate(query: string, state: MediaState): boolean {
 export function installMatchMedia(opts: {
   width: number;
   colorScheme: ColorScheme;
+  displayMode?: DisplayMode;
 }): {
   /** Change the answers and fire `change` on every list handed out. */
-  set(opts: Partial<{ width: number; colorScheme: ColorScheme }>): void;
+  set(
+    opts: Partial<{
+      width: number;
+      colorScheme: ColorScheme;
+      displayMode: DisplayMode;
+    }>,
+  ): void;
   /** Delete the stub from `window`. */
   restore(): void;
 } {

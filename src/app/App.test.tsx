@@ -1,6 +1,16 @@
-import { render, screen } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { installServer } from "../test/msw";
+import { act, render, screen, waitFor } from "@testing-library/react";
+import { HttpResponse } from "msw";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { installServer, onTable } from "../test/msw";
+import {
+  CREATED,
+  EXISTING,
+  type FakeSubscription,
+  installPushBrowser,
+  type Permission,
+  type PushBrowser,
+  VAPID_KEY,
+} from "../test/push";
 import {
   answerEvents,
   answerKindsSeed,
@@ -94,4 +104,120 @@ describe("App when the cache cannot be opened (CAL-014 AC-6)", () => {
       screen.queryByRole("heading", { name: "Can't open the calendar" }),
     ).not.toBeInTheDocument();
   });
+});
+
+// CAL-027 Contract, Block 6 (AC-4, AC-1). One more mount effect: with
+// permission already granted the app re-reads (or re-creates) this device's
+// subscription and upserts it with a fresh last_seen_at; it never requests
+// permission. The browser is src/test/push.ts; only `Date` is faked, so the
+// clock is pinned and MSW, React and findBy run on real timers. The upsert
+// is a real PostgREST POST through the mocked client, which MSW answers.
+describe("CAL-027 App start registers a granted device (AC-4, Block 6)", () => {
+  const NOW = "2026-11-11T08:30:00.000Z";
+  let browser: PushBrowser | null = null;
+
+  afterEach(() => {
+    browser?.restore();
+    browser = null;
+    vi.unstubAllEnvs();
+    vi.useRealTimers();
+  });
+
+  function answerUpsert() {
+    return onTable("push_subscriptions", (req) =>
+      HttpResponse.json(
+        [
+          {
+            id: "7a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d",
+            endpoint: (req.body as { endpoint: string }).endpoint,
+          },
+        ],
+        { status: 201 },
+      ),
+    );
+  }
+
+  function start(permission: Permission, existing: FakeSubscription | null) {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date(NOW));
+    browser = installPushBrowser({ permission, existing });
+    vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+    return browser;
+  }
+
+  it("granted, with a subscription: it is re-read, not re-created, and upserted once by endpoint with last_seen_at = now", async () => {
+    const b = start("granted", EXISTING);
+    const seen = answerUpsert();
+    render(<App />);
+    await waitFor(() => expect(seen).toHaveLength(1));
+    await screen.findByRole("heading", { level: 1 });
+    expect(seen[0]?.method).toBe("POST");
+    expect(seen[0]?.url.searchParams.get("on_conflict")).toBe("endpoint");
+    expect(seen[0]?.body).toStrictEqual({
+      endpoint: EXISTING.endpoint,
+      p256dh: "BExisting_p256dh-key",
+      auth: "existing-auth_1",
+      user_agent: navigator.userAgent,
+      last_seen_at: NOW,
+    });
+    expect(b.getSubscription).toHaveBeenCalledTimes(1);
+    expect(b.subscribe).not.toHaveBeenCalled();
+    expect(b.requestPermission).not.toHaveBeenCalled();
+    expect(seen).toHaveLength(1);
+  });
+
+  it("granted, with the subscription missing: it is re-created with userVisibleOnly and the VAPID key, and the new one upserted", async () => {
+    const b = start("granted", null);
+    const seen = answerUpsert();
+    render(<App />);
+    await waitFor(() => expect(seen).toHaveLength(1));
+    expect(b.subscribe).toHaveBeenCalledTimes(1);
+    const options = b.subscribe.mock.calls[0]?.[0];
+    expect(options?.userVisibleOnly).toBe(true);
+    expect(
+      Array.from(options?.applicationServerKey as Uint8Array),
+    ).toStrictEqual(Array.from(Buffer.from(VAPID_KEY, "base64url")));
+    expect(seen[0]?.body).toMatchObject({
+      endpoint: CREATED.endpoint,
+      last_seen_at: NOW,
+    });
+    expect(b.requestPermission).not.toHaveBeenCalled();
+  });
+});
+
+// AC-1: "Given permission is `default`, when the app opens, then no prompt is
+// shown." These assertions also hold on the tree before CAL-027 - they earn
+// their place through the story's first deferred verification (GATES): with
+// requestPermission() called from App's start effect, the first must fail.
+describe("CAL-027 App start never prompts (AC-1, Block 6)", () => {
+  let browser: PushBrowser | null = null;
+
+  afterEach(() => {
+    browser?.restore();
+    browser = null;
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["default", "denied"] as const)(
+    "permission %s: the app opens without requesting permission, subscribing, upserting or showing the card",
+    async (permission) => {
+      browser = installPushBrowser({ permission, existing: EXISTING });
+      vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+      const seen = onTable("push_subscriptions", () =>
+        HttpResponse.json([], { status: 201 }),
+      );
+      render(<App />);
+      await screen.findByRole("heading", { level: 1 });
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      });
+      expect(browser.requestPermission).not.toHaveBeenCalled();
+      expect(browser.getSubscription).not.toHaveBeenCalled();
+      expect(browser.subscribe).not.toHaveBeenCalled();
+      expect(seen).toHaveLength(0);
+      expect(
+        screen.queryByRole("region", { name: "Get reminders on this device" }),
+      ).toBeNull();
+    },
+  );
 });

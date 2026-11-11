@@ -1,9 +1,10 @@
-import { type JSX, useId } from "react";
+import { type JSX, useId, useRef } from "react";
 import {
   REMINDER_OPTIONS,
   type ReminderChoice,
   reminderHelper,
 } from "../domain/reminder";
+import { PermissionCard } from "../reminders/PermissionCard";
 import styles from "./EventForm.module.css";
 
 // CAL-057 Contract, Block 2 (components.md "Event sheet", field 8). Mirrors
@@ -20,6 +21,7 @@ export function ReminderField(props: {
   const selectId = `${ids}-select`;
   const helperId = `${ids}-helper`;
   const helper = reminderHelper(choice, allDay);
+  const select = useRef<HTMLSelectElement>(null);
 
   return (
     <div className={styles.field}>
@@ -27,6 +29,7 @@ export function ReminderField(props: {
         Reminder
       </label>
       <select
+        ref={select}
         id={selectId}
         className={styles.input}
         value={choice}
@@ -43,6 +46,14 @@ export function ReminderField(props: {
         <p id={helperId} className={styles.helper}>
           {helper}
         </p>
+      )}
+      {/* CAL-027 Block 4: the permission card, for any choice but None -
+          made now or arriving with the event (PO decision 3). */}
+      {choice === "none" ? null : (
+        <PermissionCard
+          placement="form"
+          onGone={() => select.current?.focus()}
+        />
       )}
     </div>
   );
