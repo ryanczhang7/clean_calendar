@@ -2541,4 +2541,143 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
       expect(actions.updateEvent).not.toHaveBeenCalled();
     });
   });
+
+  // Return to RED 2 (diff review 2, Must fix 1 and 2; Contract Block 4,
+  // "Amended again"): an untouched "At time" is rewritten only when All day
+  // was switched in THIS sheet AND the save writes the series - never on
+  // "This event only". A date whose own override made it all-day, of a timed
+  // series at "At time" (0), is not a switch: the sheet opens clean.
+  describe('a series stored "At time" (0), on one date (Block 4, amended again)', () => {
+    function weeklySeries(): Event {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return event({
+        recurrence: { freq: "weekly", until: null, tz },
+        updatedAt: "2026-10-02T09:00:00.000042+00:00",
+      });
+    }
+
+    /** As occurrencesIn builds it: the series id, the override's allDay and times. */
+    function occurrenceOf(series: Event, allDay: boolean): Event {
+      return {
+        ...series,
+        allDay,
+        startsAt: allDay ? oct(21) : oct(21, 9),
+        endsAt: allDay ? oct(22) : oct(21, 10, 30),
+        occurrenceDate: "2026-10-21",
+        updatedAt: UPDATED_AT,
+      };
+    }
+
+    function fakeOverrides() {
+      return {
+        setOverride: vi.fn<OverrideActions["setOverride"]>(
+          async (eventId, occurrenceDate, fields) => ({
+            status: "ok",
+            row: {
+              id: "20000000-0000-4000-8000-000000000001",
+              eventId,
+              occurrenceDate,
+              cancelled: false,
+              title: fields.title ?? null,
+              kindId: null,
+              startsAt: null,
+              endsAt: null,
+              allDay: fields.allDay ?? null,
+              location: null,
+              notes: null,
+              createdAt: STAMP,
+              updatedAt: STAMP,
+            },
+          }),
+        ),
+        cancelOccurrence: vi.fn<OverrideActions["cancelOccurrence"]>(),
+        restoreOccurrence: vi.fn<OverrideActions["restoreOccurrence"]>(),
+      };
+    }
+
+    async function openOccurrence(allDay: boolean) {
+      const series = weeklySeries();
+      const occurrence = occurrenceOf(series, allDay);
+      const overrides = fakeOverrides();
+      const opened = await openWithReminders(
+        (opener) => ({ mode: "edit", event: occurrence, series, opener }),
+        { store: remindersStoreOf([template(series.id, 0)]), overrides },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+      return { ...opened, series, overrides };
+    }
+
+    async function answerThisEventOnly(
+      user: ReturnType<typeof userEvent.setup>,
+    ) {
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Change which events?",
+      });
+      await user.click(
+        within(dialog).getByRole("radio", { name: "This event only" }),
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    }
+
+    it.each([
+      [
+        "Close",
+        (u: ReturnType<typeof userEvent.setup>) => u.click(closeButton()),
+      ],
+      [
+        "Escape",
+        async (u: ReturnType<typeof userEvent.setup>) => {
+          title().focus();
+          await u.keyboard("{Escape}");
+        },
+      ],
+    ])(
+      'a date overridden to all-day, opened and left with no edit: %s closes at once - no "Discard changes?", onClose once, no reminder write',
+      async (_name, press) => {
+        const { user, reminders, overrides, onClose } =
+          await openOccurrence(true);
+        expect(allDaySwitch()).toBeChecked();
+        await press(user);
+        expect(
+          screen.queryByRole("dialog", { name: "Discard changes?" }),
+        ).toBeNull();
+        expect(onClose).toHaveBeenCalledTimes(1);
+        expect(reminders.setReminder).not.toHaveBeenCalled();
+        expect(reminders.clearReminder).not.toHaveBeenCalled();
+        expect(overrides.setOverride).not.toHaveBeenCalled();
+      },
+    );
+
+    it('a date overridden to all-day, only the title changed, "This event only": setOverride(title) once, the series\' reminder not written', async () => {
+      const { user, actions, reminders, overrides, series, onClose } =
+        await openOccurrence(true);
+      await user.type(title(), "!");
+      await user.click(save());
+      await answerThisEventOnly(user);
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(overrides.setOverride.mock.calls).toStrictEqual([
+        [series.id, "2026-10-21", { title: "Dentist!" }],
+      ]);
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+    });
+
+    it('a timed date, All day switched on, Reminder untouched, "This event only": setOverride carrying allDay: true once, the series\' reminder not written', async () => {
+      const { user, actions, reminders, overrides, series, onClose } =
+        await openOccurrence(false);
+      expect(allDaySwitch()).not.toBeChecked();
+      await user.click(allDaySwitch());
+      await user.click(save());
+      await answerThisEventOnly(user);
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(overrides.setOverride).toHaveBeenCalledTimes(1);
+      const [eventId, date, fields] = overrides.setOverride.mock.calls[0] ?? [];
+      expect([eventId, date]).toStrictEqual([series.id, "2026-10-21"]);
+      expect(fields).toMatchObject({ allDay: true });
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+    });
+  });
 });
