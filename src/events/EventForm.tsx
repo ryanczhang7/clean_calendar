@@ -13,8 +13,10 @@ import {
   setAllDay,
   TITLE_MAX,
 } from "../domain/eventForm";
+import type { ReminderChoice } from "../domain/reminder";
 import styles from "./EventForm.module.css";
 import { KindPicker } from "./KindPicker";
+import { ReminderField } from "./ReminderField";
 import { RepeatField } from "./RepeatField";
 
 // CAL-012 Contract, Block 4 (components.md "Event sheet", fields in order).
@@ -70,9 +72,27 @@ export function EventForm(props: {
   titleId: string;
   /** The confirm screen's per-field state (CAL-021); absent, every field is confident. */
   fieldStates?: Partial<Record<FormField, FieldState>>;
+  /**
+   * CAL-057 Block 3: the sheet's Reminder field (field 8); absent, no field.
+   * `allDay` is the All day "At time" converts with (Block 4: an occurrence's
+   * is its series'); absent, the form's own.
+   */
+  reminder?: {
+    choice: ReminderChoice;
+    allDay?: boolean;
+    onChange: (c: ReminderChoice) => void;
+  };
 }): JSX.Element {
-  const { value, onChange, errors, kinds, kindRemoved, titleId, fieldStates } =
-    props;
+  const {
+    value,
+    onChange,
+    errors,
+    kinds,
+    kindRemoved,
+    titleId,
+    fieldStates,
+    reminder,
+  } = props;
   const ids = useId();
   const titleErrorId = `${ids}-title-error`;
   const endErrorId = `${ids}-end-error`;
@@ -270,6 +290,13 @@ export function EventForm(props: {
         onChange={onChange}
         error={errors.repeatUntil}
       />
+      {reminder === undefined ? null : (
+        <ReminderField
+          choice={reminder.choice}
+          allDay={reminder.allDay ?? value.allDay}
+          onChange={reminder.onChange}
+        />
+      )}
     </div>
   );
 }

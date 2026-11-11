@@ -11,6 +11,7 @@ import {
   REPEAT_UNTIL_ERROR,
   TITLE_ERROR,
 } from "../domain/eventForm";
+import type { ReminderChoice } from "../domain/reminder";
 import { EventForm } from "./EventForm";
 
 vi.mock(
@@ -738,5 +739,96 @@ describe("the Repeat field inside the form (CAL-024 AC-1, AC-2, Block 2)", () =>
     expect(
       screen.queryByText("The series must end after it starts."),
     ).toBeNull();
+  });
+});
+
+// CAL-057 Contract, Block 3 (AC-1, AC-4 at the form; components.md "Event
+// sheet", field 8 is last). One optional prop, `reminder: { choice, onChange
+// }`. Given, the Reminder field renders after Repeat, with allDay taken from
+// the form's value; absent, the form has no Reminder field (ConfirmPage does
+// not pass it). EventFormValue is not extended: the reminder's choice is held
+// by the host, as the sheet holds it. MECHANICAL.
+
+describe("CAL-057 the Reminder field in the form (AC-1, AC-4, Block 3)", () => {
+  function ReminderHost(props: {
+    initial: EventFormValue;
+    choice: ReminderChoice;
+    onReminder: (choice: ReminderChoice) => void;
+  }): JSX.Element {
+    const [value, setValue] = useState(props.initial);
+    const [choice, setChoice] = useState(props.choice);
+    return (
+      <EventForm
+        value={value}
+        onChange={setValue}
+        errors={{}}
+        kinds={[GYM, MOVIES]}
+        kindRemoved={false}
+        titleId="the-title"
+        reminder={{
+          choice,
+          onChange: (next) => {
+            props.onReminder(next);
+            setChoice(next);
+          },
+        }}
+      />
+    );
+  }
+
+  function renderWithReminder(
+    initial: EventFormValue = TIMED,
+    choice: ReminderChoice = "none",
+  ) {
+    const user = userEvent.setup();
+    const onReminder: Mock<(choice: ReminderChoice) => void> = vi.fn();
+    render(
+      <MemoryRouter>
+        <ReminderHost
+          initial={initial}
+          choice={choice}
+          onReminder={onReminder}
+        />
+      </MemoryRouter>,
+    );
+    return { user, onReminder };
+  }
+
+  const reminderSelect = () =>
+    screen.getByRole("combobox", { name: "Reminder" }) as HTMLSelectElement;
+
+  it("given the reminder prop, the Reminder select comes after the Repeat select - field 8 is last", () => {
+    renderWithReminder();
+    const repeat = screen.getByRole("combobox", { name: "Repeat" });
+    expect(
+      repeat.compareDocumentPosition(reminderSelect()) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("without the reminder prop, the form has no Reminder field", () => {
+    renderForm();
+    expect(screen.queryByRole("combobox", { name: "Reminder" })).toBeNull();
+  });
+
+  it("shows the given choice, and a change is handed to reminder.onChange, not to the form's onChange", async () => {
+    const { user, onReminder } = renderWithReminder(TIMED, "15");
+    expect(reminderSelect()).toHaveValue("15");
+    await user.selectOptions(reminderSelect(), "1 hour before");
+    expect(onReminder).toHaveBeenCalledTimes(1);
+    expect(onReminder).toHaveBeenLastCalledWith("60");
+    expect(reminderSelect()).toHaveValue("60");
+  });
+
+  it('an all-day value with "At time": the select is described by "At 09:00 on the day" (allDay = value.allDay)', () => {
+    renderWithReminder({ ...TIMED, allDay: true }, "at");
+    expect(reminderSelect()).toHaveAccessibleDescription("At 09:00 on the day");
+  });
+
+  it('turning All day on with "At time" chosen makes the helper appear', async () => {
+    const { user } = renderWithReminder(TIMED, "at");
+    expect(reminderSelect()).not.toHaveAttribute("aria-describedby");
+    await user.click(allDaySwitch());
+    expect(reminderSelect()).toHaveAccessibleDescription("At 09:00 on the day");
   });
 });

@@ -56,8 +56,10 @@
 }
 
 /* CAL-024 Block 6: a recurring chip's repeat glyph, after the title; it
-   inherits the chip's text colour and never shrinks. */
-.repeat {
+   inherits the chip's text colour and never shrinks. CAL-057 Block 5: the
+   reminder's bell is the same. */
+.repeat,
+.bell {
   flex: none;
 }
 

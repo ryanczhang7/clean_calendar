@@ -3,6 +3,7 @@ import {
   type JSX,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useReducer,
   useRef,
   useState,
@@ -36,10 +37,13 @@ import { type EventsStore, eventsStore } from "../sync/eventsStore";
 import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { type OverrideActions, overrideActions } from "../sync/overrideActions";
 import { type OverridesStore, overridesStore } from "../sync/overridesStore";
+import { type ReminderActions, reminderActions } from "../sync/reminderActions";
+import { type RemindersStore, remindersStore } from "../sync/remindersStore";
 import { type SheetSync, sheetSync } from "../sync/sheetSync";
 import { useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
 import styles from "./CalendarPage.module.css";
+import { ChipRemindersContext } from "./chipReminders";
 import { DayList } from "./DayList";
 import { DayView } from "./DayView";
 import type { ChipCommand } from "./EventChip";
@@ -521,6 +525,27 @@ function MonthPage(
   );
 }
 
+/**
+ * CAL-057 Block 6: event id -> its live template's minutesBefore, for the
+ * chips. A live template is liveTemplate's rule: `occurrenceDate` null and
+ * `deletedAt == null`. A store that has never loaded is asked once.
+ */
+function useChipReminders(store: RemindersStore): ReadonlyMap<string, number> {
+  const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  useEffect(() => {
+    if (store.getSnapshot().status === "loading") void store.refresh();
+  }, [store]);
+  return useMemo(() => {
+    const map = new Map<string, number>();
+    for (const r of snapshot.reminders) {
+      if (r.occurrenceDate === null && r.deletedAt == null) {
+        map.set(r.eventId, r.minutesBefore);
+      }
+    }
+    return map;
+  }, [snapshot.reminders]);
+}
+
 export function CalendarPage(
   props: Stores & {
     /** Injected clock; default `() => new Date()`. */
@@ -531,6 +556,10 @@ export function CalendarPage(
     overrideActions?: OverrideActions;
     /** CAL-045 Block 3: the sheet's failed-sync strip; default the app's sheetSync. */
     sheetSync?: SheetSync;
+    /** CAL-057 Block 6: the reminders the chips and the sheet read; default the app's. */
+    reminders?: RemindersStore;
+    /** CAL-057 Block 6: the sheet's reminder writes; default the app's. */
+    reminderActions?: ReminderActions;
   } = {},
 ): JSX.Element {
   const { pathname } = useLocation();
@@ -550,6 +579,8 @@ export function CalendarPage(
     overrides: props.overrides ?? overridesStore,
   });
   useFocusEventFromState(events);
+  const reminders = props.reminders ?? remindersStore;
+  const chipReminders = useChipReminders(reminders);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: a new period is the trigger; `selected` is that render's answer
   useEffect(() => {
@@ -650,13 +681,19 @@ export function CalendarPage(
   return (
     <>
       <div className={styles.page}>
-        <div className={styles.view}>{view}</div>
+        <div className={styles.view}>
+          <ChipRemindersContext.Provider value={chipReminders}>
+            {view}
+          </ChipRemindersContext.Provider>
+        </div>
         <EventSheet
           request={sheet}
           kinds={kinds}
           actions={actions}
           overrides={overrides}
           sync={props.sheetSync ?? sheetSync}
+          reminderActions={props.reminderActions ?? reminderActions}
+          remindersStore={reminders}
           onClose={() => setSheet(null)}
           onDelete={edits.onDelete}
         />
