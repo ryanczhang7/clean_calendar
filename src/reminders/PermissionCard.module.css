@@ -1,0 +1,78 @@
+/* components.md, "Notification permission prompt": an inline card under the
+   Reminder field and on Settings -> Notifications. A primary Allow, a
+   secondary Not now; every control has a 44px hit area (layout.md). */
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+  padding: var(--space-4);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-raised);
+}
+
+.title {
+  margin: 0;
+  font-weight: var(--font-weight-semibold);
+}
+
+.line,
+.notice {
+  margin: 0;
+  font-size: var(--font-size-sm);
+  line-height: var(--line-height-sm);
+}
+
+.line {
+  color: var(--color-text-muted);
+}
+
+.notice {
+  color: var(--color-text);
+}
+
+.notice:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.primary,
+.secondary {
+  min-height: var(--size-touch);
+  padding: 0 var(--space-4);
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+.primary {
+  background: var(--color-primary);
+  color: var(--color-primary-contrast);
+}
+
+/* The browser prompt is up (the "loading" state). */
+.primary[aria-busy="true"] {
+  cursor: progress;
+  opacity: 0.7;
+}
+
+.secondary {
+  border-color: var(--color-border-strong);
+  background: none;
+  color: var(--color-text);
+}
+
+.primary:focus-visible,
+.secondary:focus-visible {
+  outline: 2px solid var(--color-focus);
+  outline-offset: 2px;
+}
