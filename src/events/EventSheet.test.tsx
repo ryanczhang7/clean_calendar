@@ -20,12 +20,23 @@ import {
   vi,
 } from "vitest";
 import type { Result } from "../data/result";
-import type { Event, EventOverride, Kind } from "../data/rows";
-import type { EventActions } from "../sync/eventActions";
+import type { Event, EventOverride, Kind, Reminder } from "../data/rows";
+import type { CalendarDb, OutboxOp } from "../sync/db";
+import type { Drain } from "../sync/drain";
+import {
+  createOutboxEventActions,
+  type EventActions,
+} from "../sync/eventActions";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import type { OverrideActions } from "../sync/overrideActions";
+import {
+  createOutboxReminderActions,
+  type ReminderActions,
+} from "../sync/reminderActions";
+import type { RemindersSnapshot, RemindersStore } from "../sync/remindersStore";
 import type { SheetSync } from "../sync/sheetSync";
-import { EventSheet, type SheetRequest } from "./EventSheet";
+import { freshDb } from "../test/cache-fixtures";
+import { EventSheet, SAVE_FAILED, type SheetRequest } from "./EventSheet";
 
 vi.mock(
   "../lib/supabase",
@@ -1885,5 +1896,591 @@ describe("CAL-055 AC-4: Escape in the open kind list closes the list, not the sh
     expect(screen.getByRole("button", { name: "Kind, Gym" })).toHaveFocus();
     expect(sheet("Edit event: Dentist")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+// CAL-057 Contract, Block 4 (AC-2, AC-3, AC-4 at the sheet). The sheet with
+// two new optional props: `reminderActions` (setReminder / clearReminder) and
+// `remindersStore` (what useReminder reads). The fake store is the
+// overridesStoreOf() discipline of CalendarPage.test.tsx: loading until
+// refresh(), then ready with the rows it was built with - so the default case
+// is also the "store loads after the sheet opens" case Block 4 names. AC-2 is
+// driven over a REAL CalendarDb (freshDb) with the outbox event and reminder
+// actions over it, and reads db.outbox in seq order; everything else uses
+// vi.fn actions. MECHANICAL: every call is pinned exactly.
+//
+// Budget: these are sheet flows of the same shape as CAL-025's scope flows
+// (open, a few user-event steps, Save), whose slowest was measured at 2.2 s
+// locally under --coverage (SCOPE_FLOW_TIMEOUT_MS, above); the same 15 s is
+// used here. Not measured for these cases: in RED they fail at the first
+// query for the Reminder field. The hooks this block adds (opening and
+// closing the real db) carry the same budget.
+
+describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const NEW_ID = "10000000-0000-4000-8000-000000000099";
+
+  function template(
+    eventId: string,
+    minutesBefore: number,
+    extra: Partial<Reminder> = {},
+  ): Reminder {
+    return {
+      id: "30000000-0000-4000-8000-000000000001",
+      eventId,
+      minutesBefore,
+      sentAt: null,
+      occurrenceDate: null,
+      deletedAt: null,
+      createdAt: STAMP,
+      updatedAt: STAMP,
+      ...extra,
+    };
+  }
+
+  /** Loading until refresh(), then ready with `rows`; `publish` swaps rows in later. */
+  function remindersStoreOf(
+    rows: Reminder[] = [],
+    options: { refreshPublishes?: boolean } = {},
+  ): RemindersStore & { publish: (next: Reminder[]) => void } {
+    let snap: RemindersSnapshot = { status: "loading", reminders: [] };
+    const listeners = new Set<() => void>();
+    const publish = (next: Reminder[]) => {
+      snap = { status: "ready", reminders: [...next] };
+      for (const listener of listeners) listener();
+    };
+    return {
+      refresh: async () => {
+        if (options.refreshPublishes !== false) publish(rows);
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      getSnapshot: () => snap,
+      publish,
+    };
+  }
+
+  type FakeReminders = {
+    setReminder: Mock<ReminderActions["setReminder"]>;
+    clearReminder: Mock<ReminderActions["clearReminder"]>;
+  };
+
+  function fakeReminders(): FakeReminders {
+    return {
+      setReminder: vi.fn<ReminderActions["setReminder"]>(
+        async (eventId, minutesBefore) => ({
+          status: "ok",
+          row: template(eventId, minutesBefore),
+        }),
+      ),
+      clearReminder: vi.fn<ReminderActions["clearReminder"]>(
+        async (eventId) => ({
+          status: "ok",
+          row: template(eventId, 30, { deletedAt: STAMP }),
+        }),
+      ),
+    };
+  }
+
+  function ReminderHost(props: {
+    make: Make;
+    actions: EventActions;
+    reminderActions: ReminderActions;
+    remindersStore: RemindersStore;
+    /** An occurrence's "This event only"; absent -> the sheet's default. */
+    overrides?: OverrideActions;
+    onClose: () => void;
+  }): JSX.Element {
+    const [request, setRequest] = useState<SheetRequest | null>(null);
+    return (
+      <>
+        <button
+          type="button"
+          onClick={(e) => setRequest(props.make(e.currentTarget))}
+        >
+          Open
+        </button>
+        <EventSheet
+          request={request}
+          kinds={KINDS}
+          actions={props.actions}
+          overrides={props.overrides}
+          reminderActions={props.reminderActions}
+          remindersStore={props.remindersStore}
+          onClose={() => {
+            props.onClose();
+            setRequest(null);
+          }}
+        />
+      </>
+    );
+  }
+
+  async function openWithReminders<
+    A extends EventActions = FakeActions,
+    R extends ReminderActions = FakeReminders,
+  >(
+    make: Make,
+    options: {
+      store?: RemindersStore;
+      actions?: A;
+      reminders?: R;
+      overrides?: OverrideActions;
+    } = {},
+  ) {
+    const user = userEvent.setup();
+    const actions = (options.actions ?? fakeActions()) as A;
+    const reminders = (options.reminders ?? fakeReminders()) as R;
+    const store = options.store ?? remindersStoreOf();
+    const onClose = vi.fn<() => void>();
+    render(
+      <MemoryRouter>
+        <ReminderHost
+          make={make}
+          actions={actions}
+          reminderActions={reminders}
+          remindersStore={store}
+          overrides={options.overrides}
+          onClose={onClose}
+        />
+      </MemoryRouter>,
+    );
+    await user.click(screen.getByRole("button", { name: "Open" }));
+    return { user, actions, reminders, onClose };
+  }
+
+  const reminderSelect = () =>
+    screen.getByRole("combobox", { name: "Reminder" }) as HTMLSelectElement;
+  const findReminderSelect = async () =>
+    (await screen.findByRole("combobox", {
+      name: "Reminder",
+    })) as HTMLSelectElement;
+  /** The first call of `a` came before the first call of `b`. */
+  const calledBefore = (a: Mock, b: Mock) => {
+    const first = a.mock.invocationCallOrder[0];
+    const second = b.mock.invocationCallOrder[0];
+    expect(first, "first mock was called").toBeDefined();
+    expect(second, "second mock was called").toBeDefined();
+    expect(first as number).toBeLessThan(second as number);
+  };
+
+  describe("a new event (AC-2, over a real CalendarDb)", () => {
+    let db: CalendarDb;
+    beforeEach(() => {
+      db = freshDb();
+    }, SCOPE_FLOW_TIMEOUT_MS);
+    afterEach(() => {
+      db.close();
+    }, SCOPE_FLOW_TIMEOUT_MS);
+
+    const outboxActions = () => {
+      // Offline, so neither action starts the drain; the run never settles,
+      // as in reminderActions.test.ts.
+      const drain = {
+        run: vi.fn<Pick<Drain, "run">["run"]>(() => new Promise(() => {})),
+      };
+      return {
+        actions: createOutboxEventActions(db, drain, () => false),
+        reminders: createOutboxReminderActions(db, drain, () => false),
+      };
+    };
+    const opsInSeqOrder = async (): Promise<OutboxOp[]> =>
+      db.outbox.orderBy("seq").toArray();
+
+    it('saved with "30 minutes before": the outbox holds the events insert, then a reminders insert for that event with minutesBefore 30 and occurrenceDate null', async () => {
+      const { actions, reminders } = outboxActions();
+      const { user, onClose } = await openWithReminders(
+        createTimed(oct(15, 14), oct(15, 15)),
+        { actions, reminders },
+      );
+      await user.type(title(), "Swim");
+      await user.selectOptions(await findReminderSelect(), "30 minutes before");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      const ops = await opsInSeqOrder();
+      expect(ops.map((o) => [o.op, o.table])).toStrictEqual([
+        ["insert", "events"],
+        ["insert", "reminders"],
+      ]);
+      const [eventOp, reminderOp] = ops as [OutboxOp, OutboxOp];
+      expect((eventOp.patch as { title: string }).title).toBe("Swim");
+      expect(reminderOp.patch).toStrictEqual({
+        eventId: eventOp.id,
+        minutesBefore: 30,
+        sentAt: null,
+        occurrenceDate: null,
+      });
+      expect(eventOp.seq as number).toBeLessThan(reminderOp.seq as number);
+    });
+
+    it('saved with "None" (the new event\'s default): the outbox holds the events insert alone', async () => {
+      const { actions, reminders } = outboxActions();
+      const { user, onClose } = await openWithReminders(
+        createTimed(oct(15, 14), oct(15, 15)),
+        { actions, reminders },
+      );
+      expect(await findReminderSelect()).toHaveValue("none");
+      await user.type(title(), "Swim");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect((await opsInSeqOrder()).map((o) => [o.op, o.table])).toStrictEqual(
+        [["insert", "events"]],
+      );
+    });
+  });
+
+  describe("a new event (AC-2, AC-4, over vi.fn actions)", () => {
+    it("setReminder(the created row's id, 30) is called once, after createEvent, and clearReminder never", async () => {
+      const { user, actions, reminders } = await openWithReminders(
+        createTimed(oct(15, 14), oct(15, 15)),
+      );
+      await user.type(title(), "Swim");
+      await user.selectOptions(await findReminderSelect(), "30 minutes before");
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(1),
+      );
+      expect(reminders.setReminder.mock.calls[0]).toStrictEqual([NEW_ID, 30]);
+      expect(actions.createEvent).toHaveBeenCalledTimes(1);
+      calledBefore(actions.createEvent, reminders.setReminder);
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+    });
+
+    it('a new all-day event with "At time": the helper reads "At 09:00 on the day" and setReminder(id, -540) is called (AC-4)', async () => {
+      const { user, reminders } = await openWithReminders(
+        createAllDay(oct(15)),
+      );
+      await user.type(title(), "Hotel");
+      await user.selectOptions(await findReminderSelect(), "At time");
+      expect(reminderSelect()).toHaveAccessibleDescription(
+        "At 09:00 on the day",
+      );
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(1),
+      );
+      expect(reminders.setReminder.mock.calls[0]).toStrictEqual([NEW_ID, -540]);
+    });
+
+    it('a new timed event with "At time": setReminder(id, 0), and no helper', async () => {
+      const { user, reminders } = await openWithReminders(
+        createTimed(oct(15, 14), oct(15, 15)),
+      );
+      await user.type(title(), "Swim");
+      await user.selectOptions(await findReminderSelect(), "At time");
+      expect(reminderSelect()).not.toHaveAttribute("aria-describedby");
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(1),
+      );
+      expect(reminders.setReminder.mock.calls[0]).toStrictEqual([NEW_ID, 0]);
+    });
+
+    it("a refused createEvent writes no reminder", async () => {
+      const actions = fakeActions();
+      actions.createEvent.mockResolvedValue({ status: "offline" });
+      const { user, reminders } = await openWithReminders(
+        createTimed(oct(15, 14), oct(15, 15)),
+        { actions },
+      );
+      await user.type(title(), "Swim");
+      await user.selectOptions(await findReminderSelect(), "30 minutes before");
+      await user.click(save());
+      expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("an existing event with a reminder (AC-3)", () => {
+    it('its sheet shows the reminder: a template of 30 shows "30 minutes before"', async () => {
+      await openWithReminders(edit(DENTIST), {
+        store: remindersStoreOf([template(DENTIST.id, 30)]),
+      });
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      const shown = reminderSelect().selectedOptions[0];
+      expect(shown?.textContent).toBe("30 minutes before");
+    });
+
+    it("another event's template, a cleared one or an occurrence's row is not this event's reminder: None", async () => {
+      await openWithReminders(edit(DENTIST), {
+        store: remindersStoreOf([
+          template(TRIP.id, 30),
+          template(DENTIST.id, 60, {
+            id: "30000000-0000-4000-8000-000000000002",
+            deletedAt: STAMP,
+          }),
+          template(DENTIST.id, 120, {
+            id: "30000000-0000-4000-8000-000000000003",
+            occurrenceDate: "2026-10-14",
+          }),
+        ]),
+      });
+      expect(await findReminderSelect()).toHaveValue("none");
+    });
+
+    it("a store that loads after the sheet opens still fills the untouched field", async () => {
+      const store = remindersStoreOf([], { refreshPublishes: false });
+      await openWithReminders(edit(DENTIST), { store });
+      expect(await findReminderSelect()).toHaveValue("none");
+      act(() => store.publish([template(DENTIST.id, 1440)]));
+      await waitFor(() => expect(reminderSelect()).toHaveValue("1440"));
+    });
+
+    it('changed to "1 hour before" and saved: setReminder(id, 60) once - the reminder alone is a change the sheet saves, and the sheet closes', async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "1 hour before");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(reminders.setReminder.mock.calls).toStrictEqual([
+        [DENTIST.id, 60],
+      ]);
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+    });
+
+    it('set to "None" and saved: clearReminder(id) once, setReminder never', async () => {
+      const { user, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "None");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(reminders.clearReminder.mock.calls).toStrictEqual([[DENTIST.id]]);
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+    });
+
+    it('the reminder alone changed makes the sheet dirty: Close asks "Discard changes?"', async () => {
+      const { user, onClose } = await openWithReminders(edit(DENTIST), {
+        store: remindersStoreOf([template(DENTIST.id, 30)]),
+      });
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "5 minutes before");
+      await user.click(closeButton());
+      expect(
+        await screen.findByRole("dialog", { name: "Discard changes?" }),
+      ).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("the reminder changed and changed back is clean: Save closes with no write at all", async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "1 day before");
+      await user.selectOptions(reminderSelect(), "30 minutes before");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+    });
+
+    it("the title and the reminder both changed: updateEvent first, then setReminder(id, 15)", async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.type(title(), "!");
+      await user.selectOptions(reminderSelect(), "15 minutes before");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent.mock.calls).toStrictEqual([
+        [DENTIST.id, { title: "Dentist!" }, UPDATED_AT],
+      ]);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([
+        [DENTIST.id, 15],
+      ]);
+      calledBefore(actions.updateEvent, reminders.setReminder);
+    });
+
+    it("a refused reminder write is a failed save: the alert shows and the sheet stays open", async () => {
+      const reminders = fakeReminders();
+      reminders.setReminder.mockResolvedValue({ status: "offline" });
+      const { user, onClose } = await openWithReminders(edit(DENTIST), {
+        store: remindersStoreOf([template(DENTIST.id, 30)]),
+        reminders,
+      });
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "2 hours before");
+      await user.click(save());
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        /^Couldn't save\. Try again\.$/,
+      );
+      expect(sheet("Edit event: Dentist")).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it("an event without a reminder, set to 10 minutes and saved: setReminder(id, 10)", async () => {
+      const { user, reminders } = await openWithReminders(edit(DENTIST));
+      expect(await findReminderSelect()).toHaveValue("none");
+      await user.selectOptions(reminderSelect(), "10 minutes before");
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(1),
+      );
+      expect(reminders.setReminder.mock.calls[0]).toStrictEqual([
+        DENTIST.id,
+        10,
+      ]);
+    });
+  });
+
+  describe("the touched rule (Block 4)", () => {
+    it('a stored value the select does not list (45) shows "None", and saving after editing only the title calls neither setReminder nor clearReminder', async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 45)]) },
+      );
+      expect(await findReminderSelect()).toHaveValue("none");
+      await user.type(title(), "!");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent).toHaveBeenCalledTimes(1);
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("an all-day event (AC-4)", () => {
+    it('"At time" chosen: the helper reads "At 09:00 on the day", the select is described by it, and setReminder(id, -540) is called', async () => {
+      const { user, reminders } = await openWithReminders(edit(TRIP));
+      await user.selectOptions(await findReminderSelect(), "At time");
+      const helper = screen.getByText("At 09:00 on the day");
+      expect(helper.getAttribute("id") ?? "").not.toBe("");
+      expect(reminderSelect().getAttribute("aria-describedby")).toBe(
+        helper.getAttribute("id"),
+      );
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(1),
+      );
+      expect(reminders.setReminder.mock.calls[0]).toStrictEqual([
+        TRIP.id,
+        -540,
+      ]);
+    });
+
+    it('a stored -540 shows "At time" with the helper', async () => {
+      await openWithReminders(edit(TRIP), {
+        store: remindersStoreOf([template(TRIP.id, -540)]),
+      });
+      await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+      expect(reminderSelect()).toHaveAccessibleDescription(
+        "At 09:00 on the day",
+      );
+    });
+  });
+
+  describe("an occurrence (Block 4: one template per event, the series')", () => {
+    it("shows the series' template, and a reminder-only change writes it on the series id with no scope dialog", async () => {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const series = event({
+        recurrence: { freq: "weekly", until: null, tz },
+      });
+      const occurrence: Event = {
+        ...series,
+        startsAt: oct(21, 9),
+        endsAt: oct(21, 10, 30),
+        occurrenceDate: "2026-10-21",
+      };
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        (opener) => ({ mode: "edit", event: occurrence, series, opener }),
+        { store: remindersStoreOf([template(series.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "1 hour before");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(
+        screen.queryByRole("alertdialog", { name: "Change which events?" }),
+      ).toBeNull();
+      expect(reminders.setReminder.mock.calls).toStrictEqual([[series.id, 60]]);
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+      expect(actions.createEvent).not.toHaveBeenCalled();
+    });
+
+    // Block 4: "After an edit-scope answer the reminder is written once the
+    // scoped write succeeds." The title change asks which events; "This event
+    // only" writes an override of the title on the occurrence's date, and the
+    // reminder - one template per event - still goes on the series id, once,
+    // after the override.
+    it('the title and the reminder changed, "This event only": setOverride first, then setReminder(series id, 60) once', async () => {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      const series = event({
+        recurrence: { freq: "weekly", until: null, tz },
+        updatedAt: "2026-10-02T09:00:00.000042+00:00",
+      });
+      const occurrence: Event = {
+        ...series,
+        startsAt: oct(21, 9),
+        endsAt: oct(21, 10, 30),
+        occurrenceDate: "2026-10-21",
+        updatedAt: UPDATED_AT,
+      };
+      const overrides = {
+        setOverride: vi.fn<OverrideActions["setOverride"]>(
+          async (eventId, occurrenceDate) => ({
+            status: "ok",
+            row: {
+              id: "20000000-0000-4000-8000-000000000001",
+              eventId,
+              occurrenceDate,
+              cancelled: false,
+              title: "Dentist!",
+              kindId: null,
+              startsAt: null,
+              endsAt: null,
+              allDay: null,
+              location: null,
+              notes: null,
+              createdAt: STAMP,
+              updatedAt: STAMP,
+            },
+          }),
+        ),
+        cancelOccurrence: vi.fn<OverrideActions["cancelOccurrence"]>(),
+        restoreOccurrence: vi.fn<OverrideActions["restoreOccurrence"]>(),
+      };
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        (opener) => ({ mode: "edit", event: occurrence, series, opener }),
+        { store: remindersStoreOf([template(series.id, 30)]), overrides },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.type(title(), "!");
+      await user.selectOptions(reminderSelect(), "1 hour before");
+      await user.click(save());
+      // Nothing is written until the scope is answered.
+      const dialog = await screen.findByRole("alertdialog", {
+        name: "Change which events?",
+      });
+      expect(overrides.setOverride).not.toHaveBeenCalled();
+      expect(reminders.setReminder).not.toHaveBeenCalled();
+      await user.click(
+        within(dialog).getByRole("radio", { name: "This event only" }),
+      );
+      await user.click(within(dialog).getByRole("button", { name: "Save" }));
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(overrides.setOverride.mock.calls).toStrictEqual([
+        [series.id, "2026-10-21", { title: "Dentist!" }],
+      ]);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([[series.id, 60]]);
+      calledBefore(overrides.setOverride, reminders.setReminder);
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+      expect(actions.updateEvent).not.toHaveBeenCalled();
+    });
   });
 });

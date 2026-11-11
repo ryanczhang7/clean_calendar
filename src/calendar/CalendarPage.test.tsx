@@ -29,7 +29,13 @@ import {
 import { RouteFocus } from "../app/routes";
 import type { EventsRepo } from "../data/events";
 import type { ListResult, Result } from "../data/result";
-import type { Event, EventOverride, Kind, NewEvent } from "../data/rows";
+import type {
+  Event,
+  EventOverride,
+  Kind,
+  NewEvent,
+  Reminder,
+} from "../data/rows";
 import type { SeedRepo } from "../kinds/seedKinds";
 import type { EventActions } from "../sync/eventActions";
 import {
@@ -40,6 +46,8 @@ import {
 import { createKindsStore, type KindsStore } from "../sync/kindsStore";
 import type { OverrideActions } from "../sync/overrideActions";
 import type { OverridesSnapshot, OverridesStore } from "../sync/overridesStore";
+import type { ReminderActions } from "../sync/reminderActions";
+import type { RemindersSnapshot, RemindersStore } from "../sync/remindersStore";
 import type { SheetSync } from "../sync/sheetSync";
 import { installMatchMedia } from "../test/media";
 import { ToastHost, ToastProvider } from "../ui/Toast";
@@ -3425,5 +3433,162 @@ describe("a failed sync through the page (CAL-045 AC-1, Block 3)", () => {
       within(strip).getByRole("button", { name: "Discard" }),
     ).toBeInTheDocument();
     expect(sync.failedOp).toHaveBeenCalledWith(swim.id);
+  });
+});
+
+// CAL-057 Contract, Block 6 (AC-5's wiring; AC-3 through the page). The page
+// with the two new optional props: `reminders` (a RemindersStore it
+// subscribes to and builds ChipRemindersContext from - live templates only,
+// occurrenceDate null and deletedAt == null) and `reminderActions` (handed to
+// the sheet with the store). The store is the overridesStoreOf() discipline:
+// loading until refresh(), then ready with the rows given. MECHANICAL: chips
+// are found by their exact accessible name.
+
+describe("CAL-057 reminders through the page (AC-5, Block 6)", () => {
+  function reminderRow(
+    n: number,
+    eventId: string,
+    minutesBefore: number,
+    extra: Partial<Reminder> = {},
+  ): Reminder {
+    return {
+      id: `30000000-0000-4000-8000-${String(n).padStart(12, "0")}`,
+      eventId,
+      minutesBefore,
+      sentAt: null,
+      occurrenceDate: null,
+      deletedAt: null,
+      createdAt: STAMP,
+      updatedAt: STAMP,
+      ...extra,
+    };
+  }
+
+  function remindersStoreOf(rows: Reminder[]): RemindersStore {
+    let snap: RemindersSnapshot = { status: "loading", reminders: [] };
+    const listeners = new Set<() => void>();
+    return {
+      refresh: async () => {
+        snap = { status: "ready", reminders: [...rows] };
+        for (const listener of listeners) listener();
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      getSnapshot: () => snap,
+    };
+  }
+
+  function renderWithReminders(
+    store: RemindersStore,
+    reminderActions?: ReminderActions,
+  ) {
+    const user = userEvent.setup();
+    const page = (
+      <CalendarPage
+        kinds={createKindsStore(kindsRepo)}
+        events={createEventsStore(eventsRepo)}
+        overrides={overridesStoreOf()}
+        reminders={store}
+        reminderActions={reminderActions}
+        now={() => NOW}
+      />
+    );
+    render(
+      <MemoryRouter initialEntries={["/month/2026-10"]}>
+        <Routes>
+          <Route path="/month/:ym" element={page} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    return { user };
+  }
+
+  it('a live template of 30 names that chip ", reminder 30 minutes before"; a cleared template and an occurrence row name nothing', async () => {
+    const dentist = timed(
+      "Dentist",
+      new Date(2026, 9, 14, 9, 0),
+      new Date(2026, 9, 14, 10, 30),
+    );
+    const swim = timed(
+      "Swim",
+      new Date(2026, 9, 15, 14, 0),
+      new Date(2026, 9, 15, 15, 0),
+    );
+    const film = timed(
+      "Film",
+      new Date(2026, 9, 16, 20, 0),
+      new Date(2026, 9, 16, 22, 0),
+    );
+    eventsRepo.listLive.mockResolvedValue({
+      status: "ok",
+      rows: [dentist, swim, film],
+    });
+    renderWithReminders(
+      remindersStoreOf([
+        reminderRow(1, dentist.id, 30),
+        reminderRow(2, swim.id, 60, { deletedAt: STAMP }),
+        reminderRow(3, film.id, 15, { occurrenceDate: "2026-10-16" }),
+      ]),
+    );
+    const grid = await settledGrid("October 2026");
+    expect(
+      await within(grid).findByRole("button", {
+        name: "Dentist, Gym, 09:00 to 10:30, reminder 30 minutes before",
+      }),
+    ).toBeInTheDocument();
+    expect(
+      within(grid).getByRole("button", { name: "Swim, Gym, 14:00 to 15:00" }),
+    ).toBeInTheDocument();
+    expect(
+      within(grid).getByRole("button", { name: "Film, Gym, 20:00 to 22:00" }),
+    ).toBeInTheDocument();
+  });
+
+  it("the chip's sheet shows the reminder and saves a change through the given reminderActions", async () => {
+    const dentist = timed(
+      "Dentist",
+      new Date(2026, 9, 14, 9, 0),
+      new Date(2026, 9, 14, 10, 30),
+    );
+    eventsRepo.listLive.mockResolvedValue({ status: "ok", rows: [dentist] });
+    const reminderActions = {
+      setReminder: vi.fn<ReminderActions["setReminder"]>(
+        async (eventId, minutesBefore) => ({
+          status: "ok",
+          row: reminderRow(1, eventId, minutesBefore),
+        }),
+      ),
+      clearReminder: vi.fn<ReminderActions["clearReminder"]>(async () => ({
+        status: "ok",
+        row: null,
+      })),
+    };
+    const { user } = renderWithReminders(
+      remindersStoreOf([reminderRow(1, dentist.id, 30)]),
+      reminderActions,
+    );
+    await user.click(
+      await screen.findByRole("button", {
+        name: "Dentist, Gym, 09:00 to 10:30, reminder 30 minutes before",
+      }),
+    );
+    const dialog = await screen.findByRole("dialog", {
+      name: "Edit event: Dentist",
+    });
+    const select = within(dialog).getByRole("combobox", { name: "Reminder" });
+    await waitFor(() => expect(select).toHaveValue("30"));
+    await user.selectOptions(select, "1 day before");
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    await waitFor(() =>
+      expect(reminderActions.setReminder).toHaveBeenCalledTimes(1),
+    );
+    expect(reminderActions.setReminder.mock.calls[0]).toStrictEqual([
+      dentist.id,
+      1440,
+    ]);
   });
 });

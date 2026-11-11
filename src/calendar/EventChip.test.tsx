@@ -9,7 +9,7 @@ import {
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Event, Kind } from "../data/rows";
 import { blocksAt, parseCss, propertyValue } from "../test/css";
 import { installMatchMedia } from "../test/media";
@@ -1059,5 +1059,188 @@ describe("an occurrence is moved and deleted from its chip like any event (CAL-0
       "Dentist, Gym, 09:00 to 10:30, repeats weekly",
     );
     expect(chip.querySelectorAll('svg[data-glyph="repeat"]')).toHaveLength(1);
+  });
+});
+
+// CAL-057 Contract, Block 5 (AC-5; components.md "Event chip", Reminder;
+// accessibility.md:99's name order: repeats, then reminder, then the sync
+// marker). MECHANICAL: chipName's optional third parameter inserts
+// ", reminder {phrase}" after the repeats part and before the sync marker;
+// the chip reads ChipRemindersContext (event id -> the live template's
+// minutesBefore) with event.id, and when it has a value both variants carry
+// one <svg data-glyph="bell" aria-hidden="true" width="12" height="12"> after
+// the title and are named with the phrase. The phrases are written out by
+// hand from the AC, not computed with reminderPhrase. The glyph's path, and
+// its order relative to the repeat glyph, are not pinned.
+
+describe("CAL-057 a chip with a reminder (AC-5, Block 5)", () => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const WEEKLY = ev({ recurrence: { freq: "weekly", until: null, tz } });
+
+  it.each([
+    [30, "Dentist, Gym, 09:00 to 10:30, reminder 30 minutes before"],
+    [0, "Dentist, Gym, 09:00 to 10:30, reminder at start time"],
+    [1440, "Dentist, Gym, 09:00 to 10:30, reminder 1 day before"],
+    [60, "Dentist, Gym, 09:00 to 10:30, reminder 1 hour before"],
+    [120, "Dentist, Gym, 09:00 to 10:30, reminder 2 hours before"],
+    [5, "Dentist, Gym, 09:00 to 10:30, reminder 5 minutes before"],
+  ])("chipName(event, kind, %j) is %j", (minutes, name) => {
+    expect(chipName(TIMED, LIVE, minutes)).toBe(name);
+  });
+
+  it('an all-day event at -540: "..., all day, reminder at 09:00 on the day"', () => {
+    expect(chipName(ALL_DAY, LIVE, -540)).toBe(
+      "Hotel, Gym, all day, reminder at 09:00 on the day",
+    );
+  });
+
+  it.each([
+    [
+      WEEKLY,
+      LIVE,
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly, reminder 30 minutes before",
+    ],
+    [
+      { ...WEEKLY, sync: "saving" as const },
+      LIVE,
+      "Dentist, Gym, 09:00 to 10:30, repeats weekly, reminder 30 minutes before, saving",
+    ],
+    [
+      { ...TIMED, sync: "failed" as const },
+      REMOVED,
+      "Dentist, 09:00 to 10:30, kind removed, reminder 30 minutes before, not synced",
+    ],
+  ])(
+    "the reminder comes after the repeats part and before the sync marker (accessibility.md:99): %#",
+    (event, kind, name) => {
+      expect(chipName(event, kind, 30)).toBe(name);
+    },
+  );
+
+  it("without the third argument the name has no reminder part", () => {
+    expect(chipName(TIMED, LIVE)).toBe("Dentist, Gym, 09:00 to 10:30");
+    expect(chipName(TIMED, LIVE, undefined)).toBe(
+      "Dentist, Gym, 09:00 to 10:30",
+    );
+  });
+
+  describe("the chip under ChipRemindersContext", () => {
+    // Block 5's new module is loaded here rather than at the top of the file:
+    // a static import of a module RED cannot write would fail this whole file
+    // at import, taking every earlier case down with it - and so would a
+    // dynamic import of a literal path, which Vite resolves when it
+    // transforms the file (measured in RED: "Failed to resolve import
+    // ./chipReminders" for the whole file). The path is held in a constant
+    // so it resolves at run time, failing only this block's hook. The type
+    // still names the module, so typecheck pins its export. Only these cases
+    // need the context; chipName's cases above do not.
+    const CHIP_REMINDERS = "./chipReminders";
+    let chipReminders: typeof import("./chipReminders");
+    beforeAll(async () => {
+      chipReminders = await import(/* @vite-ignore */ CHIP_REMINDERS);
+    });
+
+    function renderWithReminders(
+      event: Event,
+      reminders: ReadonlyMap<string, number>,
+      variant?: "block",
+    ): HTMLElement {
+      const { ChipRemindersContext } = chipReminders;
+      media = installMatchMedia({ colorScheme: "light", width: 1280 });
+      render(
+        <MemoryRouter>
+          <ChipRemindersContext.Provider value={reminders}>
+            <EventChip
+              event={event}
+              kind={LIVE}
+              variant={variant}
+              height={60}
+            />
+          </ChipRemindersContext.Provider>
+        </MemoryRouter>,
+      );
+      const buttons = screen.getAllByRole("button");
+      expect(buttons).toHaveLength(1);
+      return buttons[0] as HTMLElement;
+    }
+
+    it.each([
+      ["chip", undefined, "09:00 Dentist"],
+      ["block", "block", "Dentist"],
+    ] as const)(
+      'a live reminder of 30: the %s carries one <svg data-glyph="bell" aria-hidden="true" width="12" height="12"> after the title, and is named ", reminder 30 minutes before"',
+      (_label, variant, titleText) => {
+        const chip = renderWithReminders(
+          TIMED,
+          new Map([[TIMED.id, 30]]),
+          variant,
+        );
+        const bells = chip.querySelectorAll('[data-glyph="bell"]');
+        expect(bells).toHaveLength(1);
+        const bell = bells[0] as Element;
+        expect(bell.tagName.toLowerCase()).toBe("svg");
+        expect(bell).toHaveAttribute("aria-hidden", "true");
+        expect(bell).toHaveAttribute("width", "12");
+        expect(bell).toHaveAttribute("height", "12");
+        const title = hiddenText(chip, titleText);
+        expect(
+          title.compareDocumentPosition(bell) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ).toBeTruthy();
+        expect(chip).toHaveAccessibleName(
+          "Dentist, Gym, 09:00 to 10:30, reminder 30 minutes before",
+        );
+      },
+    );
+
+    it.each([
+      [0, "Dentist, Gym, 09:00 to 10:30, reminder at start time"],
+      [1440, "Dentist, Gym, 09:00 to 10:30, reminder 1 day before"],
+    ])("a live reminder of %j: the chip is named %j", (minutes, name) => {
+      const chip = renderWithReminders(TIMED, new Map([[TIMED.id, minutes]]));
+      expect(chip).toHaveAccessibleName(name);
+      expect(chip.querySelectorAll('svg[data-glyph="bell"]')).toHaveLength(1);
+    });
+
+    it("a recurring event with a reminder carries both glyphs, and the name says repeats then reminder", () => {
+      const chip = renderWithReminders(WEEKLY, new Map([[WEEKLY.id, 30]]));
+      expect(chip.querySelectorAll('svg[data-glyph="repeat"]')).toHaveLength(1);
+      expect(chip.querySelectorAll('svg[data-glyph="bell"]')).toHaveLength(1);
+      expect(chip).toHaveAccessibleName(
+        "Dentist, Gym, 09:00 to 10:30, repeats weekly, reminder 30 minutes before",
+      );
+    });
+
+    it("an occurrence reads its series' reminder, keyed by the series id it carries", () => {
+      const occurrence: Event = {
+        ...WEEKLY,
+        startsAt: new Date(2026, 9, 21, 9, 0),
+        endsAt: new Date(2026, 9, 21, 10, 30),
+        occurrenceDate: "2026-10-21",
+      };
+      const chip = renderWithReminders(
+        occurrence,
+        new Map([[WEEKLY.id, 1440]]),
+      );
+      expect(chip.querySelectorAll('svg[data-glyph="bell"]')).toHaveLength(1);
+      expect(chip).toHaveAccessibleName(
+        "Dentist, Gym, 09:00 to 10:30, repeats weekly, reminder 1 day before",
+      );
+    });
+
+    it.each([
+      [
+        "no entry for this event (another event's reminder)",
+        new Map([["10000000-0000-4000-8000-000000000002", 30]]),
+      ],
+      ["an empty map", new Map<string, number>()],
+    ])(
+      "%s: no bell, and the name has no reminder part",
+      (_label, reminders) => {
+        const chip = renderWithReminders(TIMED, reminders);
+        expect(chip.querySelector('[data-glyph="bell"]')).toBeNull();
+        expect(chip).toHaveAccessibleName("Dentist, Gym, 09:00 to 10:30");
+      },
+    );
   });
 });
