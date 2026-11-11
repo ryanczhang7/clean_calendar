@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { type JSX, useState } from "react";
 import { MemoryRouter } from "react-router";
@@ -316,5 +316,186 @@ describe("describedBy lands on the trigger (CAL-021 Block 2, AC-1, AC-2)", () =>
     await user.click(button);
     await user.click(option("Travel"));
     expect(onChange).toHaveBeenCalledWith(TRAVEL.id);
+  });
+});
+
+// CAL-055 (EPIC-05 audit, Decided 7). The shipped picker already satisfies
+// every case below; each is earned by the KindPicker.tsx mutant(s) its AC
+// names (story ## Deferred verifications). "Default prevented" is read from
+// fireEvent.keyDown's return value - false when the handler called
+// preventDefault - because user.keyboard hides it.
+
+/** The listbox's active option, read two ways: aria-activedescendant and data-active. */
+function activeOptionIds(): {
+  activedescendant: string | null;
+  marked: string[];
+} {
+  const box = listbox();
+  return {
+    activedescendant: box.getAttribute("aria-activedescendant"),
+    marked: [
+      ...box.querySelectorAll('[role="option"][data-active="true"]'),
+    ].map((el) => el.getAttribute("id") ?? ""),
+  };
+}
+
+describe("CAL-055 AC-1: the closed trigger's keys", () => {
+  it("Tab on the closed trigger does not open the list and is not default-prevented", () => {
+    renderPicker(GYM.id);
+    const button = trigger("Gym");
+    button.focus();
+    const notPrevented = fireEvent.keyDown(button, { key: "Tab" });
+    expect(notPrevented).toBe(true);
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(button).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("ArrowUp on the closed trigger opens the list on the chosen kind, default prevented", () => {
+    renderPicker(MOVIES.id);
+    const button = trigger("Movies");
+    button.focus();
+    const notPrevented = fireEvent.keyDown(button, { key: "ArrowUp" });
+    expect(notPrevented).toBe(false);
+    expect(button).toHaveAttribute("aria-expanded", "true");
+    expect(listbox().getAttribute("aria-activedescendant")).toBe(
+      option("Movies").id,
+    );
+  });
+
+  it("ArrowUp on the closed trigger with no chosen kind opens the list on the first", () => {
+    renderPicker(null);
+    const button = screen.getByRole("button", { name: "Kind," });
+    button.focus();
+    const notPrevented = fireEvent.keyDown(button, { key: "ArrowUp" });
+    expect(notPrevented).toBe(false);
+    expect(listbox().getAttribute("aria-activedescendant")).toBe(
+      option("Gym").id,
+    );
+  });
+
+  it("ArrowDown on the closed trigger opens the list, default prevented", () => {
+    renderPicker(GYM.id);
+    const button = trigger("Gym");
+    button.focus();
+    const notPrevented = fireEvent.keyDown(button, { key: "ArrowDown" });
+    expect(notPrevented).toBe(false);
+    expect(listbox()).toBeInTheDocument();
+  });
+});
+
+describe("CAL-055 AC-2: the list's arrows stop at the ends", () => {
+  it("ArrowDown on the last option keeps it active, and Enter then chooses it", () => {
+    const { onChange } = renderPicker(TRAVEL.id);
+    fireEvent.keyDown(trigger("Travel"), { key: "ArrowDown" });
+    expect(activeOptionIds().activedescendant).toBe(option("Travel").id);
+    const notPrevented = fireEvent.keyDown(listbox(), { key: "ArrowDown" });
+    expect(notPrevented).toBe(false);
+    expect(activeOptionIds()).toStrictEqual({
+      activedescendant: option("Travel").id,
+      marked: [option("Travel").id],
+    });
+    expect(option("Travel")).toHaveAttribute("data-active", "true");
+    fireEvent.keyDown(listbox(), { key: "Enter" });
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith(TRAVEL.id);
+  });
+
+  it("ArrowUp on the first option keeps it active, default prevented", () => {
+    renderPicker(GYM.id);
+    fireEvent.keyDown(trigger("Gym"), { key: "ArrowDown" });
+    expect(activeOptionIds().activedescendant).toBe(option("Gym").id);
+    const notPrevented = fireEvent.keyDown(listbox(), { key: "ArrowUp" });
+    expect(notPrevented).toBe(false);
+    expect(activeOptionIds()).toStrictEqual({
+      activedescendant: option("Gym").id,
+      marked: [option("Gym").id],
+    });
+  });
+
+  it("ArrowDown in the middle of the list is default-prevented", () => {
+    renderPicker(GYM.id);
+    fireEvent.keyDown(trigger("Gym"), { key: "ArrowDown" });
+    const notPrevented = fireEvent.keyDown(listbox(), { key: "ArrowDown" });
+    expect(notPrevented).toBe(false);
+    expect(activeOptionIds().activedescendant).toBe(option("Movies").id);
+  });
+});
+
+describe("CAL-055 AC-3: a picker with no kinds", () => {
+  it("opened with no kinds, Enter throws nothing, calls no onChange, and the listbox names no active option", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn<(id: string) => void>();
+    const errors: unknown[] = [];
+    const onError = (event: ErrorEvent) => {
+      errors.push(event.error);
+      event.preventDefault();
+    };
+    window.addEventListener("error", onError);
+    try {
+      render(
+        <MemoryRouter>
+          <KindPicker
+            kinds={[]}
+            value={null}
+            removed={false}
+            onChange={onChange}
+          />
+        </MemoryRouter>,
+      );
+      await user.click(screen.getByRole("button", { name: "Kind," }));
+      expect(within(listbox()).queryAllByRole("option")).toHaveLength(0);
+      expect(listbox()).not.toHaveAttribute("aria-activedescendant");
+      expect(() =>
+        fireEvent.keyDown(listbox(), { key: "Enter" }),
+      ).not.toThrow();
+      expect(errors).toStrictEqual([]);
+      expect(onChange).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener("error", onError);
+    }
+  });
+});
+
+describe("CAL-055 AC-5: Tab closes the open list", () => {
+  it("Tab in the open list closes it", () => {
+    renderPicker(GYM.id);
+    fireEvent.keyDown(trigger("Gym"), { key: "ArrowDown" });
+    expect(listbox()).toBeInTheDocument();
+    fireEvent.keyDown(listbox(), { key: "Tab" });
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(trigger("Gym")).toHaveAttribute("aria-expanded", "false");
+  });
+});
+
+describe("CAL-055 AC-6: focus returns to the trigger after a choice", () => {
+  it("choosing a kind by click puts focus on the trigger", async () => {
+    const { user } = renderPicker(GYM.id);
+    await user.click(trigger("Gym"));
+    await user.click(option("Movies"));
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(trigger("Movies")).toHaveFocus();
+  });
+
+  it("choosing a kind by Enter puts focus on the trigger", async () => {
+    const { user } = renderPicker(GYM.id);
+    trigger("Gym").focus();
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    await user.keyboard("{Enter}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(trigger("Movies")).toHaveFocus();
+  });
+});
+
+describe("CAL-055 AC-7: exactly one option shows as active", () => {
+  it("after ArrowDown, exactly one option carries data-active and it is the one aria-activedescendant names", () => {
+    renderPicker(GYM.id);
+    fireEvent.keyDown(trigger("Gym"), { key: "ArrowDown" });
+    fireEvent.keyDown(listbox(), { key: "ArrowDown" });
+    const { activedescendant, marked } = activeOptionIds();
+    expect(marked).toHaveLength(1);
+    expect(marked[0]).toBe(activedescendant);
+    expect(activedescendant).toBe(option("Movies").id);
+    expect(option("Gym")).not.toHaveAttribute("data-active");
+    expect(option("Travel")).not.toHaveAttribute("data-active");
   });
 });

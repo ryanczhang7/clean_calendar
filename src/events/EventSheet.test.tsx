@@ -1869,3 +1869,21 @@ describe("a failed sync in the sheet (CAL-045 AC-1 to AC-4)", () => {
     });
   });
 });
+
+// CAL-055 AC-4 (EPIC-05 audit, Decided 7): the picker's Escape is its own.
+// Earned by deleting KindPicker.tsx:103-104 (Escape's preventDefault and
+// stopPropagation together), after which the sheet's Escape handler also
+// sees the key and closes the sheet.
+describe("CAL-055 AC-4: Escape in the open kind list closes the list, not the sheet", () => {
+  it("Escape with the kind list open closes the list, focuses the trigger, and leaves the sheet open", async () => {
+    const { user, onClose } = await openSheet(edit(DENTIST));
+    await user.click(screen.getByRole("button", { name: "Kind, Gym" }));
+    const list = screen.getByRole("listbox", { name: "Kind" });
+    await waitFor(() => expect(list).toHaveFocus());
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(screen.getByRole("button", { name: "Kind, Gym" })).toHaveFocus();
+    expect(sheet("Edit event: Dentist")).toBeInTheDocument();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
