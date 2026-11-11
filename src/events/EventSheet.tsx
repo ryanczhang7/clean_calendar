@@ -259,9 +259,24 @@ function OpenSheet(props: {
     value.allDay !== initial.value.allDay
       ? "at"
       : null);
+  // Block 4, amended a third time: "At time" converts with the SERIES' All
+  // day, which a date's own All day does not change. `storedAllDay` is the
+  // series' as stored; `sheetAllDay` is what a save writes to it - the sheet's
+  // when All day was switched here (or the event is not an occurrence),
+  // else the stored one. "This event only" never writes it (writeReminder).
+  const occurrence =
+    request.mode === "edit" && request.event.occurrenceDate !== undefined;
+  const storedAllDay =
+    request.mode === "edit"
+      ? (request.series?.allDay ?? initial.value.allDay)
+      : value.allDay;
+  const sheetAllDay =
+    occurrence && value.allDay === initial.value.allDay
+      ? storedAllDay
+      : value.allDay;
   const reminderChanged =
     effective !== null &&
-    minutesFor(effective, value.allDay) !== originalMinutes;
+    minutesFor(effective, sheetAllDay) !== originalMinutes;
 
   const kindRemoved = initial.removed && value.kindId === null;
   const dirty = !sameValue(value, initial.value) || reminderChanged;
@@ -395,9 +410,16 @@ function OpenSheet(props: {
     thisOnly: boolean,
   ): Promise<{ status: string }> => {
     const choice = request.mode === "create" ? shownChoice : effective;
-    if (request.mode === "edit" && !reminderChanged) return OK();
     if (thisOnly && chosen === null) return OK();
-    const minutes = choice === null ? null : minutesFor(choice, value.allDay);
+    // "This event only" leaves the series' All day as stored.
+    const basis = thisOnly ? storedAllDay : sheetAllDay;
+    const minutes = choice === null ? null : minutesFor(choice, basis);
+    if (
+      request.mode === "edit" &&
+      (choice === null || minutes === originalMinutes)
+    ) {
+      return OK();
+    }
     if (minutes !== null) return reminders.setReminder(eventId, minutes);
     return request.mode === "create" ? OK() : reminders.clearReminder(eventId);
   };
@@ -575,7 +597,11 @@ function OpenSheet(props: {
               kinds={kinds.kinds}
               kindRemoved={kindRemoved}
               titleId={titleId}
-              reminder={{ choice: shownChoice, onChange: setChosen }}
+              reminder={{
+                choice: shownChoice,
+                allDay: sheetAllDay,
+                onChange: setChosen,
+              }}
             />
           </div>
           <footer className={styles.footer}>
