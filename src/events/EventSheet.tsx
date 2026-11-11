@@ -22,6 +22,7 @@ import {
   valueFromEvent,
 } from "../domain/eventForm";
 import { seriesSpan } from "../domain/moveEvent";
+import { choiceFor, minutesFor, type ReminderChoice } from "../domain/reminder";
 import { type EventActions, eventActions } from "../sync/eventActions";
 import type { KindsSnapshot } from "../sync/kindsStore";
 import {
@@ -29,6 +30,12 @@ import {
   type OverrideFields,
   overrideActions,
 } from "../sync/overrideActions";
+import { type ReminderActions, reminderActions } from "../sync/reminderActions";
+import {
+  type RemindersStore,
+  remindersStore,
+  useReminder,
+} from "../sync/remindersStore";
 import { type FailedOp, type SheetSync, sheetSync } from "../sync/sheetSync";
 import { Dialog } from "../ui/Dialog";
 import { type EditScope, EditScopeDialog } from "./EditScopeDialog";
@@ -97,6 +104,8 @@ function seriesPatchOf(
 
 export const SAVE_FAILED = "Couldn't save. Try again.";
 
+const OK = (): Promise<{ status: string }> => Promise.resolve({ status: "ok" });
+
 /** One sheet per request: a new request remounts it with a fresh value. */
 function keyOf(request: SheetRequest): string {
   return request.mode === "create"
@@ -116,6 +125,10 @@ export function EventSheet(props: {
   overrides?: OverrideActions;
   /** CAL-045 Block 2: a failed op's strip, Retry and Discard; default the app's. */
   sync?: SheetSync;
+  /** CAL-057 Block 4: the Reminder field's writes; default the app's. */
+  reminderActions?: ReminderActions;
+  /** CAL-057 Block 4: what the Reminder field shows; default the app's. */
+  remindersStore?: RemindersStore;
 }): JSX.Element | null {
   const {
     request,
@@ -123,6 +136,8 @@ export function EventSheet(props: {
     actions = eventActions,
     overrides = overrideActions,
     sync = sheetSync,
+    reminderActions: reminders = reminderActions,
+    remindersStore: reminderStore = remindersStore,
     onClose,
     onDelete,
   } = props;
@@ -148,6 +163,8 @@ export function EventSheet(props: {
       actions={actions}
       overrides={overrides}
       sync={sync}
+      reminders={reminders}
+      reminderStore={reminderStore}
       onClose={onClose}
       onDelete={onDelete}
       onDiscarded={(fresh) =>
@@ -185,13 +202,24 @@ function OpenSheet(props: {
   actions: EventActions;
   overrides: OverrideActions;
   sync: SheetSync;
+  reminders: ReminderActions;
+  reminderStore: RemindersStore;
   onClose: () => void;
   onDelete: ((event: Event) => void) | undefined;
   /** CAL-045 Block 2: Discard left this row; the outer sheet reopens on it. */
   onDiscarded: (fresh: Event) => void;
 }): JSX.Element {
-  const { kinds, actions, overrides, sync, onClose, onDelete, onDiscarded } =
-    props;
+  const {
+    kinds,
+    actions,
+    overrides,
+    sync,
+    reminders,
+    reminderStore,
+    onClose,
+    onDelete,
+    onDiscarded,
+  } = props;
   // The request this sheet was opened for; a different one remounts it.
   const [request] = useState(props.request);
   const ids = useId();
@@ -212,8 +240,19 @@ function OpenSheet(props: {
   const [syncFailure, setSyncFailure] = useState<FailedOp | null>(null);
   const syncBusy = useRef(false);
 
+  // CAL-057 Block 4: the event's template - an occurrence carries its series'
+  // id, so it shows and writes the series' one. A new event has none.
+  const reminderId = request.mode === "edit" ? request.event.id : "";
+  const original = useReminder(reminderId, reminderStore);
+  const originalMinutes = original?.minutesBefore ?? null;
+  // null = untouched: the field follows the store, and is never written.
+  const [chosen, setChosen] = useState<ReminderChoice | null>(null);
+  const shownChoice = chosen ?? choiceFor(originalMinutes);
+  const reminderChanged =
+    chosen !== null && minutesFor(chosen, value.allDay) !== originalMinutes;
+
   const kindRemoved = initial.removed && value.kindId === null;
-  const dirty = !sameValue(value, initial.value);
+  const dirty = !sameValue(value, initial.value) || reminderChanged;
 
   // CAL-045 Block 2, PO decision 3: only an event whose cached copy says its
   // op failed asks for it; a queued op, a synced event or a new one never do.
@@ -306,7 +345,16 @@ function OpenSheet(props: {
     const patch = patchOf(request.event, value);
     const keys = Object.keys(patch);
     if (keys.length === 0) {
-      onClose();
+      if (!reminderChanged) {
+        onClose();
+        return;
+      }
+      // CAL-057 Block 4: the reminder alone changed - no scope is asked.
+      saving.current = true;
+      const result = await writeReminder(request.event.id);
+      saving.current = false;
+      if (result.status !== "ok") setFailed(true);
+      else onClose();
       return;
     }
     if (request.event.occurrenceDate === undefined) {
@@ -323,10 +371,33 @@ function OpenSheet(props: {
     setScoping(patch);
   };
 
-  /** One save: a refusal shows SAVE_FAILED; success remembers the kind and closes. */
-  const commit = async (write: () => Promise<{ status: string }>) => {
+  /**
+   * CAL-057 Block 4: the reminder's write for `eventId`, once the event's own
+   * write succeeded. A new event writes any choice but "None"; an existing
+   * one writes only a touched, changed field. Nothing to write is `ok`.
+   */
+  const writeReminder = (eventId: string): Promise<{ status: string }> => {
+    const choice = request.mode === "create" ? shownChoice : chosen;
+    if (request.mode === "edit" && !reminderChanged) return OK();
+    const minutes = choice === null ? null : minutesFor(choice, value.allDay);
+    if (minutes !== null) return reminders.setReminder(eventId, minutes);
+    return request.mode === "create" ? OK() : reminders.clearReminder(eventId);
+  };
+
+  /**
+   * One save: the event's write, then the reminder's (AC-2). A refusal of
+   * either shows SAVE_FAILED; success remembers the kind and closes.
+   */
+  const commit = async (
+    write: () => Promise<{ status: string; row?: { id: string } }>,
+  ) => {
     saving.current = true;
-    const result = await write();
+    let result = await write();
+    if (result.status === "ok") {
+      const eventId =
+        request.mode === "edit" ? request.event.id : result.row?.id;
+      if (eventId !== undefined) result = await writeReminder(eventId);
+    }
     saving.current = false;
     if (result.status !== "ok") {
       setFailed(true);
@@ -483,6 +554,7 @@ function OpenSheet(props: {
               kinds={kinds.kinds}
               kindRemoved={kindRemoved}
               titleId={titleId}
+              reminder={{ choice: shownChoice, onChange: setChosen }}
             />
           </div>
           <footer className={styles.footer}>

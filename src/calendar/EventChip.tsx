@@ -7,11 +7,14 @@ import {
   type MouseEventHandler,
   type PointerEventHandler,
   type SyntheticEvent,
+  useContext,
   useRef,
 } from "react";
 import type { Event, Kind } from "../data/rows";
 import { chipText } from "../domain/colour";
+import { reminderPhrase } from "../domain/reminder";
 import { MIN_BLOCK_HEIGHT } from "../domain/timeGrid";
+import { ChipRemindersContext } from "./chipReminders";
 import styles from "./EventChip.module.css";
 import { useColorScheme } from "./media";
 
@@ -87,8 +90,37 @@ function RepeatGlyph(): JSX.Element {
   );
 }
 
+/** CAL-057 Block 5: a 12px bell; aria-hidden, because the name says "reminder". */
+function BellGlyph(): JSX.Element {
+  return (
+    <svg
+      aria-hidden="true"
+      data-glyph="bell"
+      className={styles.bell}
+      width="12"
+      height="12"
+      viewBox="0 0 12 12"
+      focusable="false"
+    >
+      <path
+        d="M3 8.5V5.5a3 3 0 0 1 6 0v3l1 1H2Zm2 1.5a1 1 0 0 0 2 0"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** The accessible name, exactly as Block 5's table. */
-export function chipName(event: Event, kind: ChipKind): string {
+export function chipName(
+  event: Event,
+  kind: ChipKind,
+  /** CAL-057 Block 5: the live template's minutesBefore; absent, no reminder part. */
+  reminderMinutes?: number,
+): string {
   const when = event.allDay
     ? "all day"
     : `${hhmm(event.startsAt)} to ${hhmm(event.endsAt)}`;
@@ -98,10 +130,15 @@ export function chipName(event: Event, kind: ChipKind): string {
       : `${event.title}, ${when}, kind removed`;
   // CAL-024 Block 6: the repeat after the time or kind-removed part, before
   // the sync marker.
-  const name =
+  const repeated =
     event.recurrence === null
       ? base
       : `${base}, repeats ${event.recurrence.freq}`;
+  // CAL-057 Block 5: the reminder after the repeat, before the sync marker.
+  const name =
+    reminderMinutes === undefined
+      ? repeated
+      : `${repeated}, reminder ${reminderPhrase(reminderMinutes)}`;
   // CAL-015 Block 6: the sync marker comes last (accessibility.md order).
   if (event.sync === "saving") return `${name}, saving`;
   if (event.sync === "failed") return `${name}, not synced`;
@@ -155,6 +192,9 @@ export function EventChip(props: {
       </span>
     ) : null;
   const repeatGlyph = event.recurrence === null ? null : <RepeatGlyph />;
+  const reminderMinutes = useContext(ChipRemindersContext).get(event.id);
+  const bellGlyph = reminderMinutes === undefined ? null : <BellGlyph />;
+  const name = chipName(event, kind, reminderMinutes);
   const dark = useColorScheme() === "dark";
   const live = kind.status === "live" ? kind.kind : null;
   const colour = live === null ? null : dark ? live.colorDark : live.colorLight;
@@ -169,7 +209,7 @@ export function EventChip(props: {
     return (
       <button
         type="button"
-        aria-label={chipName(event, kind)}
+        aria-label={name}
         className={`${styles.chip} ${styles.block}`}
         data-allday={event.allDay ? "true" : "false"}
         data-neutral={kind.status === "removed" ? "true" : undefined}
@@ -190,6 +230,7 @@ export function EventChip(props: {
           {event.title}
         </span>
         {repeatGlyph}
+        {bellGlyph}
         {badge}
         {(props.height ?? 0) >= 2 * MIN_BLOCK_HEIGHT && (
           <span aria-hidden="true" className={styles.time}>
@@ -203,7 +244,7 @@ export function EventChip(props: {
   return (
     <button
       type="button"
-      aria-label={chipName(event, kind)}
+      aria-label={name}
       className={styles.chip}
       data-allday={event.allDay ? "true" : "false"}
       data-neutral={kind.status === "removed" ? "true" : undefined}
@@ -236,6 +277,7 @@ export function EventChip(props: {
         </>
       )}
       {repeatGlyph}
+      {bellGlyph}
       {badge}
     </button>
   );
