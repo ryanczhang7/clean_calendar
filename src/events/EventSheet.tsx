@@ -245,11 +245,16 @@ function OpenSheet(props: {
   const reminderId = request.mode === "edit" ? request.event.id : "";
   const original = useReminder(reminderId, reminderStore);
   const originalMinutes = original?.minutesBefore ?? null;
-  // null = untouched: the field follows the store, and is never written.
+  // null = untouched: the field follows the store. An untouched field is
+  // never written - except a stored "At time" (0 or -540), which counts as
+  // chosen, so an All-day switch rewrites it to the other "At time" value.
   const [chosen, setChosen] = useState<ReminderChoice | null>(null);
   const shownChoice = chosen ?? choiceFor(originalMinutes);
+  const effective =
+    chosen ?? (choiceFor(originalMinutes) === "at" ? "at" : null);
   const reminderChanged =
-    chosen !== null && minutesFor(chosen, value.allDay) !== originalMinutes;
+    effective !== null &&
+    minutesFor(effective, value.allDay) !== originalMinutes;
 
   const kindRemoved = initial.removed && value.kindId === null;
   const dirty = !sameValue(value, initial.value) || reminderChanged;
@@ -374,10 +379,11 @@ function OpenSheet(props: {
   /**
    * CAL-057 Block 4: the reminder's write for `eventId`, once the event's own
    * write succeeded. A new event writes any choice but "None"; an existing
-   * one writes only a touched, changed field. Nothing to write is `ok`.
+   * one writes only a changed field that was touched or is a stored "At
+   * time". Nothing to write is `ok`.
    */
   const writeReminder = (eventId: string): Promise<{ status: string }> => {
-    const choice = request.mode === "create" ? shownChoice : chosen;
+    const choice = request.mode === "create" ? shownChoice : effective;
     if (request.mode === "edit" && !reminderChanged) return OK();
     const minutes = choice === null ? null : minutesFor(choice, value.allDay);
     if (minutes !== null) return reminders.setReminder(eventId, minutes);
