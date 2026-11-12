@@ -1,4 +1,4 @@
-import type { Page } from "@playwright/test";
+import type { Locator, Page } from "@playwright/test";
 import { format } from "date-fns";
 import { expect, type SeededKind, seed, test } from "./fixtures/session.ts";
 
@@ -162,7 +162,154 @@ test.describe("at 1280x800", () => {
       "focus returns to the chip that opened the sheet",
     ).toBeFocused();
   });
+
+  test("with the sheet open and nothing scrolled, the docked sheet lies between the top bar and the bottom of the viewport (CAL-059 AC-1)", async ({
+    page,
+    owner: _owner,
+  }) => {
+    const { sheet } = await openLunch(page);
+    const box = await settledBox(sheet, "the sheet");
+    expect(await scrollTop(page), "document scroll offset").toBe(0);
+    expect.soft(box.y, "sheet top edge").toBeGreaterThanOrEqual(TOPBAR);
+    expect
+      .soft(
+        box.y + box.height,
+        `sheet bottom edge (y ${box.y}, height ${box.height})`,
+      )
+      .toBeLessThanOrEqual(DESKTOP.height);
+  });
+
+  test("with the sheet open and nothing scrolled, the whole Save button is inside the viewport (CAL-059 AC-2)", async ({
+    page,
+    owner: _owner,
+  }) => {
+    const { sheet } = await openLunch(page);
+    await settledBox(sheet, "the sheet");
+    expect(await scrollTop(page), "document scroll offset").toBe(0);
+    // boundingBox() does not scroll the button into view first.
+    const save = await settledBox(
+      sheet.getByRole("button", { name: "Save" }),
+      "the Save button",
+    );
+    expect.soft(save.y, "Save top edge").toBeGreaterThanOrEqual(0);
+    expect
+      .soft(
+        save.y + save.height,
+        `Save bottom edge (y ${save.y}, height ${save.height})`,
+      )
+      .toBeLessThanOrEqual(DESKTOP.height);
+    expect.soft(save.x, "Save left edge").toBeGreaterThanOrEqual(0);
+    expect
+      .soft(save.x + save.width, "Save right edge")
+      .toBeLessThanOrEqual(DESKTOP.width);
+  });
+
+  test("opening the docked sheet adds no vertical scroll to the document (CAL-059 AC-3)", async ({
+    page,
+    owner: _owner,
+  }) => {
+    await page.goto(`/month/${thisMonth}`);
+    await expect(page.getByRole("grid")).toBeVisible();
+    await expect(lunchChip(page)).toBeVisible();
+    const closed = await scrollHeight(page);
+
+    await lunchChip(page).click();
+    const sheet = page.getByRole("dialog", { name: "Edit event: Lunch" });
+    await expect(sheet).toBeVisible();
+    await settledBox(sheet, "the sheet");
+    const open = await scrollHeight(page);
+
+    expect(
+      open,
+      `document scrollHeight with the sheet open (closed: ${closed})`,
+    ).toBeLessThanOrEqual(closed);
+  });
+
+  test("scrolled to the bottom with the sheet open, the sheet stays below the top bar and the Account button is not covered (CAL-059 AC-4)", async ({
+    page,
+    owner: _owner,
+  }) => {
+    const { sheet } = await openLunch(page);
+    await settledBox(sheet, "the sheet");
+    const topbar = page.getByRole("banner");
+    await expect(topbar, "exactly one banner: the top bar").toHaveCount(1);
+
+    // As far down as the document allows; on a document that does not
+    // scroll this is a no-op, and the assertions still have to hold.
+    const scrolled = await page.evaluate(() => {
+      window.scrollTo(0, document.documentElement.scrollHeight);
+      return window.scrollY;
+    });
+    const maxScroll = await page.evaluate(
+      () =>
+        document.documentElement.scrollHeight -
+        document.documentElement.clientHeight,
+    );
+    expect(scrolled, "window.scrollY after scrolling to the bottom").toBe(
+      Math.max(0, maxScroll),
+    );
+
+    const bar = await settledBox(topbar, "the top bar");
+    const box = await settledBox(sheet, "the sheet");
+    expect.soft(bar.y, `top bar top edge after a ${scrolled}px scroll`).toBe(0);
+    expect
+      .soft(
+        box.y,
+        `sheet top edge after a ${scrolled}px scroll (top bar bottom edge ${bar.y + bar.height})`,
+      )
+      .toBeGreaterThanOrEqual(bar.y + bar.height);
+    expect.soft(bar.y + bar.height, "top bar bottom edge").toBe(TOPBAR);
+
+    const account = page.getByRole("button", { name: "Account" });
+    const acc = await settledBox(account, "the Account button");
+    const cx = acc.x + acc.width / 2;
+    const cy = acc.y + acc.height / 2;
+    const hit = await page.evaluate(
+      ([x, y]) => {
+        const el = document.elementFromPoint(x, y);
+        const button = document.querySelector('button[aria-label="Account"]');
+        if (el === null) return "nothing";
+        if (button?.contains(el)) return "Account";
+        const dialog = el.closest('[role="dialog"]');
+        return dialog === null
+          ? `${el.tagName.toLowerCase()}.${el.className}`
+          : `${el.tagName.toLowerCase()} inside the sheet ([role=dialog])`;
+      },
+      [cx, cy] as const,
+    );
+    expect(
+      hit,
+      `the element at the Account button's centre (${cx}, ${cy}) after a ${scrolled}px scroll`,
+    ).toBe("Account");
+  });
 });
+
+/** components.md, "App shell and top bar": --size-topbar. */
+const TOPBAR = 56;
+
+const scrollTop = (page: Page) =>
+  page.evaluate(() => document.documentElement.scrollTop);
+
+const scrollHeight = (page: Page) =>
+  page.evaluate(() => document.documentElement.scrollHeight);
+
+/**
+ * The element's box once any CSS transition on it (the sheet's 0.28s slide)
+ * has finished, so a mid-animation position neither fails nor passes a test.
+ */
+async function settledBox(locator: Locator, what: string) {
+  await locator.evaluate((el) =>
+    Promise.all(
+      el
+        .getAnimations({ subtree: true })
+        .map((a) => a.finished.catch(() => undefined)),
+    ),
+  );
+  const box = await locator.boundingBox();
+  expect(box, `${what}'s box`).not.toBeNull();
+  if (box === null) throw new Error(`${what} has no box`);
+  return box;
+}
 
 /** The open sheet's computed transition-duration. */
 const transitionOf = (page: Page) =>
