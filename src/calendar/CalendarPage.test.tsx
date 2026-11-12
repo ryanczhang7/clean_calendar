@@ -10,12 +10,14 @@ import {
 import userEvent from "@testing-library/user-event";
 import type { JSX } from "react";
 import {
+  type InitialEntry,
   MemoryRouter,
   type NavigateFunction,
   Route,
   Routes,
   useLocation,
   useNavigate,
+  useNavigationType,
 } from "react-router";
 import {
   afterEach,
@@ -3592,3 +3594,576 @@ describe("CAL-057 reminders through the page (AC-5, Block 6)", () => {
     ]);
   });
 });
+
+// CAL-058 Contract, Blocks 1 to 3 (AC-1 to AC-3, PO decisions 1 and 2). A
+// tapped reminder opens /day/{yyyy-MM-dd}?event={id} (CAL-028); the page
+// opens that event's sheet once, on the occurrence of the day the path
+// names, and removes `event` from the URL with a replace. Rendered like
+// renderSheetPage (toolbar, the four routes, the real RouteFocus, Where for
+// `at` and `go`), entered through MemoryRouter initialEntries - a string,
+// or a location with search and state - and with the page's overrides
+// store injectable, so a case can hold the overrides back. DeepLinkQuery
+// shows what Where does not: the search string, the router state and the
+// last navigation's type (REPLACE, not PUSH). MECHANICAL throughout: the
+// sheet is found by its dialog name, the event by its Title and date
+// fields, the URL by its parsed search. Tuesday 3 November 2026 is the day.
+describe("/day/{date}?event={id} opens that event's sheet once (CAL-058 AC-1 to AC-3)", () => {
+  function DeepLinkQuery(): JSX.Element {
+    const { search, state } = useLocation();
+    const type = useNavigationType();
+    return (
+      <>
+        <p data-testid="deep-link-search">{search}</p>
+        <p data-testid="deep-link-state">{JSON.stringify(state ?? null)}</p>
+        <p data-testid="deep-link-nav">{type}</p>
+      </>
+    );
+  }
+
+  function renderDeepLink(
+    entries: InitialEntry[],
+    options: { initialIndex?: number; overrides?: OverridesStore } = {},
+  ) {
+    const user = userEvent.setup();
+    const kinds: KindsStore = createKindsStore(kindsRepo);
+    const events: EventsStore = createEventsStore(eventsRepo);
+    const page = (
+      <CalendarPage
+        kinds={kinds}
+        events={events}
+        overrides={options.overrides ?? overridesStoreOf()}
+        now={() => NOW}
+        actions={actionsOver(events)}
+      />
+    );
+    render(
+      <MemoryRouter
+        initialEntries={entries}
+        initialIndex={options.initialIndex}
+      >
+        <header>
+          <CalendarToolbar now={() => NOW} />
+        </header>
+        <main>
+          <Routes>
+            <Route path="/" element={page} />
+            <Route path="/month/:ym" element={page} />
+            <Route path="/week/:date" element={page} />
+            <Route path="/day/:date" element={page} />
+          </Routes>
+        </main>
+        <RouteFocus />
+        <Where />
+        <DeepLinkQuery />
+      </MemoryRouter>,
+    );
+    return { user, events };
+  }
+
+  /** The location's search, as [key, value] pairs in order. */
+  const query = () => [
+    ...new URLSearchParams(
+      screen.getByTestId("deep-link-search").textContent ?? "",
+    ).entries(),
+  ];
+  const routerState = () =>
+    JSON.parse(screen.getByTestId("deep-link-state").textContent ?? "null");
+  const navType = () => screen.getByTestId("deep-link-nav").textContent;
+
+  /** Lets every pending effect, microtask and store notification run. */
+  async function flush(): Promise<void> {
+    await act(async () => {
+      for (let i = 0; i < 10; i += 1) await Promise.resolve();
+    });
+  }
+
+  const nov = (date: number, hour = 0, minute = 0) =>
+    new Date(2026, 10, date, hour, minute);
+
+  const DENTIST_NAME = "Dentist, Gym, 10:00 to 11:00";
+  const dentist = () => timed("Dentist", nov(3, 10), nov(3, 11));
+  /** Another event on the 3rd: its chip says the events have loaded. */
+  const anchor = () => timed("Anchor", nov(3, 15), nov(3, 16));
+  const ANCHOR_NAME = "Anchor, Gym, 15:00 to 16:00";
+
+  /** A weekly series on Tuesdays 09:00 - 10:00 from Tuesday 13 October. */
+  function cycleSeries(): Event {
+    return {
+      ...timed("Cycle", oct(13, 9), oct(13, 10)),
+      recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+    };
+  }
+  const CYCLE_NAME = "Cycle, Gym, 09:00 to 10:00, repeats weekly";
+
+  async function expectSheetOn(
+    title: string,
+    startDate: string,
+    startTime: string,
+    endDate: string,
+    endTime: string,
+  ): Promise<void> {
+    await screen.findByRole("dialog", { name: `Edit event: ${title}` });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(titleInput()).toHaveValue(title);
+    expect(dateField("Start date")).toHaveValue(startDate);
+    expect(dateField("Start time")).toHaveValue(startTime);
+    expect(dateField("End date")).toHaveValue(endDate);
+    expect(dateField("End time")).toHaveValue(endTime);
+  }
+
+  describe("a cached event on that day (AC-1, Blocks 2 and 3)", () => {
+    it("opens the sheet on that event in the day view, and removes `event` from the URL", async () => {
+      const event = dentist();
+      useWrites([anchor(), event]);
+      renderDeepLink([`/day/2026-11-03?event=${event.id}`]);
+      await screen.findByRole("button", { name: DENTIST_NAME });
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+      expect(at()).toBe("at /day/2026-11-03");
+      await waitFor(() => expect(query()).toStrictEqual([]));
+      expect(at()).toBe("at /day/2026-11-03");
+    });
+
+    it("the removal is a replace that keeps every other query key and the router state", async () => {
+      const event = dentist();
+      useWrites([event]);
+      renderDeepLink([
+        {
+          pathname: "/day/2026-11-03",
+          search: `?from=push&event=${event.id}&x=1`,
+          state: { via: "notification" },
+        },
+      ]);
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+      await waitFor(() =>
+        expect(query()).toStrictEqual([
+          ["from", "push"],
+          ["x", "1"],
+        ]),
+      );
+      expect(at()).toBe("at /day/2026-11-03");
+      expect(routerState()).toStrictEqual({ via: "notification" });
+      expect(navType()).toBe("REPLACE");
+    });
+
+    it("history does not grow: Back after it opened leaves the day for the entry before it, not the ?event= URL", async () => {
+      const event = dentist();
+      useWrites([event]);
+      const { user } = renderDeepLink(
+        ["/month/2026-11", `/day/2026-11-03?event=${event.id}`],
+        { initialIndex: 1 },
+      );
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+      await waitFor(() => expect(query()).toStrictEqual([]));
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(async () => go(-1));
+      await waitFor(() => expect(at()).toBe("at /month/2026-11"));
+      expect(query()).toStrictEqual([]);
+    });
+
+    it("once: a later store update keeps exactly one sheet; after Close, another update does not reopen it", async () => {
+      const event = dentist();
+      useWrites([event]);
+      const { user, events } = renderDeepLink([
+        `/day/2026-11-03?event=${event.id}`,
+      ]);
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+
+      rows.push(anchor());
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(
+        screen.getByRole("dialog", { name: "Edit event: Dentist" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      rows.push(timed("Later", nov(3, 18), nov(3, 19)));
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: /^Later, / });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("closing the sheet returns focus to the event's chip, as after a click", async () => {
+      const event = dentist();
+      useWrites([event]);
+      const { user } = renderDeepLink([`/day/2026-11-03?event=${event.id}`]);
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      await waitFor(() => expectFocusedChip(event.id, DENTIST_NAME));
+    });
+
+    it.each([
+      ["the month", "/month/2026-11"],
+      ["the same day without the key", "/day/2026-11-03"],
+    ])(
+      "a later in-app navigation from %s to /day/2026-11-03?event= opens the sheet too, and removes the key",
+      async (_from, start) => {
+        const event = dentist();
+        useWrites([event]);
+        renderDeepLink([start]);
+        await screen.findByRole("button", { name: DENTIST_NAME });
+        await flush();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await act(async () => go(`/day/2026-11-03?event=${event.id}`));
+        await expectSheetOn(
+          "Dentist",
+          "2026-11-03",
+          "10:00",
+          "2026-11-03",
+          "11:00",
+        );
+        await waitFor(() => expect(query()).toStrictEqual([]));
+        expect(at()).toBe("at /day/2026-11-03");
+      },
+    );
+
+    it.each([
+      ["month", "/month/2026-11"],
+      ["week", "/week/2026-11-03"],
+    ])(
+      "on a %s path the key is ignored and kept; the same id on the day path opens",
+      async (_view, path) => {
+        const event = dentist();
+        useWrites([event]);
+        renderDeepLink([`${path}?event=${event.id}`]);
+        await screen.findByRole("button", { name: DENTIST_NAME });
+        await flush();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        expect(query()).toStrictEqual([["event", event.id]]);
+        expect(at()).toBe(`at ${path}`);
+
+        await act(async () => go(`/day/2026-11-03?event=${event.id}`));
+        await expectSheetOn(
+          "Dentist",
+          "2026-11-03",
+          "10:00",
+          "2026-11-03",
+          "11:00",
+        );
+      },
+    );
+
+    it("a cached event on another day opens nothing on the 3rd, and the key is still removed; on its own day it opens", async () => {
+      const fifth = timed("Physio", nov(5, 10), nov(5, 11));
+      useWrites([anchor(), fifth]);
+      renderDeepLink([`/day/2026-11-03?event=${fifth.id}`]);
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+
+      await act(async () => go(`/day/2026-11-05?event=${fifth.id}`));
+      await expectSheetOn(
+        "Physio",
+        "2026-11-05",
+        "10:00",
+        "2026-11-05",
+        "11:00",
+      );
+    });
+
+    it("a cancelled occurrence on the 3rd opens nothing; the series' occurrence on the 10th opens", async () => {
+      const cycle = cycleSeries();
+      useWrites([anchor(), cycle]);
+      overrideRows = [cancelled(cycle.id, "2026-11-03")];
+      renderDeepLink([`/day/2026-11-03?event=${cycle.id}`]);
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      expect(screen.queryByRole("button", { name: CYCLE_NAME })).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+
+      await act(async () => go(`/day/2026-11-10?event=${cycle.id}`));
+      await expectSheetOn(
+        "Cycle",
+        "2026-11-10",
+        "09:00",
+        "2026-11-10",
+        "10:00",
+      );
+    });
+
+    it("an occurrence does not open before the overrides are read: cancelled on the 3rd by overrides that arrive late, it never opens", async () => {
+      const cycle = cycleSeries();
+      useWrites([cycle]);
+      overrideRows = [cancelled(cycle.id, "2026-11-03")];
+      const late = heldOverridesStore();
+      renderDeepLink([`/day/2026-11-03?event=${cycle.id}`], {
+        overrides: late.store,
+      });
+      // While the overrides load, the day still shows the 3rd's occurrence.
+      await screen.findByRole("button", { name: CYCLE_NAME });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await act(async () => late.release());
+      await waitFor(() =>
+        expect(screen.queryByRole("button", { name: CYCLE_NAME })).toBeNull(),
+      );
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+
+      await act(async () => go(`/day/2026-11-10?event=${cycle.id}`));
+      await expectSheetOn(
+        "Cycle",
+        "2026-11-10",
+        "09:00",
+        "2026-11-10",
+        "10:00",
+      );
+    });
+  });
+
+  describe("an id not in the cache, and a malformed id (AC-2, Blocks 2 and 3)", () => {
+    it("the row arriving only after the first render (a slow load) opens the sheet when it arrives, once", async () => {
+      const event = dentist();
+      useWrites([event]);
+      const slow = held();
+      eventsRepo.listLive.mockReturnValueOnce(slow.promise);
+      const { events } = renderDeepLink([`/day/2026-11-03?event=${event.id}`]);
+      await screen.findByRole("heading", { level: 1 });
+      await flush();
+      expect(document.querySelector("[data-event-id]")).toBeNull();
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      await act(async () => slow.release({ status: "ok", rows: [event] }));
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+      rows.push(anchor());
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    });
+
+    it("an id not in the loaded cache opens nothing; when a later update in the same mount brings the row in, it opens then, once", async () => {
+      const event = dentist();
+      useWrites([anchor()]);
+      const { user, events } = renderDeepLink([
+        `/day/2026-11-03?event=${event.id}`,
+      ]);
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+
+      rows.push(event);
+      await act(async () => events.refresh());
+      await expectSheetOn(
+        "Dentist",
+        "2026-11-03",
+        "10:00",
+        "2026-11-03",
+        "11:00",
+      );
+
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      rows.push(timed("Later", nov(3, 18), nov(3, 19)));
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: /^Later, / });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it.each([
+      ["empty", "?event="],
+      ["evt 1", "?event=evt%201"],
+      ['a quote and a bracket, "]', "?event=%22%5D"],
+      ["a repeated key whose first value is malformed", "?event=bad&event=@ID"],
+    ])(
+      "a malformed id (%s) opens nothing and is removed; a well-formed id on the same data then opens",
+      async (_case, search) => {
+        const event = dentist();
+        useWrites([event]);
+        renderDeepLink([`/day/2026-11-03${search.replace("@ID", event.id)}`]);
+        await screen.findByRole("button", { name: DENTIST_NAME });
+        await flush();
+        expect(screen.queryByRole("dialog")).toBeNull();
+        await waitFor(() => expect(query()).toStrictEqual([]));
+        expect(at()).toBe("at /day/2026-11-03");
+        await flush();
+        expect(screen.queryByRole("dialog")).toBeNull();
+
+        await act(async () => go(`/day/2026-11-03?event=${event.id}`));
+        await expectSheetOn(
+          "Dentist",
+          "2026-11-03",
+          "10:00",
+          "2026-11-03",
+          "11:00",
+        );
+      },
+    );
+
+    it("a pending id is dropped when the pathname changes: the row arriving on the next day, where it also shows, opens nothing", async () => {
+      // 22:00 on the 3rd to 02:00 on the 4th: on both days' lists.
+      const night = timed("Night shift", nov(3, 22), nov(4, 2));
+      useWrites([anchor()]);
+      const { events } = renderDeepLink([`/day/2026-11-03?event=${night.id}`]);
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+
+      await act(async () => go("/day/2026-11-04"));
+      await waitFor(() => expect(at()).toBe("at /day/2026-11-04"));
+      rows.push(night);
+      await act(async () => events.refresh());
+      await waitFor(() =>
+        expect(
+          document.querySelector(`[data-event-id="${night.id}"]`),
+        ).not.toBeNull(),
+      );
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("a pending id is dropped when the row arrives while another sheet is open: that sheet stays, and nothing opens after it closes", async () => {
+      const event = dentist();
+      useWrites([anchor()]);
+      const { user, events } = renderDeepLink([
+        `/day/2026-11-03?event=${event.id}`,
+      ]);
+      await screen.findByRole("button", { name: ANCHOR_NAME });
+      await flush();
+      await waitFor(() => expect(query()).toStrictEqual([]));
+      await user.keyboard("n");
+      await screen.findByRole("dialog", { name: "New event" });
+
+      rows.push(event);
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: DENTIST_NAME });
+      await flush();
+      expect(screen.getAllByRole("dialog")).toHaveLength(1);
+      expect(
+        screen.getByRole("dialog", { name: "New event" }),
+      ).toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Close" }));
+      expect(screen.queryByRole("dialog")).toBeNull();
+      rows.push(timed("Later", nov(3, 18), nov(3, 19)));
+      await act(async () => events.refresh());
+      await screen.findByRole("button", { name: /^Later, / });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+  });
+
+  describe("a recurring series opens on the path's occurrence (AC-3, Block 3)", () => {
+    it("a weekly series from 13 October opens on its 3 November occurrence, not the series' first date", async () => {
+      const cycle = cycleSeries();
+      useWrites([cycle]);
+      renderDeepLink([`/day/2026-11-03?event=${cycle.id}`]);
+      await screen.findByRole("button", { name: CYCLE_NAME });
+      await expectSheetOn(
+        "Cycle",
+        "2026-11-03",
+        "09:00",
+        "2026-11-03",
+        "10:00",
+      );
+      expect(screen.getByRole("combobox", { name: "Repeat" })).toHaveValue(
+        "weekly",
+      );
+      await waitFor(() => expect(query()).toStrictEqual([]));
+    });
+
+    it("of two occurrences on the day (one running in from the night before), the one dated 3 November wins", async () => {
+      const night = {
+        ...timed("Night", nov(1, 23), nov(2, 1)),
+        recurrence: { freq: "daily" as const, until: null, tz: DEVICE_TZ },
+      };
+      useWrites([night]);
+      renderDeepLink([`/day/2026-11-03?event=${night.id}`]);
+      // Precondition: the 3rd's list holds the 2nd's and the 3rd's occurrence.
+      await waitFor(() =>
+        expect(
+          document.querySelectorAll(`[data-event-id="${night.id}"]`),
+        ).toHaveLength(2),
+      );
+      await expectSheetOn(
+        "Night",
+        "2026-11-03",
+        "23:00",
+        "2026-11-04",
+        "01:00",
+      );
+    });
+  });
+});
+
+/**
+ * CAL-058: an overrides store whose first load waits for release(), so a
+ * case can render the events before the overrides are read. Then ready with
+ * `overrideRows` as they are at that moment, as overridesStoreOf.
+ */
+function heldOverridesStore(): {
+  store: OverridesStore;
+  release: () => Promise<void>;
+} {
+  let snapshot: OverridesSnapshot = { status: "loading", overrides: [] };
+  const listeners = new Set<() => void>();
+  let open: () => void = () => {};
+  const gate = new Promise<void>((done) => {
+    open = done;
+  });
+  return {
+    store: {
+      refresh: async () => {
+        await gate;
+        snapshot = { status: "ready", overrides: [...overrideRows] };
+        for (const listener of listeners) listener();
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+      getSnapshot: () => snapshot,
+    },
+    release: async () => {
+      open();
+      await gate;
+    },
+  };
+}
