@@ -2,7 +2,7 @@
 id: EPIC-06
 title: Recurring events
 status: todo
-stories: [CAL-023, CAL-024, CAL-056, CAL-025]
+stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074]
 ---
 
 ## Goal
@@ -28,6 +28,7 @@ all others; deleting one occurrence leaves the rest.
 1. CAL-023 — recurrence expansion as a pure, shared module
 2. CAL-024 — recurring events on the calendar and the recurrence field in the form
 3. CAL-025 — edit or delete one occurrence or the whole series
+4. CAL-074 — (fix) two occurrences of one series on the same day are told apart
 
 ## Deliberately not in this epic
 
