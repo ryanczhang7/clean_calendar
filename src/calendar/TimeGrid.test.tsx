@@ -976,3 +976,108 @@ describe("moving from the time grid (CAL-013 Block 5)", () => {
     expect(onChipCommand).toHaveBeenCalledWith(late, "down", second);
   });
 });
+
+// CAL-074 Contract, Block 4 (AC-1 to AC-4 at the time grid). Two occurrences
+// of ONE daily series - the same id, told apart only by occurrenceDate - are
+// both visible on Wednesday 14 October: the 13th's, 23:00 - 01:00, clipped
+// to 00:00 - 01:00, and the 14th's, clipped to 23:00 - 24:00. The 13th's
+// carries an override title, "Late shift", so the two names differ (Block 1).
+// Each block is its OWN occurrence: its name, onOpenEvent, and onChipCommand
+// all get the occurrence it was clipped from, not the first event in
+// `events` with that id. MECHANICAL; the tops are 0 x 48 and 23 x 48 px.
+describe("two occurrences of one series on one day are two blocks (CAL-074 Block 4)", () => {
+  type OnChipCommand = (
+    event: Event,
+    command: ChipCommand,
+    chip: HTMLElement,
+  ) => void;
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const LATE_SHIFT_NAME = "Late shift, Gym, 23:00 to 01:00, repeats daily";
+  const NIGHT_NAME = "Night, Gym, 23:00 to 01:00, repeats daily";
+
+  function occurrences(): { lateShift: Event; night: Event } {
+    const series = {
+      ...event("Night", oct(12, 23, 0), oct(13, 1, 0)),
+      recurrence: { freq: "daily" as const, until: null, tz },
+    };
+    return {
+      lateShift: {
+        ...series,
+        title: "Late shift",
+        startsAt: oct(13, 23, 0),
+        endsAt: oct(14, 1, 0),
+        occurrenceDate: "2026-10-13",
+      },
+      night: {
+        ...series,
+        startsAt: oct(14, 23, 0),
+        endsAt: oct(15, 1, 0),
+        occurrenceDate: "2026-10-14",
+      },
+    };
+  }
+
+  function renderDay(events: Event[]) {
+    media = installMatchMedia({ width: 1280, colorScheme: "light" });
+    const user = userEvent.setup();
+    const onOpenEvent = vi.fn<(event: Event, chip: HTMLElement) => void>();
+    const onChipCommand = vi.fn<OnChipCommand>();
+    render(
+      <MemoryRouter initialEntries={["/day/2026-10-14"]}>
+        <TimeGrid
+          days={[oct(14)]}
+          label="Wednesday 14 October 2026"
+          events={events}
+          kinds={KINDS}
+          now={NOW}
+          loading={false}
+          onOpenEvent={onOpenEvent}
+          onChipCommand={onChipCommand}
+        />
+      </MemoryRouter>,
+    );
+    /** The one chip in Wednesday's column whose block starts at `hour`:00. */
+    const chipAt = (hour: number): HTMLElement => {
+      const top = `${hour * HOUR_HEIGHT.desktop}px`;
+      const found = within(column("2026-10-14"))
+        .getAllByRole("button")
+        .filter((b) => blockOf(b).style.top === top);
+      expect(found, `blocks at ${hour}:00 (top ${top})`).toHaveLength(1);
+      return found[0] as HTMLElement;
+    };
+    return { user, onOpenEvent, onChipCommand, chipAt };
+  }
+
+  it('the 00:00 block is named "Late shift, ..." and the 23:00 block "Night, ..." - one of each', () => {
+    const { lateShift, night } = occurrences();
+    const { chipAt } = renderDay([lateShift, night]);
+    expect(within(column("2026-10-14")).getAllByRole("button")).toHaveLength(2);
+    expect([
+      chipAt(0).getAttribute("aria-label"),
+      chipAt(23).getAttribute("aria-label"),
+    ]).toStrictEqual([LATE_SHIFT_NAME, NIGHT_NAME]);
+  });
+
+  it("a click on the 23:00 block opens the 14 October occurrence; on the 00:00 block, the 13 October one", async () => {
+    const { lateShift, night } = occurrences();
+    const { user, onOpenEvent, chipAt } = renderDay([lateShift, night]);
+    await user.click(chipAt(23));
+    await user.click(chipAt(0));
+    expect(onOpenEvent.mock.calls.map(([e]) => e)).toStrictEqual([
+      night,
+      lateShift,
+    ]);
+  });
+
+  it("Delete and Alt+ArrowDown on the 23:00 block reach onChipCommand with the 14 October occurrence", () => {
+    const { lateShift, night } = occurrences();
+    const { onChipCommand, chipAt } = renderDay([lateShift, night]);
+    const block = chipAt(23);
+    fireEvent.keyDown(block, { key: "Delete" });
+    fireEvent.keyDown(block, { key: "ArrowDown", altKey: true });
+    expect(onChipCommand.mock.calls).toStrictEqual([
+      [night, "delete", block],
+      [night, "down", block],
+    ]);
+  });
+});

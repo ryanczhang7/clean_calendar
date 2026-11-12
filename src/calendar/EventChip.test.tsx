@@ -1244,3 +1244,57 @@ describe("CAL-057 a chip with a reminder (AC-5, Block 5)", () => {
     );
   });
 });
+
+// CAL-074 Contract, Block 3. Both variants put data-chip-key={chipKey(event)}
+// on the button: the id for a plain event, `<id>@<occurrenceDate>` for an
+// occurrence (Block 2, src/sync/useOccurrences.ts). The expected values are
+// written out by hand, not computed with chipKey. data-event-id stays the
+// series id. MECHANICAL.
+describe("CAL-074 the chip carries its occurrence's key (Block 3)", () => {
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const OCCURRENCE = ev({
+    recurrence: { freq: "daily", until: null, tz },
+    occurrenceDate: "2026-11-03",
+  });
+
+  it.each([
+    [
+      "chip",
+      "a plain event: the id",
+      TIMED,
+      "10000000-0000-4000-8000-000000000001",
+    ],
+    [
+      "block",
+      "a plain event: the id",
+      TIMED,
+      "10000000-0000-4000-8000-000000000001",
+    ],
+    [
+      "chip",
+      "an occurrence: id@occurrenceDate",
+      OCCURRENCE,
+      "10000000-0000-4000-8000-000000000001@2026-11-03",
+    ],
+    [
+      "block",
+      "an occurrence: id@occurrenceDate",
+      OCCURRENCE,
+      "10000000-0000-4000-8000-000000000001@2026-11-03",
+    ],
+  ] as const)(
+    "the %s variant, %s: data-chip-key is the occurrence key, and data-event-id is still the series id",
+    (variant, _case, event, key) => {
+      const chip =
+        variant === "block"
+          ? renderBlock(event, LIVE, 72)
+          : renderChip(event, LIVE);
+      expect(chip.tagName).toBe("BUTTON");
+      expect(chip).toHaveAttribute("data-chip-key", key);
+      expect(chip).toHaveAttribute(
+        "data-event-id",
+        "10000000-0000-4000-8000-000000000001",
+      );
+    },
+  );
+});
