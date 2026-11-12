@@ -476,7 +476,10 @@ function useOpenEventFromQuery(
     stores.overrides.getSnapshot,
   );
   const params = new URLSearchParams(search);
-  const raw = period.view === "day" ? params.get("event") : null;
+  const raw =
+    pathname.startsWith("/day/") && period.view === "day"
+      ? params.get("event")
+      : null;
   const pending = useRef<{ id: string; pathname: string } | null>(null);
   const seenKey = useRef<string | null>(null);
   const removedKey = useRef<string | null>(null);
