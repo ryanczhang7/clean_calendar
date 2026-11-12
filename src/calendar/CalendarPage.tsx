@@ -40,7 +40,7 @@ import { type OverridesStore, overridesStore } from "../sync/overridesStore";
 import { type ReminderActions, reminderActions } from "../sync/reminderActions";
 import { type RemindersStore, remindersStore } from "../sync/remindersStore";
 import { type SheetSync, sheetSync } from "../sync/sheetSync";
-import { useOccurrences } from "../sync/useOccurrences";
+import { occurrencesIn, useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
 import styles from "./CalendarPage.module.css";
 import { ChipRemindersContext } from "./chipReminders";
@@ -447,6 +447,85 @@ function useFocusEventFromState(store: EventsStore): void {
   });
 }
 
+/** CAL-058 Block 2: a well-formed `event` id; anything else opens nothing. */
+const EVENT_ID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * CAL-058 Contract, Blocks 2 and 3: `/day/{date}?event={id}` (a tapped
+ * reminder) opens that event's sheet once. Every location carrying the key
+ * on a day path is read, and the key is removed at once with a replace. The
+ * id stays pending for that pathname until it resolves against the day's
+ * occurrences - not before the overrides are read - and opens then, unless
+ * another sheet is already open, which drops it.
+ */
+function useOpenEventFromQuery(
+  period: Period,
+  sheetOpen: boolean,
+  open: (event: Event, opener: HTMLElement | null) => void,
+  stores: { events: EventsStore; overrides: OverridesStore },
+): void {
+  const { key, pathname, search, state } = useLocation();
+  const navigate = useNavigate();
+  const events = useSyncExternalStore(
+    stores.events.subscribe,
+    stores.events.getSnapshot,
+  );
+  const overrides = useSyncExternalStore(
+    stores.overrides.subscribe,
+    stores.overrides.getSnapshot,
+  );
+  const params = new URLSearchParams(search);
+  const raw =
+    pathname.startsWith("/day/") && period.view === "day"
+      ? params.get("event")
+      : null;
+  const pending = useRef<{ id: string; pathname: string } | null>(null);
+  const seenKey = useRef<string | null>(null);
+  const removedKey = useRef<string | null>(null);
+  if (seenKey.current !== key) {
+    seenKey.current = key;
+    if (raw !== null) {
+      pending.current = EVENT_ID.test(raw) ? { id: raw, pathname } : null;
+    } else if (pending.current?.pathname !== pathname) {
+      pending.current = null;
+    }
+  }
+
+  // Removed as soon as it is read, found or not (PO decision 1).
+  useEffect(() => {
+    if (raw === null || removedKey.current === key) return;
+    removedKey.current = key;
+    params.delete("event");
+    const rest = params.toString();
+    navigate(
+      { pathname, search: rest === "" ? "" : `?${rest}` },
+      { replace: true, state },
+    );
+  });
+
+  useEffect(() => {
+    const wanted = pending.current;
+    if (wanted === null || overrides.status === "loading") return;
+    const start = period.date;
+    const matches = occurrencesIn(
+      events.events,
+      overrides.overrides,
+      start,
+      nextMidnight(start),
+    ).filter((e) => e.id === wanted.id);
+    const date = dayKey(start);
+    const event = matches.find((e) => e.occurrenceDate === date) ?? matches[0];
+    if (event === undefined) return;
+    pending.current = null;
+    if (sheetOpen) return;
+    open(
+      event,
+      document.querySelector<HTMLElement>(`[data-event-id="${event.id}"]`),
+    );
+  });
+}
+
 function MonthPage(
   props: Stores & Opens & { first: Date; today: Date; selected: Date },
 ): JSX.Element {
@@ -574,9 +653,10 @@ export function CalendarPage(
   const actions = props.actions ?? eventActions;
   const overrides = props.overrideActions ?? overrideActions;
   const events = props.events ?? eventsStore;
+  const overridesRows = props.overrides ?? overridesStore;
   const edits = useEventEdits(actions, overrides, period.view === "month", {
     events,
-    overrides: props.overrides ?? overridesStore,
+    overrides: overridesRows,
   });
   useFocusEventFromState(events);
   const reminders = props.reminders ?? remindersStore;
@@ -606,7 +686,7 @@ export function CalendarPage(
       opener: cell,
     });
   };
-  const onOpenEvent = (event: Event, chip: HTMLElement) => {
+  const onOpenEvent = (event: Event, chip: HTMLElement | null) => {
     // CAL-025 Block 6: an occurrence's sheet carries its stored series row.
     const series =
       event.occurrenceDate === undefined
@@ -618,6 +698,11 @@ export function CalendarPage(
         : { mode: "edit", event, opener: chip, series },
     );
   };
+
+  useOpenEventFromQuery(period, sheet !== null, onOpenEvent, {
+    events,
+    overrides: overridesRows,
+  });
 
   // PO decision 3: N creates an all-day event on the selected day, in every
   // view. The listener outlives a render; it reads the latest selection.
