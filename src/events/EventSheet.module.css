@@ -199,13 +199,17 @@
   }
 }
 
+/* CAL-059: the docked panel sticks under the sticky top bar, not under the
+   viewport edge, and is shorter than the space below it by .main's padding
+   top and bottom, so it never reaches past the fold, never makes its row
+   taller than the month grid, and never covers the top bar. */
 @media (min-width: 1024px) {
   .sheet {
     position: sticky;
     inset: auto;
-    top: 0;
+    top: var(--size-topbar);
     flex: none;
-    height: 100dvh;
+    height: calc(100dvh - var(--size-topbar) - 2 * var(--space-4));
     border-left: 1px solid var(--color-border);
     box-shadow: var(--shadow-3);
   }
