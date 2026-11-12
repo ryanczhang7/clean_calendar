@@ -4192,3 +4192,204 @@ function heldOverridesStore(): {
     },
   };
 }
+
+// CAL-074 AC-1 to AC-5 (Contract Blocks 1, 4, 5 and 6), through the page on
+// the day view of Tuesday 3 November 2026. Block 1's fixture, read out: the
+// series CAL-058's tie-break case builds - "Night", 1 November 23:00 - 2
+// November 01:00, daily, in the device's zone - and ONE override row for the
+// 2026-11-02 occurrence setting title "Late shift" and nothing else, so the
+// two chips have different names. On the 3rd the 2nd's occurrence is clipped
+// to 00:00 - 01:00 and the 3rd's to 23:00 - 24:00; each chip's name carries
+// its occurrence's real times, 23:00 to 01:00. MECHANICAL: a chip is found
+// by its block's POSITION (the inline top, 48 px/h on the desktop: 0 px and
+// 23 x 48 = 1104 px), never by its name or by document order, because the
+// name and the order are what the defect gets wrong; the writes are pinned
+// with toStrictEqual; the move is Alt+ArrowDown on a time-grid block, 15
+// minutes later (CAL-013's "Alt+↓ on a focused week block" case, read out).
+describe("two occurrences of one series on the same day are told apart (CAL-074 AC-1 to AC-5)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const DAY = "Tuesday 3 November 2026";
+  const LATE_SHIFT_NAME = "Late shift, Gym, 23:00 to 01:00, repeats daily";
+  const NIGHT_NAME = "Night, Gym, 23:00 to 01:00, repeats daily";
+
+  /** Block 1: the series, with the 2 November override in `overrideRows`. */
+  function useNightSeries(): Event {
+    const night: Event = {
+      ...timed("Night", nov(1, 23), nov(2, 1)),
+      recurrence: { freq: "daily", until: null, tz: DEVICE_TZ },
+    };
+    useMoves([night]);
+    overrideRows = [
+      overrideOf(night.id, "2026-11-02", { title: "Late shift" }),
+    ];
+    return night;
+  }
+
+  /** The inline top of the block holding `el`; undefined if none does. */
+  function blockTop(el: Element | null): string | undefined {
+    let up = el?.parentElement ?? null;
+    while (up !== null && up.style.top === "") up = up.parentElement;
+    return up?.style.top;
+  }
+
+  /** The focused element, as [its block's top, its accessible name]. */
+  const focused = () => [
+    blockTop(document.activeElement),
+    document.activeElement?.getAttribute("aria-label"),
+  ];
+
+  /** The one chip in 3 November's column whose block's inline top is `top`. */
+  function chipAtTop(top: string): HTMLElement {
+    const column = document.querySelector<HTMLElement>(
+      '[data-day="2026-11-03"]',
+    );
+    expect(column, "no column marked data-day=2026-11-03").not.toBeNull();
+    const found = within(column as HTMLElement)
+      .queryAllByRole("button")
+      .filter((chip) => blockTop(chip) === top);
+    expect(found, `chips whose block starts at top ${top}`).toHaveLength(1);
+    return found[0] as HTMLElement;
+  }
+  const chipAt = (hour: number) => chipAtTop(`${hour * 48}px`);
+
+  /** The day view once both occurrences' blocks are in. */
+  async function dayWithBoth(): Promise<HTMLElement> {
+    const grid = await settledGrid(DAY);
+    await waitFor(() =>
+      expect(
+        within(grid).queryAllByRole("button", { name: /repeats daily$/ }),
+      ).toHaveLength(2),
+    );
+    return grid;
+  }
+
+  async function expectSheet(
+    title: string,
+    start: [string, string],
+    end: [string, string],
+  ): Promise<void> {
+    // Any sheet, then its name: a sheet on the wrong occurrence fails with
+    // a diff of the two titles rather than a timeout.
+    const sheet = await screen.findByRole("dialog");
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(sheet).toHaveAccessibleName(`Edit event: ${title}`);
+    expect(titleInput()).toHaveValue(title);
+    expect(
+      [
+        dateField("Start date"),
+        dateField("Start time"),
+        dateField("End date"),
+        dateField("End time"),
+      ].map((f) => (f as HTMLInputElement).value),
+    ).toStrictEqual([...start, ...end]);
+  }
+
+  it('AC-1: the block at 00:00 is the chip "Late shift, ..." and the block at 23:00 is "Night, ..." - one of each', async () => {
+    useNightSeries();
+    renderSeriesPage("/day/2026-11-03");
+    const grid = await dayWithBoth();
+    expect([
+      chipAt(0).getAttribute("aria-label"),
+      chipAt(23).getAttribute("aria-label"),
+    ]).toStrictEqual([LATE_SHIFT_NAME, NIGHT_NAME]);
+    expect(
+      within(grid).getAllByRole("button", { name: /^Night, / }),
+    ).toHaveLength(1);
+    expect(
+      within(grid).getAllByRole("button", { name: /^Late shift, / }),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "the 23:00 chip opens the 3 November occurrence, Night, 2026-11-03 23:00 to 2026-11-04 01:00",
+      23,
+      "Night",
+      ["2026-11-03", "23:00"],
+      ["2026-11-04", "01:00"],
+    ],
+    [
+      "the 00:00 chip opens the 2 November occurrence, Late shift, 2026-11-02 23:00 to 2026-11-03 01:00",
+      0,
+      "Late shift",
+      ["2026-11-02", "23:00"],
+      ["2026-11-03", "01:00"],
+    ],
+  ] as const)("AC-2: %s", async (_case, hour, title, start, end) => {
+    useNightSeries();
+    const { user } = renderSeriesPage("/day/2026-11-03");
+    await dayWithBoth();
+    await user.click(chipAt(hour));
+    await expectSheet(title, [...start], [...end]);
+  });
+
+  it('AC-3: Delete on the 23:00 chip, "This event only", cancels the 2026-11-03 occurrence: the Night chip goes, the Late shift chip stays', async () => {
+    const night = useNightSeries();
+    const { user, actions, over } = renderSeriesPage("/day/2026-11-03");
+    const grid = await dayWithBoth();
+    chipAt(23).focus();
+    await user.keyboard("{Delete}");
+    await confirmScope(user, await deleteDialog(), "This event only", "Delete");
+    await waitFor(() => expect(over.cancelOccurrence).toHaveBeenCalledTimes(1));
+    expect(over.cancelOccurrence.mock.calls[0]).toStrictEqual([
+      night.id,
+      "2026-11-03",
+    ]);
+    expect(actions.removeEvent).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(
+        within(grid).queryAllByRole("button", { name: /^Night, / }),
+      ).toHaveLength(0),
+    );
+    expect(
+      within(grid).getAllByRole("button", { name: LATE_SHIFT_NAME }),
+    ).toHaveLength(1);
+    expect(chipAt(0)).toHaveAccessibleName(LATE_SHIFT_NAME);
+  });
+
+  it('AC-4: Alt+ArrowDown on the 23:00 chip, "This event only", writes 23:15 - 01:15 for the 2026-11-03 occurrence; Late shift keeps its times; focus is on the moved Night chip', async () => {
+    const night = useNightSeries();
+    const { user, actions, over } = renderSeriesPage("/day/2026-11-03");
+    const grid = await dayWithBoth();
+    chipAt(23).focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      night.id,
+      "2026-11-03",
+      { startsAt: nov(3, 23, 15), endsAt: nov(4, 1, 15) },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    const moved = await within(grid).findByRole("button", {
+      name: "Night, Gym, 23:15 to 01:15, repeats daily",
+    });
+    expect(chipAtTop(`${23.25 * 48}px`)).toBe(moved);
+    expect(chipAt(0)).toHaveAccessibleName(LATE_SHIFT_NAME);
+    await waitFor(() =>
+      expect(focused()).toStrictEqual([
+        `${23.25 * 48}px`,
+        "Night, Gym, 23:15 to 01:15, repeats daily",
+      ]),
+    );
+    expect(moved).toHaveFocus();
+  });
+
+  it("AC-5: /day/2026-11-03?event={series id} opens the 3 November occurrence; closing it puts focus on the Night chip at 23:00, not the Late shift chip", async () => {
+    const night = useNightSeries();
+    const { user } = renderSeriesPage(`/day/2026-11-03?event=${night.id}`);
+    await dayWithBoth();
+    await expectSheet(
+      "Night",
+      ["2026-11-03", "23:00"],
+      ["2026-11-04", "01:00"],
+    );
+    await user.click(screen.getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await waitFor(() =>
+      expect(focused()).toStrictEqual([`${23 * 48}px`, NIGHT_NAME]),
+    );
+    expect(chipAt(23)).toHaveFocus();
+  });
+});

@@ -14,6 +14,7 @@ import type { Event, Kind } from "../data/rows";
 import { chipText } from "../domain/colour";
 import { reminderPhrase } from "../domain/reminder";
 import { MIN_BLOCK_HEIGHT } from "../domain/timeGrid";
+import { chipKey } from "../sync/useOccurrences";
 import { ChipRemindersContext } from "./chipReminders";
 import styles from "./EventChip.module.css";
 import { useColorScheme } from "./media";
@@ -215,6 +216,7 @@ export function EventChip(props: {
         data-neutral={kind.status === "removed" ? "true" : undefined}
         data-variant="block"
         data-event-id={event.id}
+        data-chip-key={chipKey(event)}
         data-sync={event.sync}
         style={filled}
         tabIndex={tabIndex}
@@ -249,6 +251,7 @@ export function EventChip(props: {
       data-allday={event.allDay ? "true" : "false"}
       data-neutral={kind.status === "removed" ? "true" : undefined}
       data-event-id={event.id}
+      data-chip-key={chipKey(event)}
       data-sync={event.sync}
       style={fill}
       tabIndex={tabIndex}

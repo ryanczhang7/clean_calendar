@@ -40,7 +40,7 @@ import { type OverridesStore, overridesStore } from "../sync/overridesStore";
 import { type ReminderActions, reminderActions } from "../sync/reminderActions";
 import { type RemindersStore, remindersStore } from "../sync/remindersStore";
 import { type SheetSync, sheetSync } from "../sync/sheetSync";
-import { occurrencesIn, useOccurrences } from "../sync/useOccurrences";
+import { chipKey, occurrencesIn, useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
 import styles from "./CalendarPage.module.css";
 import { ChipRemindersContext } from "./chipReminders";
@@ -101,6 +101,13 @@ const sameMonth = (a: Date, b: Date) =>
 /** The element that has focus: a button just clicked, or the cell `N` was pressed on. */
 const focused = (): HTMLElement | null =>
   document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+/**
+ * The chip of one occurrence, by `chipKey` (CAL-074 Block 5): two occurrences
+ * of one series on one day share `data-event-id`.
+ */
+const chipOf = (event: Event): HTMLElement | null =>
+  document.querySelector<HTMLElement>(`[data-chip-key="${chipKey(event)}"]`);
 
 /**
  * The selection of a period: in a month, the current selection when it lies
@@ -209,9 +216,8 @@ function useEventEdits(
     focus();
   }, [focusTick]);
 
-  const focusChip = (id: string) => {
-    focusNext.current = () =>
-      document.querySelector<HTMLElement>(`[data-event-id="${id}"]`)?.focus();
+  const focusChip = (event: Event) => {
+    focusNext.current = () => chipOf(event)?.focus();
     requestFocus();
   };
 
@@ -277,7 +283,7 @@ function useEventEdits(
       // The undo carries the token the move produced (Block 3).
       (row) => actions.updateEvent(event.id, before, row.updatedAt),
     );
-    if (ok && focusAfter) focusChip(event.id);
+    if (ok && focusAfter) focusChip(event);
   };
 
   const remove = (event: Event) =>
@@ -345,7 +351,7 @@ function useEventEdits(
         (row) => actions.updateEvent(event.id, before, row.updatedAt),
       );
     }
-    if (ok && asked.focusAfter) focusChip(event.id);
+    if (ok && asked.focusAfter) focusChip(event);
   };
 
   const onConfirm = (scope: EditScope) => {
@@ -519,10 +525,7 @@ function useOpenEventFromQuery(
     if (event === undefined) return;
     pending.current = null;
     if (sheetOpen) return;
-    open(
-      event,
-      document.querySelector<HTMLElement>(`[data-event-id="${event.id}"]`),
-    );
+    open(event, chipOf(event));
   });
 }
 
