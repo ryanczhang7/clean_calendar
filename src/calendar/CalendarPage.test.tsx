@@ -3877,6 +3877,31 @@ describe("/day/{date}?event={id} opens that event's sheet once (CAL-058 AC-1 to 
       },
     );
 
+    // Block 2: `/` is not a day path even when it shows today's day view
+    // (cc.view = "day"), so the key is ignored and kept there too. The page
+    // reads cc.view itself; the file's afterEach clears localStorage.
+    it('on / with cc.view = "day" (today\'s day view) the key is ignored and kept; the same id on /day/<today> opens', async () => {
+      localStorage.setItem("cc.view", "day");
+      const event = timed("Dentist", oct(14, 10), oct(14, 11));
+      useWrites([event]);
+      renderDeepLink([`/?event=${event.id}`]);
+      await screen.findByRole("grid", { name: "Wednesday 14 October 2026" });
+      await screen.findByRole("button", { name: DENTIST_NAME });
+      await flush();
+      expect(screen.queryByRole("dialog")).toBeNull();
+      expect(query()).toStrictEqual([["event", event.id]]);
+      expect(at()).toBe("at /");
+
+      await act(async () => go(`/day/2026-10-14?event=${event.id}`));
+      await expectSheetOn(
+        "Dentist",
+        "2026-10-14",
+        "10:00",
+        "2026-10-14",
+        "11:00",
+      );
+    });
+
     it("a cached event on another day opens nothing on the 3rd, and the key is still removed; on its own day it opens", async () => {
       const fifth = timed("Physio", nov(5, 10), nov(5, 11));
       useWrites([anchor(), fifth]);
