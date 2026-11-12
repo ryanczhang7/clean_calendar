@@ -120,15 +120,19 @@ export function TimeGrid(props: {
           .filter((e) => e.allDay && clipToDay(e, day) !== null)
           .sort(allDayOrder);
         // Overlap is decided by the CLIPPED interval for this day.
+        // Each clip keeps the occurrence it was cut from: two occurrences of
+        // one series can share an id on one day (CAL-074).
         const clipped: Event[] = [];
+        const originals: Event[] = [];
         for (const e of events) {
           if (e.allDay) continue;
           const clip = clipToDay(e, day);
           if (clip === null) continue;
           clipped.push({ ...e, startsAt: clip.start, endsAt: clip.end });
+          originals.push(e);
         }
         const layout = overlapColumns(clipped);
-        const blocks: Block[] = clipped.map((c) => {
+        const blocks: Block[] = clipped.map((c, i) => {
           const { top, height } = blockGeometry(
             c.startsAt,
             c.endsAt,
@@ -139,7 +143,7 @@ export function TimeGrid(props: {
             columns: 1,
           };
           return {
-            event: events.find((e) => e.id === c.id) ?? c,
+            event: originals[i] as Event,
             height,
             style: {
               top: `${top}px`,
