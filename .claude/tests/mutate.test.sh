@@ -1231,4 +1231,38 @@ rm -f "$FIX/ran-marker"
 reset_src
 h59_clear
 
+# ---------------------------------------------------------------------------
+describe "HARNESS-104: a target path with [brackets] reports the lines it really changed"
+
+# HARNESS-104, ported from trump-crime-family (its local HARNESS-089, found in
+# TCF-038 DV-3): src/pages/people/[slug].astro reported and logged
+# "0 line(s) changed" although the mutation applied. On Git Bash the MSYS
+# runtime converts /d/... to D:/... for a native program such as git.exe, but
+# not for an argument holding a glob character, and the backup's name keeps
+# the brackets - so `git diff --no-index` could not open it and the count was
+# an empty diff's. Linux does no conversion, so this block discriminates on
+# Git Bash only (the story's Out of scope says why that is accepted).
+BRK="$FIX/src/[slug].txt"
+printf 'container-type: inline-size;\n' > "$BRK"
+# Hashed by RELATIVE path, from inside the fixture: `sha "$BRK"` hands git the
+# same unconvertible absolute path, fails, and two empty hashes compare equal.
+brk_sha() { ( cd "$FIX" && git hash-object 'src/[slug].txt' ); }
+before="$(brk_sha)"
+assert_eq "HARNESS-104: control - the hash helper can read the bracketed file" 40 "${#before}"
+out="$(mutate 'src/[slug].txt' 's/inline-size/normal/' -- grep -c 'container-type: normal;' 'src/[slug].txt')"; rc=$?
+assert_eq "HARNESS-104 AC-1: the command saw the mutated line (exit 0)" "0" "$rc"
+assert_eq "HARNESS-104 AC-1: the header reports 1 line changed, as a whole line" 1 \
+  "$(whole_lines '=== mutate: src/[slug].txt (1 line(s) changed by s/inline-size/normal/) ===' "$out")"
+assert_eq "HARNESS-104 AC-1: the preview lists the removed and the added line" \
+  '  1 - container-type: inline-size;
+  1 + container-type: normal;' "$(preview_of "$out")"
+assert_contains "HARNESS-104 AC-1: the log records 1 line(s), not 0" \
+  "${TAB}src/[slug].txt${TAB}s/inline-size/normal/${TAB}1 line(s)${TAB}" "$(last_log)"
+assert_eq "HARNESS-104 AC-2: the bracketed file is byte-identical afterwards" "$before" "$(brk_sha)"
+assert_eq "HARNESS-104 AC-2: the restore listing names the line it put back" \
+  '  1: container-type: inline-size;' "$(listing_of "$out")"
+rm -f "$BRK"
+reset_src
+h59_clear
+
 summary "mutate"

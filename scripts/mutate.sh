@@ -377,8 +377,15 @@ fi
 # every config that could change its output is pinned off - core.autocrlf in
 # particular, which otherwise prints CRLF warnings on Windows. It exits 1 when
 # the files differ, which is the expected case, so its status is not used.
-git -c core.autocrlf=false -c core.quotepath=off -c diff.noprefix=false \
-  diff --no-index --no-color --no-ext-diff --no-textconv -U0 -- "$BAK" "$NEW" > "$DIFF" 2>/dev/null
+#
+# Run from inside $MUTDIR on the two basenames (HARNESS-104). git.exe is a
+# native program on Git Bash, and MSYS converts a /d/... argument to D:/... for
+# it - except when the argument holds a glob character, which $SAFE keeps from
+# a path like src/pages/[slug].astro. git then could not open the backup, the
+# diff came out empty, and a mutation that applied reported 0 lines changed.
+# A relative name needs no conversion.
+( cd "$MUTDIR" && git -c core.autocrlf=false -c core.quotepath=off -c diff.noprefix=false \
+  diff --no-index --no-color --no-ext-diff --no-textconv -U0 -- "${BAK##*/}" "${NEW##*/}" ) > "$DIFF" 2>/dev/null
 
 # One pass over the diff. The count is, per hunk `@@ -a[,b] +c[,d] @@`, the
 # larger of b and d (a missing count is 1), summed over hunks: every line
