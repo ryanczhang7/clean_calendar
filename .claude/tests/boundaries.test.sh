@@ -4183,20 +4183,66 @@ assert_eq "HARNESS-102 AC-7: and the run exits non-zero" non-zero "$(k_rc)"
 
 # --- C-9: three entries from this tree, copied verbatim ----------------------
 # The fixtures that were NOT written from this contract's reading of the
-# format. Each section is read out of the real story file at run time, byte
-# for byte (these stories are DONE and never edited), and none carries a
+# format. Each story's ## Regressions and ## Amendments were copied byte for
+# byte from this repository's story file at d686c39, are held under
+# .claude/tests/fixtures/boundaries/, are pinned by the checksum assertion
+# below, and are never read from docs/backlog, which a consumer does not have
+# or holds a different story under the same id (HARNESS-106). None carries a
 # record, so each must be refused naming its ids. The spellings: HARNESS-089
 # `### R-1`, HARNESS-095 `**R-1`, HARNESS-099 `- **R-1` with a second
 # `- **R-1 before side, ...` line under the same id.
+# The five files, so that selftest-needed.sh maps a change to any of them to
+# this suite: .claude/tests/fixtures/boundaries/HARNESS-089.md,
+# .claude/tests/fixtures/boundaries/HARNESS-095.md,
+# .claude/tests/fixtures/boundaries/HARNESS-099.md,
+# .claude/tests/fixtures/boundaries/HARNESS-102.md,
+# .claude/tests/fixtures/boundaries/.gitattributes (which keeps them byte for
+# byte under a consumer's own attributes and core.autocrlf).
 k_real() { # <story> -> stdout: its ## Regressions and ## Amendments, verbatim
-  local f="$REPO_ROOT/docs/backlog/stories/$1.md" s
+  local f="$TESTS_DIR/fixtures/boundaries/$1.md" s
   for s in Regressions Amendments; do
     printf '## %s\n' "$s"
     awk -v h="## $s" 'index($0, h) == 1 { on = 1; next } on && /^## / { exit } on { print }' "$f"
   done
 }
+# k_real_reg <story> -> stdout: its ## Regressions, verbatim, for the R-3 twin
+# (f) below. A function, not an inline awk with the path as its argument: the
+# path is expanded when the function runs, so under k_at_decoy it is expanded
+# with the decoy root (HARNESS-106 C-4).
+k_real_reg() {
+  awk 'index($0, "## Regressions") == 1 { on = 1 } on && /^## / && index($0, "## Regressions") != 1 { exit } on { print }' \
+    "$TESTS_DIR/fixtures/boundaries/$1.md"
+}
+# HARNESS-106: the decoy root, a consumer's backlog. It holds no HARNESS-095,
+# -099 or -102 (the first consumer's state) and a HARNESS-089 that is an
+# unrelated local story with neither section (the second consumer's). Every
+# reader call below runs under it, so a reader that goes back to the
+# repository's own backlog fails here, upstream, as it would in a consumer.
+# k_at_decoy runs one command with REPO_ROOT set to the decoy and puts it back;
+# no subshell, because $out and $rc are globals (see the comment above KB=).
+# Only the reader call is wrapped: k_branch reaches k_models, which reads
+# models.conf under the real root and must keep doing so.
+K_DECOY="$(mktemp -d 2>/dev/null || mktemp -d -t harness.XXXXXX)"
+mkdir -p "$K_DECOY/docs/backlog/stories"
+printf -- '---\nid: HARNESS-089\ntitle: An unrelated local story\nphase: DONE\n---\n\n## Context\n\nA story of this project whose id happens to collide with an upstream one.\n' \
+  > "$K_DECOY/docs/backlog/stories/HARNESS-089.md"
+k_at_decoy() { local r="$REPO_ROOT" e; REPO_ROOT="$K_DECOY"; "$@"; e=$?; REPO_ROOT="$r"; return "$e"; }
+# AC-2: the four copies are the bytes taken at d686c39, in every tree the suite
+# ships to. One line per file, `<CRC> <bytes> <name>`; a missing file gives a
+# line with no CRC and no size, which does not match, so nothing is skipped.
+k_sums() {
+  local id
+  for id in HARNESS-089 HARNESS-095 HARNESS-099 HARNESS-102; do
+    printf '%s %s.md\n' "$({ cksum < "$TESTS_DIR/fixtures/boundaries/$id.md"; } 2>/dev/null)" "$id"
+  done
+}
+assert_eq "HARNESS-106 AC-2: each vendored copy under fixtures/boundaries holds the bytes taken at d686c39: its CRC, size and file name, all four" \
+  "679495376 6306 HARNESS-089.md
+1572516679 6026 HARNESS-095.md
+2058360084 6957 HARNESS-099.md
+3699688268 16374 HARNESS-102.md" "$(k_sums)"
 for real in HARNESS-089 HARNESS-095 HARNESS-099; do
-  k_real "$real" > "$KB"; k_branch T-113
+  k_at_decoy k_real "$real" > "$KB"; k_branch T-113
   assert_eq "HARNESS-102 C-9: $real's own ## Regressions and ## Amendments, verbatim, are refused: one FAIL for R-1, one for AM-1, no headless FAIL, non-zero" \
     "1 1 0 0 non-zero" "$(k_fail Regressions R-1) $(k_fail Amendments AM-1) $(k_headless Regressions R) $(k_headless Amendments AM) $(k_rc)"
 done
@@ -4366,11 +4412,14 @@ k_unread_refused "a closed fence holding a head-shaped line whose id is no head 
 printf '## Regressions\n\nA note about a test, with its output:\n\n```\n### R-1 (inside a fence)\n 1 failed\n```\n\n<!-- ### R-2 (inside a comment) -->\n' > "$KB"; k_branch T-116
 assert_eq "HARNESS-102 R-3: twin: heads only inside a fence and a comment, none outside: the headless FAIL and no unreadable one" \
   "1 0" "$(k_headless Regressions R) $(k_unreadable Regressions)"
-# (f) This story's own ## Regressions, R-1 to R-3, read verbatim from the real
-# file at run time (as the C-9 cases are), on a story the base has no copy of:
-# every id is new and recorded, and its pasted output holds no hidden head.
-awk 'index($0, "## Regressions") == 1 { on = 1 } on && /^## / && index($0, "## Regressions") != 1 { exit } on { print }' \
-  "$REPO_ROOT/docs/backlog/stories/HARNESS-102.md" > "$KB"; k_branch T-117
+# (f) This story's own ## Regressions, R-1 to R-3, verbatim, on a story the
+# base has no copy of: every id is new and recorded, and its pasted output
+# holds no hidden head. As for the C-9 cases, the section was copied byte for
+# byte from HARNESS-102's story file at d686c39, is held under
+# .claude/tests/fixtures/boundaries/, is pinned by the checksum assertion
+# above, and is never read from docs/backlog, which a consumer does not have
+# (HARNESS-106).
+k_at_decoy k_real_reg HARNESS-102 > "$KB"; k_branch T-117
 assert_eq "HARNESS-102 R-3: twin: HARNESS-102's own ## Regressions, verbatim, is not refused as unreadable and gets the ok line" \
   "0 1" "$(k_unreadable Regressions) $(grep -cxF -- "ok    ## Regressions: every new entry carries an adjudication record" <<< "$out")"
 
@@ -4409,5 +4458,6 @@ k_readable "the example head quoted inline in a sentence of prose with no fence,
 git -C "$FIX" checkout -q main 2>/dev/null
 git -C "$FIX" reset -q --hard "$k_main_before" 2>/dev/null
 rm -f "$KB"
+rm -rf "$K_DECOY"
 
 summary "boundaries"

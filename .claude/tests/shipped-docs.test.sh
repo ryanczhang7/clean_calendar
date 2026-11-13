@@ -153,6 +153,58 @@ REFS
   return 0
 }
 
+# --- what a suite may read (HARNESS-106) -------------------------------------
+# docs/ is the project's own, never the harness's: docs-shipped.conf declares
+# docs/backlog/stories/ written, and a refresh ships no story. A suite that
+# reads under the real checkout's docs/ therefore reads, in a consumer, a file
+# that is absent or is somebody else's (HARNESS-106 Context: boundaries read
+# four upstream story files and failed four assertions in a consumer). A
+# fixture a suite needs lives under .claude/tests/fixtures/, which ships.
+#
+# suite_docs_files <root>   The scanned files, relative to <root>, in LC_ALL=C
+# name order: every <root>/.claude/tests/*.sh, top level only (the suites,
+# _lib.sh, _spawns.sh).
+#
+# suite_docs_reads <root>   One line `<file>:<line number>` per line of a
+# scanned file that is not a whole-line comment (first non-blank character `#`)
+# and matches SDR_RE: one of the two names _lib.sh gives the real checkout,
+# REPO_ROOT or TESTS_DIR/../.., then any of `}` and `"` (so the braced and the
+# quoted-root spellings count), then /docs as a whole path component (so
+# docs-shipped.conf and a docsy/ never match). Silent when nothing reads there.
+# No exception for a `ship` entry either: docs/wiki/audits/TEMPLATE.md is added
+# only where the project has none, so in a consumer it is the consumer's.
+#
+# Written limit: the rule reads text, not data flow. A path built in a variable
+# first (d="$REPO_ROOT", then "$d/docs/..."), a cd "$REPO_ROOT" followed by a
+# relative docs/..., and git -C "$REPO_ROOT" show HEAD:docs/... are not seen.
+#
+# This suite is one of the files it scans, and its fixtures below hold
+# offending lines as data. So the two root names are spelled in pieces
+# wherever /docs follows them, here and in the fixtures; no file is exempted
+# by name. The real-tree assertion is the check that this was done.
+# [.] rather than \. because awk -v processes backslash escapes.
+SDR_RE='(REPO''_ROOT|TESTS''_DIR/[.][.]/[.][.])[}"]*/docs(["'\''/ ]|$)'
+suite_docs_files() {
+  local root="$1" f
+  for f in "$root"/.claude/tests/*.sh; do
+    [ -f "$f" ] && printf '%s\n' "${f#"$root"/}"
+  done | LC_ALL=C sort
+}
+suite_docs_reads() {
+  local root="$1" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    awk -v file="$f" -v re="$SDR_RE" '
+      { l = $0; sub(/^[ \t]+/, "", l) }
+      substr(l, 1, 1) == "#" { next }
+      $0 ~ re { print file ":" FNR }
+    ' "$root/$f"
+  done <<SUITES
+$(suite_docs_files "$root")
+SUITES
+  return 0
+}
+
 # --- a compliant fixture, by construction ------------------------------------
 # One command, one agent, one skill (and a skill reference file one level
 # down), and a conf. Their wording is nobody's contract. Every extraction edge
@@ -289,5 +341,44 @@ printf 'Score each mutant against `docs/wiki/audits/CHECKLIST.md`.\n' >> "$d/$AU
 printf 'written | docs/wiki/audits/\n' >> "$d/$CONF"
 assert_eq "a path under a written directory is covered whatever its basename: the limit" \
   "" "$(shipped_docs_problems "$d")"
+
+# ---------------------------------------------------------------------------
+describe "no suite reads under the real checkout's docs/ (HARNESS-106 AC-3)"
+
+assert_eq "HARNESS-106 AC-3: suite_docs_reads over the real tree prints nothing: no suite line reads the project's own docs, which a consumer does not share" \
+  "" "$(suite_docs_reads "$REPO_ROOT")"
+n_suites="$(suite_docs_files "$REPO_ROOT" | awk 'END { print NR }')"
+if [ "$n_suites" -ge 30 ]; then
+  _ok "HARNESS-106 AC-3: the rule scans at least 30 shell files of the real tree's .claude/tests"
+else
+  _bad "HARNESS-106 AC-3: the rule scans at least 30 shell files of the real tree's .claude/tests" "scanned $n_suites"
+fi
+
+# The fixture of C-5. The root names are held in pieces (see SDR_RE above), so
+# no line of this suite is itself an offending line.
+SDR_R='REPO''_ROOT'; SDR_T='TESTS''_DIR'
+g="$WORK/suite-reads"; mkdir -p "$g/.claude/tests"
+printf '%s\n' "X=\"\$$SDR_R/docs\"" > "$g/.claude/tests/_lib.sh"
+{
+  printf '%s\n' '#!/usr/bin/env bash'
+  printf '%s\n' "# cat \"\$$SDR_R/docs/backlog/stories/T-1.md\""
+  printf '%s\n' "cat \"\$$SDR_R/docs/backlog/stories/T-1.md\""
+  printf '%s\n' "f=\"\${$SDR_R}/docs/wiki/architecture.md\""
+  printf '%s\n' "ls \"\$$SDR_R\"/docs/backlog"
+  printf '%s\n' 'cat "$FIX/docs/backlog/stories/T-1.md" "$root/docs/wiki/stack.md"'
+  printf '%s\n' "cat \"\$$SDR_R/.claude/harness/docs-shipped.conf\""
+  printf '%s\n' "cat \"\$$SDR_T/../../docs/backlog/README.md\""
+} > "$g/.claude/tests/a.test.sh"
+assert_eq "HARNESS-106 AC-3: a fixture holding each spelling, in a suite and in _lib.sh, gets one file-and-line per reading line, and none for the comment, the other roots or docs-shipped.conf" \
+  ".claude/tests/_lib.sh:1
+.claude/tests/a.test.sh:3
+.claude/tests/a.test.sh:4
+.claude/tests/a.test.sh:5
+.claude/tests/a.test.sh:8" "$(suite_docs_reads "$g")"
+: > "$g/.claude/tests/_lib.sh"
+awk 'NR != 3 && NR != 4 && NR != 5 && NR != 8' "$g/.claude/tests/a.test.sh" > "$g/a.tmp" \
+  && mv "$g/a.tmp" "$g/.claude/tests/a.test.sh"
+assert_eq "HARNESS-106 AC-3: twin: the same fixture with only the comment, the other roots and docs-shipped.conf left prints nothing" \
+  "" "$(suite_docs_reads "$g")"
 
 summary "shipped-docs"

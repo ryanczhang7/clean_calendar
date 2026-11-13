@@ -384,7 +384,13 @@ fi
 # a path like src/pages/[slug].astro. git then could not open the backup, the
 # diff came out empty, and a mutation that applied reported 0 lines changed.
 # A relative name needs no conversion.
-( cd "$MUTDIR" && git -c core.autocrlf=false -c core.quotepath=off -c diff.noprefix=false \
+#
+# core.longpaths is forced on (HARNESS-105). git.exe refuses a path over 260
+# characters unless it is, and the backup's name is the whole target path
+# flattened - so a target given by absolute path under a deep root put the
+# backup past the limit, git could not open it, the diff came out empty and a
+# mutation that applied reported 0 lines changed. Off Windows it does nothing.
+( cd "$MUTDIR" && git -c core.longpaths=true -c core.autocrlf=false -c core.quotepath=off -c diff.noprefix=false \
   diff --no-index --no-color --no-ext-diff --no-textconv -U0 -- "${BAK##*/}" "${NEW##*/}" ) > "$DIFF" 2>/dev/null
 
 # One pass over the diff. The count is, per hunk `@@ -a[,b] +c[,d] @@`, the

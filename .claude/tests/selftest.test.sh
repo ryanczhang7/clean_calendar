@@ -528,7 +528,7 @@ while read -r n v; do
   [ "$got" = "$v" ] || wrong="$wrong $n=${got:-<none>}(want $v)"
 done <<'COUNTS'
 attest 179
-boundaries 685
+boundaries 686
 briefs 31
 ci-local 52
 classify 55
@@ -539,7 +539,7 @@ gates 1002
 grep-count 38
 host-load 72
 lib 324
-mutate 322
+mutate 328
 new-story 79
 phase 73
 phase-guard 388
@@ -555,7 +555,7 @@ security-audit 52
 selftest 366
 selftest-needed 620
 settings 70
-shipped-docs 14
+shipped-docs 18
 sigpipe 91
 spawns 69
 story 97
