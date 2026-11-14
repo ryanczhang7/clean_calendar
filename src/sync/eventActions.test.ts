@@ -31,6 +31,7 @@ import {
   type EventActions,
   eventActions,
 } from "./eventActions";
+import { appDrain } from "./startSync";
 
 vi.mock(
   "../lib/supabase",
@@ -505,5 +506,104 @@ describe("createOutboxEventActions (CAL-015 AC-1, Block 4)", () => {
       (await appDb.outbox.toArray()).map((o) => [o.op, o.table, o.id]),
     ).toStrictEqual([["insert", "events", U1]]);
     await Promise.all(appDb.tables.map((t) => t.clear()));
+  });
+
+  // CAL-061 AC-1, Contract Block 3: the factory's default `online`, which is
+  // what the app runs on, for every action and both halves. One case per
+  // action and per half, so one mutant of the default shows every action's
+  // assertion red. Each action first resolves ok - a conflict asks no drain
+  // in either half and would make the offline assertion vacuous.
+  const DEFAULT_ONLINE_ACTIONS: Array<
+    [string, (outbox: EventActions) => Promise<Result<Event>>]
+  > = [
+    ["createEvent", (outbox) => outbox.createEvent(NEW_EVENT)],
+    [
+      "updateEvent",
+      async (outbox) => {
+        await db.events.put(CACHED);
+        return outbox.updateEvent(SWIM.id, { title: "Lift" }, UPDATED_AT);
+      },
+    ],
+    [
+      "removeEvent",
+      async (outbox) => {
+        await db.events.put(CACHED);
+        return outbox.removeEvent(CACHED);
+      },
+    ],
+    [
+      "restoreEvent",
+      async (outbox) => {
+        await db.events.put({ ...CACHED, deletedAt: T1 });
+        return outbox.restoreEvent({ ...CACHED, deletedAt: T1 });
+      },
+    ],
+  ];
+
+  it.each(DEFAULT_ONLINE_ACTIONS)(
+    "with no online argument and the browser online, %s starts one drain run (CAL-061 AC-1)",
+    async (_name, act) => {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: true,
+      });
+      const outbox = createOutboxEventActions(db, { run });
+      expect((await act(outbox)).status).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(DEFAULT_ONLINE_ACTIONS)(
+    "with no online argument and the browser offline, %s starts no drain run (CAL-061 AC-1)",
+    async (_name, act) => {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: false,
+      });
+      const outbox = createOutboxEventActions(db, { run });
+      expect((await act(outbox)).status).toBe("ok");
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  // CAL-061 R-1: the default reads navigator.onLine when the action runs, not
+  // when the factory is built - the app's singleton is built at import.
+  it("with no online argument, built while the browser was offline, createEvent starts one drain run once the browser came online after the actions were built (CAL-061 AC-1)", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxEventActions(db, { run });
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: true,
+    });
+    expect((await outbox.createEvent(NEW_EVENT)).status).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  // CAL-061 AC-3, Contract Block 5: the app's own eventActions singleton,
+  // online, asks the app's drain to run. A spy on the real appDrain - not a
+  // module mock of ./startSync - so the singleton's real construction (its
+  // third argument, or the absence of one) stays in the path.
+  it("the app's eventActions, with the browser online, ask the app's drain to run once for a write (CAL-061 AC-3)", async () => {
+    const { db: appDb } = await import("./db");
+    await Promise.all(appDb.tables.map((t) => t.clear()));
+    try {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: true,
+      });
+      const drainRun = vi
+        .spyOn(appDrain, "run")
+        .mockResolvedValue({ sent: 0, stoppedAt: "end" });
+      await expect(eventActions.createEvent(NEW_EVENT)).resolves.toStrictEqual({
+        status: "ok",
+        row: created,
+      });
+      expect(drainRun).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.all(appDb.tables.map((t) => t.clear()));
+    }
   });
 });
