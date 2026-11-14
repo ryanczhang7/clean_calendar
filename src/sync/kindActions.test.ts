@@ -20,6 +20,7 @@ import {
   type KindActions,
   kindActions,
 } from "./kindActions";
+import { appDrain } from "./startSync";
 
 vi.mock(
   "../lib/supabase",
@@ -349,5 +350,95 @@ describe("createOutboxKindActions (CAL-015 Block 4)", () => {
       (await appDb.outbox.toArray()).map((o) => [o.op, o.table, o.id]),
     ).toStrictEqual([["insert", "kinds", U1]]);
     await Promise.all(appDb.tables.map((t) => t.clear()));
+  });
+
+  // CAL-061 AC-2, Contract Block 3: the factory's default `online`, which is
+  // what the app runs on, for every action and both halves. One case per
+  // action and per half, so one mutant of the default shows every action's
+  // assertion red. Each action first resolves ok - a conflict asks no drain
+  // in either half and would make the offline assertion vacuous.
+  const DEFAULT_ONLINE_ACTIONS: Array<
+    [string, (outbox: KindActions) => Promise<Result<Kind>>]
+  > = [
+    ["addKind", (outbox) => outbox.addKind(NEW_KIND)],
+    [
+      "updateKind",
+      async (outbox) => {
+        await db.kinds.put(CACHED);
+        return outbox.updateKind(CACHED, { name: "Workouts" });
+      },
+    ],
+    [
+      "deleteKind",
+      async (outbox) => {
+        await db.kinds.put(CACHED);
+        return outbox.deleteKind(CACHED);
+      },
+    ],
+  ];
+
+  it.each(DEFAULT_ONLINE_ACTIONS)(
+    "with no online argument and the browser online, %s starts one drain run (CAL-061 AC-2)",
+    async (_name, act) => {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: true,
+      });
+      const outbox = createOutboxKindActions(db, { run });
+      expect((await act(outbox)).status).toBe("ok");
+      expect(run).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(DEFAULT_ONLINE_ACTIONS)(
+    "with no online argument and the browser offline, %s starts no drain run (CAL-061 AC-2)",
+    async (_name, act) => {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: false,
+      });
+      const outbox = createOutboxKindActions(db, { run });
+      expect((await act(outbox)).status).toBe("ok");
+      expect(run).not.toHaveBeenCalled();
+    },
+  );
+
+  // CAL-061 R-1: the default reads navigator.onLine when the action runs, not
+  // when the factory is built - the app's singleton is built at import.
+  it("with no online argument, built while the browser was offline, addKind starts one drain run once the browser came online after the actions were built (CAL-061 AC-2)", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxKindActions(db, { run });
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: true,
+    });
+    expect((await outbox.addKind(NEW_KIND)).status).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  // CAL-061 AC-3, Contract Block 5: the app's own kindActions singleton,
+  // online, asks the app's drain to run. A spy on the real appDrain - not a
+  // module mock of ./startSync - so the singleton's real construction (its
+  // third argument, or the absence of one) stays in the path.
+  it("the app's kindActions, with the browser online, ask the app's drain to run once for a write (CAL-061 AC-3)", async () => {
+    const { db: appDb } = await import("./db");
+    await Promise.all(appDb.tables.map((t) => t.clear()));
+    try {
+      Object.defineProperty(navigator, "onLine", {
+        configurable: true,
+        value: true,
+      });
+      const drainRun = vi
+        .spyOn(appDrain, "run")
+        .mockResolvedValue({ sent: 0, stoppedAt: "end" });
+      const result = await kindActions.addKind(NEW_KIND);
+      expect(result.status).toBe("ok");
+      expect(drainRun).toHaveBeenCalledTimes(1);
+    } finally {
+      await Promise.all(appDb.tables.map((t) => t.clear()));
+    }
   });
 });
