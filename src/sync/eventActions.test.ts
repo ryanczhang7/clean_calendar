@@ -566,6 +566,22 @@ describe("createOutboxEventActions (CAL-015 AC-1, Block 4)", () => {
     },
   );
 
+  // CAL-061 R-1: the default reads navigator.onLine when the action runs, not
+  // when the factory is built - the app's singleton is built at import.
+  it("with no online argument, built while the browser was offline, createEvent starts one drain run once the browser came online after the actions were built (CAL-061 AC-1)", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxEventActions(db, { run });
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: true,
+    });
+    expect((await outbox.createEvent(NEW_EVENT)).status).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   // CAL-061 AC-3, Contract Block 5: the app's own eventActions singleton,
   // online, asks the app's drain to run. A spy on the real appDrain - not a
   // module mock of ./startSync - so the singleton's real construction (its

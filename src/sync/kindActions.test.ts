@@ -403,6 +403,22 @@ describe("createOutboxKindActions (CAL-015 Block 4)", () => {
     },
   );
 
+  // CAL-061 R-1: the default reads navigator.onLine when the action runs, not
+  // when the factory is built - the app's singleton is built at import.
+  it("with no online argument, built while the browser was offline, addKind starts one drain run once the browser came online after the actions were built (CAL-061 AC-2)", async () => {
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: false,
+    });
+    const outbox = createOutboxKindActions(db, { run });
+    Object.defineProperty(navigator, "onLine", {
+      configurable: true,
+      value: true,
+    });
+    expect((await outbox.addKind(NEW_KIND)).status).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
   // CAL-061 AC-3, Contract Block 5: the app's own kindActions singleton,
   // online, asks the app's drain to run. A spy on the real appDrain - not a
   // module mock of ./startSync - so the singleton's real construction (its
