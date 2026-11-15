@@ -183,6 +183,21 @@ describe("createSyncStateStore (Block 7)", () => {
     await vi.waitFor(() => expect(store.getSnapshot().online).toBe(true));
   });
 
+  // CAL-063 AC-1: the app's own `syncState` is built with no target, so it
+  // reaches the window only through the fallback at syncState.ts:56. Two
+  // arguments, deliberately - not `window`, not the exported store.
+  it("a store built with no target hears the window go offline and come back online", () => {
+    const store = createSyncStateStore(db, drain);
+    cleanups.push(store.subscribe(() => {}));
+    // Control: online before any event, so the `false` below cannot be the
+    // value read at subscribe.
+    expect(store.getSnapshot().online).toBe(true);
+    setOnline(false);
+    expect(store.getSnapshot().online).toBe(false);
+    setOnline(true);
+    expect(store.getSnapshot().online).toBe(true);
+  });
+
   it("getSnapshot is the same object between changes, a new one after", async () => {
     const store = createSyncStateStore(db, drain, window);
     cleanups.push(store.subscribe(() => {}));
@@ -205,6 +220,75 @@ describe("createSyncStateStore (Block 7)", () => {
     setOnline(false);
     await new Promise((done) => setTimeout(done, 30));
     expect(listener).not.toHaveBeenCalled();
+  });
+
+  // CAL-063 AC-2: the handlers are removed by type and by function. The
+  // target is passed explicitly so these cases do not depend on :56. jsdom,
+  // React and Testing Library may add window listeners of their own, so every
+  // count is filtered to the "online" / "offline" types.
+  describe("after the last unsubscribe, the window's online and offline handlers", () => {
+    const NETWORK = ["online", "offline"] as const;
+    type NetworkType = (typeof NETWORK)[number];
+    const spyWindow = () => {
+      const add = vi.spyOn(window, "addEventListener");
+      const remove = vi.spyOn(window, "removeEventListener");
+      cleanups.push(() => {
+        add.mockRestore();
+        remove.mockRestore();
+      });
+      const fns = (spy: typeof add | typeof remove, type: NetworkType) =>
+        spy.mock.calls
+          .filter((call) => call[0] === type)
+          .map((call) => call[1] as unknown);
+      return { add, remove, fns };
+    };
+
+    it("are removed: removeEventListener gets each type once, with the function addEventListener got for it", () => {
+      const { add, remove, fns } = spyWindow();
+      const store = createSyncStateStore(db, drain, window);
+      const stop = store.subscribe(() => {});
+      const added = {
+        online: fns(add, "online"),
+        offline: fns(add, "offline"),
+      };
+      expect({
+        online: added.online.length,
+        offline: added.offline.length,
+      }).toStrictEqual({ online: 1, offline: 1 });
+
+      stop();
+      const summary = (type: NetworkType) => {
+        const removed = fns(remove, type);
+        return {
+          removeCalls: removed.length,
+          removedTheAddedFunction: removed.some((fn) => fn === added[type][0]),
+        };
+      };
+      expect({
+        online: summary("online"),
+        offline: summary("offline"),
+      }).toStrictEqual({
+        online: { removeCalls: 1, removedTheAddedFunction: true },
+        offline: { removeCalls: 1, removedTheAddedFunction: true },
+      });
+    });
+
+    it("are not left behind: a fresh subscribe afterwards leaves exactly one handler per type attached", () => {
+      const { add, remove, fns } = spyWindow();
+      const store = createSyncStateStore(db, drain, window);
+      const stop = store.subscribe(() => {});
+      stop();
+      cleanups.push(store.subscribe(() => {}));
+      // Per type: the functions added, minus those removed, by identity.
+      const attached = (type: NetworkType) => {
+        const removed = fns(remove, type);
+        return fns(add, type).filter((fn) => !removed.includes(fn)).length;
+      };
+      expect({
+        online: attached("online"),
+        offline: attached("offline"),
+      }).toStrictEqual({ online: 1, offline: 1 });
+    });
   });
 });
 
