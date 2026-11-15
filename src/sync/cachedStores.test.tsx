@@ -276,6 +276,47 @@ describe("the first subscribe reads the cache (Block 4)", () => {
   });
 });
 
+// CAL-062 AC-1 (Contract Block 3): the liveQuery stops only when the LAST
+// listener leaves. One of two leaving must not silence the one that stays.
+describe("one of two listeners leaving keeps the stream for the other (CAL-062 AC-1)", () => {
+  it("events: after one of two listeners unsubscribes, a cache write still reaches the remaining listener and the snapshot", async () => {
+    const store = createCachedEventsStore(db, sync);
+    const leaves = vi.fn();
+    const stays = vi.fn();
+    const stopLeaving = store.subscribe(leaves);
+    cleanups.push(store.subscribe(stays));
+    await vi.waitFor(() => expect(store.getSnapshot().status).toBe("ready"));
+    stopLeaving();
+    leaves.mockClear();
+    stays.mockClear();
+    const row = ev(1, at(10, 14, 9), at(10, 14, 10), { title: "After" });
+    await db.events.put(row);
+    await vi.waitFor(() => {
+      expect(stays).toHaveBeenCalled();
+      expect(store.getSnapshot().events).toStrictEqual([row]);
+    });
+    expect(leaves).not.toHaveBeenCalled();
+  });
+
+  it("kinds: after one of two listeners unsubscribes, a cache write still reaches the remaining listener and the snapshot", async () => {
+    const store = createCachedKindsStore(db, seed, sync);
+    const leaves = vi.fn();
+    const stays = vi.fn();
+    const stopLeaving = store.subscribe(leaves);
+    cleanups.push(store.subscribe(stays));
+    await vi.waitFor(() => expect(store.getSnapshot().status).toBe("ready"));
+    stopLeaving();
+    leaves.mockClear();
+    stays.mockClear();
+    await db.kinds.put(A);
+    await vi.waitFor(() => {
+      expect(stays).toHaveBeenCalled();
+      expect(store.getSnapshot().kinds).toStrictEqual([A]);
+    });
+    expect(leaves).not.toHaveBeenCalled();
+  });
+});
+
 /**
  * Reads both hooks, and records - when it first committed - how many
  * listSince requests and how many sync passes had been started.
@@ -567,6 +608,23 @@ describe("a cache that cannot be read (Block 4)", () => {
     expect(events.getSnapshot().status).toBe("unavailable");
     expect(kinds.getSnapshot().status).toBe("unavailable");
   });
+
+  // CAL-062 AC-4 (Contract Block 6): ready first, so "unavailable" after
+  // refresh() can only come from reread's catch, not from subscribe's open.
+  it("a ready, subscribed store whose re-read rejects during refresh() publishes unavailable, and refresh still resolves (CAL-062 AC-4)", async () => {
+    await db.events.put(ev(1, at(10, 14, 9), at(10, 14, 10)));
+    const store = createCachedEventsStore(db, sync);
+    keep(store);
+    await vi.waitFor(() => expect(store.getSnapshot().status).toBe("ready"));
+    const read = vi
+      .spyOn(db.events, "toArray")
+      .mockRejectedValueOnce(new Error("read failed"));
+    cleanups.push(() => read.mockRestore());
+    expect(store.getSnapshot().status).toBe("ready");
+    await expect(store.refresh()).resolves.toBeUndefined();
+    expect(read).toHaveBeenCalled();
+    expect(store.getSnapshot().status).toBe("unavailable");
+  });
 });
 
 describe("hide(id) over the cache keeps CAL-013's semantics (Block 4)", () => {
@@ -704,6 +762,39 @@ describe("the cached kinds store's ensureSeeded() (Block 4, PO decision 2)", () 
     expect(outcomes).toStrictEqual(["existing", "existing"]);
     expect(seed.listAll).toHaveBeenCalledTimes(1);
   });
+
+  // CAL-062 AC-3 (Contract Block 5): an "existing" seed's rows are the
+  // server's, but the store writes none of them itself; the real sync after it
+  // offers the same row and holds it back for the queued op.
+  it("an existing seed writes nothing to the cache itself: a kind with a queued update keeps its queued value through the sync (CAL-062 AC-3)", async () => {
+    const server = kind(1, { name: "Gym" });
+    const local: Kind = { ...server, name: "Yoga" };
+    await db.kinds.put(local);
+    await db.outbox.add({
+      op: "update",
+      table: "kinds",
+      id: server.id,
+      patch: { name: "Yoga" },
+      baseUpdatedAt: server.updatedAt,
+      clientTs: "2026-10-21T09:00:00.000Z",
+      status: "queued",
+    });
+    seed.listAll.mockResolvedValue({ status: "ok", rows: [server] });
+    const repos = offlineRepos();
+    repos.kinds.listSince.mockResolvedValue({ status: "ok", rows: [server] });
+    repos.events.listSince.mockResolvedValue({ status: "ok", rows: [] });
+    repos.overrides.listSince.mockResolvedValue({ status: "ok", rows: [] });
+    repos.reminders.listSince.mockResolvedValue({ status: "ok", rows: [] });
+    const store = createCachedKindsStore(
+      db,
+      seed,
+      createSync(db, asSyncRepos(repos)),
+    );
+    await expect(store.ensureSeeded()).resolves.toBe("existing");
+    expect(await db.kinds.get(server.id)).toStrictEqual(local);
+    expect(repos.kinds.listSince).toHaveBeenCalledTimes(1);
+    expect(seed.insertMany).not.toHaveBeenCalled();
+  });
 });
 
 // CAL-015 Contract, Block 6 (AC-1, AC-5 on the chip): the cached events
@@ -782,6 +873,22 @@ describe("sync markers from the outbox (CAL-015 Block 6)", () => {
     await store.refresh();
     expect(store.getSnapshot().events).toStrictEqual([
       { ...saving, sync: "failed" },
+    ]);
+  });
+
+  // CAL-062 AC-2 (Contract Block 4): failed FIRST (lower seq), then queued -
+  // the order the case above does not use, so a later queued op must not
+  // overwrite the failure.
+  it("a failed op followed by a later queued op for the same event is still published failed (CAL-062 AC-2)", async () => {
+    await db.events.put(failing);
+    await db.outbox.bulkAdd([
+      op(failing.id, "failed"),
+      op(failing.id, "queued"),
+    ]);
+    const store = createCachedEventsStore(db, sync);
+    await store.refresh();
+    expect(store.getSnapshot().events).toStrictEqual([
+      { ...failing, sync: "failed" },
     ]);
   });
 
