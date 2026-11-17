@@ -720,6 +720,142 @@ describe("a 4xx other than a conflict marks the op failed and the pass goes on (
   });
 });
 
+// CAL-064 AC-1 to AC-3, Contract Blocks 3 to 5. A queued op whose row the
+// cache, or the server, no longer holds - what `discardOp` of a failed insert
+// leaves behind for a later op on the same id. MECHANICAL: the call's
+// arguments, what run() resolves to, the outbox, the cache and the notices.
+describe("an op whose row the cache or the server no longer holds (CAL-064)", () => {
+  it("an update for an event the cache no longer holds is sent with the op's baseUpdatedAt, and the pass goes on to the next op (AC-1)", async () => {
+    // T2 is carried by no cache row once ROW is gone (OTHER is T1), so the
+    // asserted token can only have come from the op.
+    await db.events.bulkPut([{ ...ROW, updatedAt: T2 }, OTHER]);
+    await enqueueUpdate(db, "events", ROW.id, { title: "Mine" });
+    await enqueueUpdate(db, "events", OTHER.id, { title: "Next" });
+    await db.events.delete(ROW.id);
+    expect((await ops(db)).map((o) => [o.id, o.baseUpdatedAt])).toStrictEqual([
+      [ROW.id, T2],
+      [OTHER.id, T1],
+    ]);
+    repos.events.update
+      .mockResolvedValueOnce(okRow(server(ROW, { title: "Mine" })))
+      .mockResolvedValueOnce(okRow(server(OTHER, { title: "Next" })));
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 2,
+      stoppedAt: "end",
+    });
+    expect(repos.events.update.mock.calls).toStrictEqual([
+      [ROW.id, { title: "Mine" }, T2],
+      [OTHER.id, { title: "Next" }, T1],
+    ]);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.events.get(ROW.id)).toBeUndefined();
+  });
+
+  it("an op whose row is gone from the server altogether leaves the outbox and the cache without a notice, the pass goes on, and a second run sends nothing for it (AC-2)", async () => {
+    // ROW is cached on purpose: its absence afterwards is the drain's delete.
+    await db.events.bulkPut([ROW, OTHER]);
+    await enqueueUpdate(db, "events", ROW.id, { title: "Mine" });
+    await enqueueUpdate(db, "events", OTHER.id, { title: "Next" });
+    const otherServed = server(OTHER, { title: "Next" });
+    repos.events.update
+      .mockResolvedValueOnce({ status: "conflict" })
+      .mockResolvedValueOnce(okRow(otherServed));
+    repos.events.get.mockResolvedValue({ status: "conflict" });
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.events.get.mock.calls).toStrictEqual([[ROW.id]]);
+    expect(await db.outbox.count()).toBe(0);
+    expect(await db.events.get(ROW.id)).toBeUndefined();
+    expect((await db.events.get(OTHER.id))?.updatedAt).toBe(S1);
+    // PO decision 1: no conflict and no failed notice; the pass's one
+    // refresh signal is expected.
+    expect(notices).toStrictEqual([{ kind: "changed" }]);
+
+    repos.events.update.mockClear();
+    repos.events.get.mockClear();
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 0,
+      stoppedAt: "end",
+    });
+    expect(repos.events.update).not.toHaveBeenCalled();
+    expect(repos.events.get).not.toHaveBeenCalled();
+  });
+
+  describe("a 4xx for a row the cache does not hold is titled from the op's patch (AC-3)", () => {
+    const error = { code: "22P02", message: "invalid input", http: 400 };
+    type Case = {
+      name: string;
+      op: OutboxOp;
+      refuse: () => void;
+      title: string;
+    };
+    const literal = (extra: Partial<OutboxOp>): OutboxOp => ({
+      op: "update",
+      table: "events",
+      id: ROW.id,
+      patch: { title: "Mine" },
+      baseUpdatedAt: T1,
+      clientTs: NOW_TS,
+      status: "queued",
+      ...extra,
+    });
+    const cases: Case[] = [
+      {
+        name: "an event update is titled by the patch's title",
+        op: literal({}),
+        refuse: () =>
+          repos.events.update.mockResolvedValue({ status: "error", ...error }),
+        title: "Mine",
+      },
+      {
+        name: "a kind update is titled by the patch's name",
+        op: literal({
+          table: "kinds",
+          id: KIND.id,
+          patch: { name: "Climbing" },
+        }),
+        refuse: () =>
+          repos.kinds.update.mockResolvedValue({ status: "error", ...error }),
+        title: "Climbing",
+      },
+      {
+        name: "an event update whose patch names neither title nor name is titled empty",
+        op: literal({ patch: { notes: "x" } }),
+        refuse: () =>
+          repos.events.update.mockResolvedValue({ status: "error", ...error }),
+        title: "",
+      },
+      {
+        name: "an event delete, whose patch is null, is titled empty",
+        op: literal({ op: "delete", patch: null }),
+        refuse: () =>
+          repos.events.remove.mockResolvedValue({ status: "error", ...error }),
+        title: "",
+      },
+    ];
+    // A loop rather than it.each: it.each truncates an interpolated $name, and
+    // the case name is the bug report.
+    for (const { name, op, refuse, title } of cases) {
+      it(name, async () => {
+        const seq = await db.outbox.add({ ...op });
+        refuse();
+        await expect(drain.run()).resolves.toStrictEqual({
+          sent: 0,
+          stoppedAt: "end",
+        });
+        expect(await ops(db)).toStrictEqual([
+          { ...op, seq, status: "failed", error },
+        ]);
+        expect(of("failed")).toStrictEqual([
+          { kind: "failed", seq, table: op.table, id: op.id, title, error },
+        ]);
+      });
+    }
+  });
+});
+
 describe("a 5xx, a network error or offline keeps the op queued and stops the pass (AC-6)", () => {
   const cases: [string, Result<Event>, "server" | "offline"][] = [
     ["http 500", ERR(500), "server"],
@@ -1338,6 +1474,77 @@ describe("reminders ops (CAL-026 AC-4, Block 6)", () => {
         error,
       },
     ]);
+  });
+
+  // CAL-064 AC-4, Contract Block 6. The reminder is NOT cached in any case;
+  // SERIES is cached in every one, so a "" title is the patch naming no event,
+  // not the event being absent (that case is the conflict one above).
+  describe("a 4xx for a reminder the cache does not hold (CAL-064 AC-4)", () => {
+    const error = { code: "22P02", message: "invalid input", http: 400 };
+    type Case = {
+      name: string;
+      op: Partial<OutboxOp>;
+      refuse: () => void;
+      title: string;
+    };
+    const cases: Case[] = [
+      {
+        name: "a refused insert is titled by the cached event its patch's eventId names",
+        op: { op: "insert", patch: NEW_REM, baseUpdatedAt: null },
+        refuse: () =>
+          repos.reminders.insert.mockResolvedValue({
+            status: "error",
+            ...error,
+          }),
+        title: "Standup",
+      },
+      {
+        name: "a refused update whose patch names no eventId is titled empty",
+        op: {},
+        refuse: () =>
+          repos.reminders.update.mockResolvedValue({
+            status: "error",
+            ...error,
+          }),
+        title: "",
+      },
+      {
+        name: "a refused delete, whose patch is null, is titled empty",
+        op: { op: "delete", patch: null },
+        refuse: () =>
+          repos.reminders.remove.mockResolvedValue({
+            status: "error",
+            ...error,
+          }),
+        title: "",
+      },
+    ];
+    // A loop rather than it.each, so the case name is not truncated.
+    for (const { name, op, refuse, title } of cases) {
+      it(name, async () => {
+        await db.events.put(SERIES);
+        const seq = await db.outbox.add(reminderOp(op));
+        refuse();
+        await expect(drain.run()).resolves.toStrictEqual({
+          sent: 0,
+          stoppedAt: "end",
+        });
+        expect(await db.reminders.get(REM.id)).toBeUndefined();
+        expect(await ops(db)).toStrictEqual([
+          { ...reminderOp(op), seq, status: "failed", error },
+        ]);
+        expect(of("failed")).toStrictEqual([
+          {
+            kind: "failed",
+            seq,
+            table: "reminders",
+            id: REM.id,
+            title,
+            error,
+          },
+        ]);
+      });
+    }
   });
 
   it("offline, a reminders op stays queued and the pass stops at it", async () => {
