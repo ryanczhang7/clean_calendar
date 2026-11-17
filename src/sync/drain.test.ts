@@ -390,6 +390,33 @@ describe('"Back online. {n} changes synced." is announced only by an announced p
     expect(of("changed").length).toBeGreaterThan(0);
     expect(of("changed")[0]).toStrictEqual({ kind: "changed" });
   });
+
+  // CAL-065 AC-1, Contract Block 3. One drain for both passes - a fresh
+  // drain per pass would start the flag at false and pin nothing. The bare
+  // run() is what queuedResult makes after every online edit.
+  it("an unannounced pass after an announced one on the same drain sends its op and announces nothing (CAL-065 AC-1)", async () => {
+    await db.events.put(ROW);
+    await enqueueUpdate(db, "events", ROW.id, { title: "A" });
+    repos.events.update.mockResolvedValue(okRow(server(ROW, { title: "A" })));
+    await expect(drain.run({ announce: true })).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    await enqueueUpdate(db, "events", ROW.id, { title: "B" });
+    await expect(drain.run()).resolves.toStrictEqual({
+      sent: 1,
+      stoppedAt: "end",
+    });
+    expect(repos.events.update).toHaveBeenCalledTimes(2);
+    // The announced pass did announce, then the second pass's refresh
+    // signal and nothing after it.
+    expect(notices).toStrictEqual([
+      { kind: "changed" },
+      { kind: "drained", count: 1 },
+      { kind: "changed" },
+    ]);
+    expect(of("drained")).toStrictEqual([{ kind: "drained", count: 1 }]);
+  });
 });
 
 describe("a conditional update that matches zero rows (AC-3)", () => {
@@ -1556,6 +1583,70 @@ describe("reminders ops (CAL-026 AC-4, Block 6)", () => {
     });
     expect(repos.reminders.update).toHaveBeenCalledTimes(1);
     expect((await ops(db))[0]?.status).toBe("queued");
+  });
+
+  // CAL-065 AC-2, Contract Block 4: the reminders twins of CAL-044's events
+  // cases. The undo goes through the real path, enqueueRestore over a cleared
+  // reminder, so the cache row is live and the op's baseUpdatedAt is T1. "No
+  // notice" is no conflict and no failed notice (PO decision 1): the stream
+  // is pinned whole as the pass's own changed signal and nothing else.
+  describe("a conflicted reminders restore keeps the owner's undo (CAL-065 AC-2)", () => {
+    /** The other device re-stamped the reminder while it was deleted. */
+    const theirs = served({ deletedAt: SERVER_DELETED, updatedAt: S9 });
+
+    async function undoTheClear() {
+      await db.reminders.put({ ...REM, deletedAt: T1 });
+      await enqueueRestore(db, "reminders", REM.id);
+      repos.reminders.get.mockResolvedValue(okRow(theirs));
+    }
+
+    it("a reminder restore that meets a reminder the other device re-stamped while deleted is queued again over the fresh row, sent by the same pass, and lands silently", async () => {
+      await undoTheClear();
+      const finalRow = served({ deletedAt: null, updatedAt: S3 });
+      repos.reminders.restore
+        .mockResolvedValueOnce({ status: "conflict" })
+        .mockResolvedValueOnce(okRow(finalRow));
+      await expect(drain.run()).resolves.toStrictEqual({
+        sent: 1,
+        stoppedAt: "end",
+      });
+      expect(repos.reminders.restore.mock.calls).toStrictEqual([
+        [REM.id, T1],
+        [REM.id, S9],
+      ]);
+      expect(repos.reminders.get.mock.calls).toStrictEqual([[REM.id]]);
+      expect(await db.reminders.get(REM.id)).toStrictEqual(finalRow);
+      expect(await db.outbox.count()).toBe(0);
+      othersUntouched();
+      expect(notices).toStrictEqual([{ kind: "changed" }]);
+    });
+
+    it("the re-queued reminder restore, while it waits, keeps the reminder live and records the fresh stamp", async () => {
+      await undoTheClear();
+      repos.reminders.restore
+        .mockResolvedValueOnce({ status: "conflict" })
+        .mockResolvedValueOnce({ status: "offline" });
+      await expect(drain.run()).resolves.toStrictEqual({
+        sent: 0,
+        stoppedAt: "offline",
+      });
+      expect(await opsWithoutSeq(db)).toStrictEqual([
+        {
+          op: "restore",
+          table: "reminders",
+          id: REM.id,
+          patch: null,
+          baseUpdatedAt: S9,
+          clientTs: NOW_TS,
+          status: "queued",
+        },
+      ]);
+      expect(await db.reminders.get(REM.id)).toStrictEqual({
+        ...theirs,
+        deletedAt: null,
+      });
+      expect(notices).toStrictEqual([{ kind: "changed" }]);
+    });
   });
 });
 
