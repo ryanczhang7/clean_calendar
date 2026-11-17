@@ -671,3 +671,136 @@ describe("reminder ops in the toasts and the problems list (CAL-026 AC-4, Block 
     expect(await db.reminders.get(REM.id)).toStrictEqual(server);
   });
 });
+
+// CAL-068 (from the epic-04 mutation audit, Decided 10): the problems dialog
+// lists only failed ops, titles each by the cache row its table reads - ""
+// when that row is gone - and closes by Close and by Escape. Every case seeds
+// the cache and outbox first, then opens the dialog; ops are added in order,
+// so seq order is list order. The row whose absence each "titled \"\"" case
+// tests is the one the title line reads: for a reminder or an override that
+// is its EVENT (eventId: OTHER.id, never cached here), not its own row.
+describe("CAL-068: the problems dialog lists only failed ops, names each, and closes", () => {
+  const GYM = kind(1, { name: "Gym" });
+  const REM = reminder(1, { eventId: OTHER.id, updatedAt: T1 });
+  const OVR = override(1, "2026-11-18", { eventId: OTHER.id, title: null });
+  const failedKindOp = (id: string): OutboxOp => ({
+    ...failedOp(id),
+    table: "kinds",
+    patch: { name: "x" },
+  });
+  const failedReminderOp = (id: string): OutboxOp => ({
+    ...failedOp(id),
+    table: "reminders",
+    patch: { minutesBefore: 30 },
+  });
+  const failedOverrideOp = (id: string): OutboxOp => ({
+    ...failedOp(id),
+    table: "event_overrides",
+    patch: { startsAt: at(11, 18, 14) },
+  });
+  const queuedOp = (id: string): OutboxOp => {
+    const { error: _error, ...rest } = failedOp(id);
+    return { ...rest, status: "queued" };
+  };
+
+  async function open(state: SyncState) {
+    renderStatus(state);
+    const user = userEvent.setup();
+    const opener = screen.getByRole("button", { name: "Show sync problems" });
+    await user.click(opener);
+    const dialog = await screen.findByRole("dialog", {
+      name: "Changes that couldn't sync",
+    });
+    return {
+      user,
+      opener,
+      dialog,
+      items: () => within(dialog).getAllByRole("listitem"),
+    };
+  }
+
+  it("a queued op is not a problem: one failed and one queued op list only the failed one, with one Retry and one Discard", async () => {
+    await db.events.bulkPut([ROW, OTHER]);
+    await db.outbox.add(queuedOp(OTHER.id));
+    await db.outbox.add(failedOp(ROW.id));
+    const { dialog, items } = await open({
+      online: true,
+      queued: 1,
+      failed: 1,
+    });
+    expect(items()).toHaveLength(1);
+    expect(items()[0]).toHaveTextContent(/^Dentist: invalid input/);
+    expect(
+      within(dialog).getAllByRole("button", { name: "Retry" }),
+    ).toHaveLength(1);
+    expect(
+      within(dialog).getAllByRole("button", { name: "Discard" }),
+    ).toHaveLength(1);
+  });
+
+  it('a failed kinds op is listed by its kind\'s name: "Gym: invalid input"', async () => {
+    await db.kinds.put(GYM);
+    await db.outbox.add(failedKindOp(GYM.id));
+    const { items } = await open({ online: true, queued: 0, failed: 1 });
+    expect(items()).toHaveLength(1);
+    expect(items()[0]).toHaveTextContent(/^Gym: invalid input/);
+  });
+
+  it('a failed kinds op whose kind is not cached is still listed, titled "": ": invalid input"', async () => {
+    await db.events.put(ROW);
+    await db.outbox.add(failedOp(ROW.id));
+    await db.outbox.add(failedKindOp(GYM.id));
+    const { items } = await open({ online: true, queued: 0, failed: 2 });
+    expect(items()).toHaveLength(2);
+    expect(items()[0]).toHaveTextContent(/^Dentist: invalid input/);
+    expect(items()[1]).toHaveTextContent(/^: invalid input/);
+  });
+
+  it('a failed event op whose event is not cached is still listed beside a cached one, titled "": ": invalid input"', async () => {
+    await db.events.put(ROW);
+    await db.outbox.add(failedOp(ROW.id));
+    await db.outbox.add(failedOp(OTHER.id));
+    const { items } = await open({ online: true, queued: 0, failed: 2 });
+    expect(items()).toHaveLength(2);
+    expect(items()[0]).toHaveTextContent(/^Dentist: invalid input/);
+    expect(items()[1]).toHaveTextContent(/^: invalid input/);
+  });
+
+  it('a failed reminder op whose reminder is cached but whose event is gone is still listed, titled "": ": invalid input"', async () => {
+    await db.events.put(ROW);
+    await db.reminders.put(REM);
+    await db.outbox.add(failedOp(ROW.id));
+    await db.outbox.add(failedReminderOp(REM.id));
+    const { items } = await open({ online: true, queued: 0, failed: 2 });
+    expect(items()).toHaveLength(2);
+    expect(items()[0]).toHaveTextContent(/^Dentist: invalid input/);
+    expect(items()[1]).toHaveTextContent(/^: invalid input/);
+  });
+
+  it('a failed override op with no title of its own whose series is gone is still listed, titled "": ": invalid input"', async () => {
+    await db.events.put(ROW);
+    await db.overrides.put(OVR);
+    await db.outbox.add(failedOp(ROW.id));
+    await db.outbox.add(failedOverrideOp(OVR.id));
+    const { items } = await open({ online: true, queued: 0, failed: 2 });
+    expect(items()).toHaveLength(2);
+    expect(items()[0]).toHaveTextContent(/^Dentist: invalid input/);
+    expect(items()[1]).toHaveTextContent(/^: invalid input/);
+  });
+
+  it("Close closes the dialog; reopened, Escape closes it", async () => {
+    await db.events.put(ROW);
+    await db.outbox.add(failedOp(ROW.id));
+    const { user, opener, dialog } = await open({
+      online: true,
+      queued: 0,
+      failed: 1,
+    });
+    await user.click(within(dialog).getByRole("button", { name: "Close" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    await user.click(opener);
+    await screen.findByRole("dialog", { name: "Changes that couldn't sync" });
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
