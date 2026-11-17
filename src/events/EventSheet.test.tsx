@@ -1879,6 +1879,155 @@ describe("a failed sync in the sheet (CAL-045 AC-1 to AC-4)", () => {
       expect(sync.failedOp).not.toHaveBeenCalled();
     });
   });
+
+  // CAL-067 (EPIC-04 audit, Decided 8). Every case below passes on arrival
+  // against the shipped sheet; each describe is earned by the one mutant
+  // the story's Deferred verifications 1 to 3 name (EventSheet.tsx :157,
+  // :154 and :306 on 375344f).
+  describe("CAL-067 AC-1: Discard when the server copy keeps the cached stamp", () => {
+    /** The server's copy when the refused update never changed the row: MINE's own stamp. */
+    const THEIRS_SAME_STAMP: Event = { ...THEIRS, updatedAt: MINE.updatedAt };
+
+    /** Open MINE, edit its title in the sheet, press Discard, and wait for the server copy. */
+    async function editThenDiscard() {
+      const sync = fakeSync();
+      sync.discard.mockResolvedValue(THEIRS_SAME_STAMP);
+      const opened = await openSheet(edit(MINE), { sync });
+      const el = await strip();
+      await opened.user.type(title(), " edited");
+      expect(title()).toHaveValue("Mine edited");
+      await opened.user.click(
+        within(el).getByRole("button", { name: "Discard" }),
+      );
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      return { ...opened, sync };
+    }
+
+    it("an edited sheet, Discarded to a server copy with the same updatedAt, shows the server copy's fields", async () => {
+      const { sync, onClose } = await editThenDiscard();
+      expect(screen.getByRole("textbox", { name: "Location" })).toHaveValue(
+        "Harbour Rd",
+      );
+      expect(sync.discard.mock.calls).toStrictEqual([[7, DENTIST.id]]);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(sheet()).toBeInTheDocument();
+      expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('after that Discard the sheet is clean: Close closes at once, no "Discard changes?"', async () => {
+      const { user, onClose } = await editThenDiscard();
+      await user.click(closeButton());
+      expect(
+        screen.queryByRole("dialog", { name: "Discard changes?" }),
+      ).toBeNull();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(screen.queryByRole("dialog")).toBeNull();
+    });
+
+    it("after that Discard a Save sends only what changed from the server copy, with its updatedAt", async () => {
+      const { user, actions } = await editThenDiscard();
+      await user.type(title(), " 2");
+      await user.click(save());
+      expect(actions.updateEvent.mock.calls).toStrictEqual([
+        [DENTIST.id, { title: "Theirs 2" }, UPDATED_AT],
+      ]);
+    });
+  });
+
+  describe("CAL-067 AC-2: a replacement belongs to its request", () => {
+    /**
+     * One EventSheet that stays mounted across two requests: "Open" edits
+     * MINE, "Open other" edits TRIP. The sheet's replaced row must survive
+     * the close between them, so this host - not the file's Host, which
+     * opens one request - is what the criterion needs.
+     */
+    function TwoEventHost(props: {
+      actions: FakeActions;
+      sync: SheetSync;
+      onClose: () => void;
+    }): JSX.Element {
+      const [request, setRequest] = useState<SheetRequest | null>(null);
+      return (
+        <>
+          <button
+            type="button"
+            onClick={(e) => setRequest(edit(MINE)(e.currentTarget))}
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={(e) => setRequest(edit(TRIP)(e.currentTarget))}
+          >
+            Open other
+          </button>
+          <EventSheet
+            request={request}
+            kinds={KINDS}
+            actions={props.actions}
+            sync={props.sync}
+            onClose={() => {
+              props.onClose();
+              setRequest(null);
+            }}
+          />
+        </>
+      );
+    }
+
+    it("after a Discard replaced one event's row, a different event opens with its own title and fields", async () => {
+      const user = userEvent.setup();
+      const sync = fakeSync();
+      const onClose = vi.fn<() => void>();
+      render(
+        <MemoryRouter>
+          <TwoEventHost actions={fakeActions()} sync={sync} onClose={onClose} />
+        </MemoryRouter>,
+      );
+      await user.click(screen.getByRole("button", { name: "Open" }));
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Discard" }));
+      await waitFor(() => expect(title()).toHaveValue("Theirs"));
+      await user.click(closeButton());
+      expect(screen.queryByRole("dialog")).toBeNull();
+
+      await user.click(screen.getByRole("button", { name: "Open other" }));
+      expect(
+        screen.getByRole("dialog", { name: "Edit event: Trip" }),
+      ).toBeInTheDocument();
+      expect(
+        screen.queryByRole("dialog", { name: "Edit event: Theirs" }),
+      ).toBeNull();
+      expect(title()).toHaveValue("Trip");
+      expect(screen.getByRole("textbox", { name: "Location" })).toHaveValue("");
+      expect(allDaySwitch()).toHaveAttribute("aria-checked", "true");
+    });
+  });
+
+  describe("CAL-067 AC-3: a second Retry", () => {
+    it("a Retry the server refuses again can be pressed again: retry is called a second time with the same seq", async () => {
+      const sync = fakeSync(); // 1st ask: { seq: 7, message: "invalid input" }
+      sync.failedOp.mockResolvedValueOnce({ seq: 7, message: "still bad" }); // 2nd
+      // 3rd and later: null (fakeSync's default)
+      const { user } = await openSheet(edit({ ...DENTIST, sync: "failed" }), {
+        sync,
+      });
+      const el = await strip();
+      await user.click(within(el).getByRole("button", { name: "Retry" }));
+      await waitFor(() =>
+        expect(screen.getByRole("alert").textContent).toContain("still bad"),
+      );
+      await user.click(
+        within(screen.getByRole("alert")).getByRole("button", {
+          name: "Retry",
+        }),
+      );
+      await waitFor(() =>
+        expect(sync.retry.mock.calls).toStrictEqual([[7], [7]]),
+      );
+      await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+    });
+  });
 });
 
 // CAL-055 AC-4 (EPIC-05 audit, Decided 7): the picker's Escape is its own.
