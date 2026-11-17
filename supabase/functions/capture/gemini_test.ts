@@ -487,3 +487,25 @@ Deno.test("CAL-051 AC-4: the response schema marks a proposal key nullable exact
     "response-schema nullability (actual) does not mirror proposalSchema's acceptance of null (expected)",
   );
 });
+
+// ================================================================ CAL-069
+//
+// CAL-069 (EPIC-05 re-audit, G41/G29): the type tags of confidence itself and
+// of missing's items. Both pass on arrival against the shipped schema and are
+// earned by mutants (story, "Deferred verifications" 1 and 2). A Gemini ARRAY
+// schema has one `items` schema for every element, so AC-2's "every item" is
+// that one tag.
+
+Deno.test("CAL-069 AC-1: the response schema's confidence is an OBJECT", () => {
+  const schema = geminiResponseSchema as {
+    properties: { confidence: { type: string } };
+  };
+  assertEquals(lower(schema.properties.confidence.type), "object");
+});
+
+Deno.test("CAL-069 AC-2: the response schema's missing array holds STRINGs", () => {
+  const schema = geminiResponseSchema as {
+    properties: { missing: { items: { type: string } } };
+  };
+  assertEquals(lower(schema.properties.missing.items.type), "string");
+});
