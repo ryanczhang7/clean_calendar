@@ -374,6 +374,23 @@ describe("retryOp (AC-5, Block 4)", () => {
     expect(back).toStrictEqual({ ...queuedOp(CACHED.id), seq });
     expect(back !== undefined && "error" in back).toBe(false);
   });
+
+  // CAL-066 AC-2, Contract Block 2: a seq the outbox does not hold is a no-op.
+  // The expected records are written out rather than snapshotted before the
+  // call: a snapshot of a wrongly emptied outbox would agree with itself.
+  it("a seq the outbox does not hold resolves and leaves every op as it was, with no record lacking a table", async () => {
+    const seqA = await put(queuedOp(CACHED.id));
+    const seqB = await put(queuedOp("b", { status: "failed", error: ERROR }));
+    expect(await db.outbox.get(42)).toBeUndefined();
+    await expect(retryOp(db, 42)).resolves.toBeUndefined();
+    expect(await ops(db)).toStrictEqual([
+      { ...queuedOp(CACHED.id), seq: seqA },
+      { ...queuedOp("b", { status: "failed", error: ERROR }), seq: seqB },
+    ]);
+    expect(
+      (await db.outbox.toArray()).filter((o) => !("table" in o)),
+    ).toStrictEqual([]);
+  });
 });
 
 describe("discardOp (AC-5, Block 4)", () => {
@@ -429,6 +446,28 @@ describe("discardOp (AC-5, Block 4)", () => {
     expect(repos.kinds.get).toHaveBeenCalledWith(CACHED_KIND.id);
     expect(repos.events.get).not.toHaveBeenCalled();
     expect(await db.kinds.get(CACHED_KIND.id)).toStrictEqual(server);
+  });
+
+  // CAL-066 AC-3, Contract Block 3: a seq the outbox does not hold resolves,
+  // calls no repository and touches no table. The spy list's length is pinned
+  // (events 5, kinds 4, overrides 3, reminders 5) so a loop over nothing
+  // cannot pass.
+  it("a seq the outbox does not hold resolves, calls no repository and leaves the cache and the outbox unchanged", async () => {
+    await db.events.put(CACHED);
+    await db.kinds.put(CACHED_KIND);
+    const seqA = await put(queuedOp(CACHED.id));
+    expect(await db.outbox.get(42)).toBeUndefined();
+    await expect(discardOp(db, 42, asRepos(repos))).resolves.toBeUndefined();
+    const spies = Object.values(repos).flatMap((r) => Object.values(r));
+    expect(spies).toHaveLength(17);
+    for (const spy of spies) expect(spy).not.toHaveBeenCalled();
+    expect(await db.events.toArray()).toStrictEqual([CACHED]);
+    expect(await db.kinds.toArray()).toStrictEqual([CACHED_KIND]);
+    expect(await db.overrides.toArray()).toStrictEqual([]);
+    expect(await db.reminders.toArray()).toStrictEqual([]);
+    expect(await ops(db)).toStrictEqual([
+      { ...queuedOp(CACHED.id), seq: seqA },
+    ]);
   });
 });
 

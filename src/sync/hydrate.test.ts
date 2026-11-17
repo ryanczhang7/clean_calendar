@@ -439,7 +439,7 @@ describe("createSync(db, repos) (Block 2)", () => {
 // past it. The ops are put straight into the outbox.
 describe("rows with a pending op are not pulled over (CAL-015 Block 5)", () => {
   const pending = (
-    table: "events" | "kinds",
+    table: "events" | "kinds" | "event_overrides",
     id: string,
     status: "queued" | "failed",
   ): OutboxOp => ({
@@ -503,6 +503,42 @@ describe("rows with a pending op are not pulled over (CAL-015 Block 5)", () => {
       byId([mine, { ...free, name: "Renamed", updatedAt: T3 }]),
     );
     expect((await db.meta.get("mark:kinds"))?.value).toBe(T4);
+  });
+
+  // CAL-066 AC-1, Contract Block 1. The Dexie table is db.overrides (its mark
+  // is mark:overrides) while its ops carry table "event_overrides": the op is
+  // spelled the outbox's way, never "overrides", or a filter comparing with
+  // table.name would hold the row too.
+  it("an override with a queued event_overrides op is held over a newer server copy; an override without one is written, and mark:overrides moves past both", async () => {
+    const mine = override(1, "2026-10-14", { title: "Mine", updatedAt: T1 });
+    const free = override(2, "2026-10-21", { updatedAt: T1 });
+    await db.overrides.bulkPut([mine, free]);
+    await db.outbox.add(pending("event_overrides", mine.id, "queued"));
+    repos.overrides.listSince.mockResolvedValueOnce(
+      ok([
+        { ...mine, title: "Server", updatedAt: T4 },
+        { ...free, title: "Renamed", updatedAt: T3 },
+      ]),
+    );
+    await expect(hydrate(db, asRepos(repos))).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(byId(await db.overrides.toArray())).toStrictEqual(
+      byId([mine, { ...free, title: "Renamed", updatedAt: T3 }]),
+    );
+    expect((await db.meta.get("mark:overrides"))?.value).toBe(T4);
+  });
+
+  it("an override with a failed event_overrides op is held over a newer server copy, and mark:overrides still moves", async () => {
+    const mine = override(1, "2026-10-14", { title: "Mine", updatedAt: T1 });
+    await db.overrides.put(mine);
+    await db.outbox.add(pending("event_overrides", mine.id, "failed"));
+    repos.overrides.listSince.mockResolvedValueOnce(
+      ok([{ ...mine, title: "Server", updatedAt: T2 }]),
+    );
+    await hydrate(db, asRepos(repos));
+    expect(await db.overrides.get(mine.id)).toStrictEqual(mine);
+    expect((await db.meta.get("mark:overrides"))?.value).toBe(T2);
   });
 
   it("once the op is gone the next pull writes the row", async () => {
