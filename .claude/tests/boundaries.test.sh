@@ -9,7 +9,7 @@
 . "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 
 FIX="$(make_project_fixture)"
-trap 'rm -rf "$FIX"' EXIT
+trap 'rm -rf "$FIX" "${KB:-}" "${K_NS_COPY:-}" "${K_DECOY:-}"' EXIT
 
 git -C "$FIX" -c user.email=t@t -c user.name=t branch -M main >/dev/null 2>&1
 
@@ -4459,5 +4459,8 @@ git -C "$FIX" checkout -q main 2>/dev/null
 git -C "$FIX" reset -q --hard "$k_main_before" 2>/dev/null
 rm -f "$KB"
 rm -rf "$K_DECOY"
+
+assert_eq "HARNESS-107 AC-4: the exit trap in force at the end of the suite removes every temp path the suite makes" \
+  "trap -- 'rm -rf \"\$FIX\" \"\${KB:-}\" \"\${K_NS_COPY:-}\" \"\${K_DECOY:-}\"' EXIT" "$(trap -p EXIT)"
 
 summary "boundaries"
