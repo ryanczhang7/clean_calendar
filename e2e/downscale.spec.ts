@@ -204,16 +204,19 @@ test("a 1200x800 JPEG screenshot is sent as image/jpeg at its own 1200x800, and 
     { width: decoded.width, height: decoded.height },
     "the posted image's decoded size",
   ).toEqual({ width: 1200, height: 800 });
-  // No `bytes` in the request (CaptureInput is { image, mime }): the
-  // decoded length is the request's own, and it must be a whole JPEG -
-  // SOI first, EOI last - no larger than the capture function's limit.
-  expect(decoded.byteLength, "decoded length of the posted base64").toBe(
-    Buffer.from(posted.image, "base64").length,
-  );
+  // No `bytes` in the request (CaptureInput is { image, mime }), and no value
+  // independent of `posted.image` to compare its length with (CAL-071 AC-1),
+  // so the posted bytes are judged on their own: a non-empty file no larger
+  // than the capture function's limit, and a whole JPEG - SOI first, EOI last.
   expect(decoded.byteLength).toBeGreaterThan(0);
   expect(decoded.byteLength).toBeLessThanOrEqual(4 * 1024 * 1024);
-  expect(decoded.head, "JPEG start-of-image marker").toEqual([0xff, 0xd8]);
-  expect(decoded.tail, "JPEG end-of-image marker").toEqual([0xff, 0xd9]);
+  // One assertion over both markers, so a wrong encoding reports the first two
+  // and the last two bytes in the same failure (CAL-071 AC-2).
+  const markers = { head: decoded.head, tail: decoded.tail };
+  expect(
+    markers,
+    `JPEG start-of-image and end-of-image markers: received head [${markers.head.join(", ")}], tail [${markers.tail.join(", ")}]`,
+  ).toEqual({ head: [0xff, 0xd8], tail: [0xff, 0xd9] });
 });
 
 test(`shrinking the 3000x1000 screenshot settles and the request is sent within ${SETTLE_MS} ms of Propose event (AC-3)`, async ({
