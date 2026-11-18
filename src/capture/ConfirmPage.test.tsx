@@ -1613,3 +1613,66 @@ describe("CAL-049 AC-8: the form view's markup", () => {
     ).toHaveAttribute("tabindex", "-1");
   });
 });
+
+// CAL-070 (test-only). The shipped page already satisfies both criteria, so
+// each case passes on arrival and is earned by the mutant its AC names (the
+// story's Deferred verifications, entries 1 and 2). Same harness as above.
+
+describe("CAL-070 AC-1: an all-day end before its start falls back to the start's day", () => {
+  const backwards = () =>
+    renderConfirm({
+      state: handoff({
+        allDay: true,
+        startsAt: "2026-11-14",
+        endsAt: "2026-11-12",
+      }),
+    });
+
+  it("a 14 Nov all-day proposal ending 12 Nov opens with Start date and End date both 14 Nov", async () => {
+    backwards();
+    await formReady();
+    expect([
+      (field("Start date") as HTMLInputElement).value,
+      (field("End date") as HTMLInputElement).value,
+    ]).toStrictEqual(["2026-11-14", "2026-11-14"]);
+  });
+
+  it("a 14 Nov all-day proposal ending 12 Nov is saved once as an all-day event covering 14 Nov only", async () => {
+    const { user, actions } = backwards();
+    await formReady();
+    await user.click(saveButton());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    await settle();
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+    const saved = actions.createEvent.mock.calls[0]?.[0];
+    const expected = toNewEvent(
+      newEventValue(nov(14), nov(14), true, DINING.id),
+      DINING.id,
+    );
+    expect([saved?.allDay, saved?.startsAt, saved?.endsAt]).toStrictEqual([
+      expected.allDay,
+      expected.startsAt,
+      expected.endsAt,
+    ]);
+  });
+});
+
+describe("CAL-070 AC-2: a refusal on Repeat until alone puts focus on Repeat until", () => {
+  // The same helper as the CAL-024 block's (`:1372`), which is scoped to
+  // that describe and so not visible here.
+  const repeatSelect = () => screen.getByRole("combobox", { name: "Repeat" });
+
+  it("valid end, weekly, Ends on 2 Nov (before the 3 Nov start): Save leaves focus on Repeat until and creates nothing", async () => {
+    const { user, actions } = renderConfirm();
+    await formReady();
+    await user.selectOptions(repeatSelect(), "weekly");
+    await user.click(screen.getByRole("radio", { name: "On date" }));
+    fireEvent.change(field("Repeat until"), {
+      target: { value: "2026-11-02" },
+    });
+    await user.click(saveButton());
+    await settle();
+    expect(document.activeElement).toBe(field("Repeat until"));
+    expect(actions.createEvent).not.toHaveBeenCalled();
+  });
+});
