@@ -38,7 +38,11 @@ import { type KindsStore, useKinds } from "../sync/kindsStore";
 import { type OverrideActions, overrideActions } from "../sync/overrideActions";
 import { type OverridesStore, overridesStore } from "../sync/overridesStore";
 import { type ReminderActions, reminderActions } from "../sync/reminderActions";
-import { type RemindersStore, remindersStore } from "../sync/remindersStore";
+import {
+  isLiveTemplate,
+  type RemindersStore,
+  remindersStore,
+} from "../sync/remindersStore";
 import { type SheetSync, sheetSync } from "../sync/sheetSync";
 import { chipKey, occurrencesIn, useOccurrences } from "../sync/useOccurrences";
 import { useMaybeToast } from "../ui/Toast";
@@ -609,8 +613,8 @@ function MonthPage(
 
 /**
  * CAL-057 Block 6: event id -> its live template's minutesBefore, for the
- * chips. A live template is liveTemplate's rule: `occurrenceDate` null and
- * `deletedAt == null`. A store that has never loaded is asked once.
+ * chips. A live template is isLiveTemplate's rule, shared with liveTemplate.
+ * A store that has never loaded is asked once.
  */
 function useChipReminders(store: RemindersStore): ReadonlyMap<string, number> {
   const snapshot = useSyncExternalStore(store.subscribe, store.getSnapshot);
@@ -620,7 +624,7 @@ function useChipReminders(store: RemindersStore): ReadonlyMap<string, number> {
   return useMemo(() => {
     const map = new Map<string, number>();
     for (const r of snapshot.reminders) {
-      if (r.occurrenceDate === null && r.deletedAt == null) {
+      if (isLiveTemplate(r)) {
         map.set(r.eventId, r.minutesBefore);
       }
     }
