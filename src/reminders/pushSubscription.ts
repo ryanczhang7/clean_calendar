@@ -38,6 +38,19 @@ export function vapidKeyBytes(base64url: string): Uint8Array<ArrayBuffer> {
   return Uint8Array.from(atob(padded), (c) => c.charCodeAt(0));
 }
 
+/** Whether `existing` was made under a key other than `current` (CAL-073).
+ *  An unreported key (no `options` on some engines, or a `null` key) is
+ *  unknown and counts as unchanged: Block 2. */
+function keyChanged(existing: PushSubscription, current: Uint8Array): boolean {
+  // `options` is typed as always present, but some engines omit it.
+  const stored = existing.options?.applicationServerKey;
+  if (stored === undefined || stored === null) return false;
+  const bytes = new Uint8Array(stored);
+  return (
+    bytes.length !== current.length || bytes.some((b, i) => b !== current[i])
+  );
+}
+
 export type RegisterOutcome =
   | { status: "ok" }
   | { status: "skipped"; reason: "unsupported" | "not-granted" | "no-key" }
@@ -59,12 +72,22 @@ export async function registerThisDevice(
   }
   try {
     const reg = await navigator.serviceWorker.ready;
-    const sub =
-      (await reg.pushManager.getSubscription()) ??
-      (await reg.pushManager.subscribe({
+    const current = vapidKeyBytes(key);
+    let sub = await reg.pushManager.getSubscription();
+    if (sub === null) {
+      sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: vapidKeyBytes(key),
-      }));
+        applicationServerKey: current,
+      });
+    } else if (keyChanged(sub, current)) {
+      // CAL-073 Block 3: a subscription still active under the old key would
+      // make subscribe refuse the new one, so a failed unsubscribe stops here.
+      if (!(await sub.unsubscribe())) return { status: "error" };
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: current,
+      });
+    }
     const keys = sub.toJSON().keys;
     const p256dh = keys?.p256dh;
     const auth = keys?.auth;
