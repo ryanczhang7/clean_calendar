@@ -34,8 +34,18 @@ export type Permission = "default" | "granted" | "denied";
 export const VAPID_KEY =
   "BDBVep_E6Q4zWPvv_-wRNluApcrvFDleg6jN8hc8YYar0PUaP2SJrtP4HUJnjLHW-yBFao-02f4jSG2St9wBJks";
 
+/** Key A (CAL-073): a second VAPID-shaped key, 87 characters, 65 bytes,
+ *  first byte 0x04, differing from VAPID_KEY in 64 of its 65 bytes. */
+export const VAPID_KEY_A =
+  "BCN-2TSP6kWg-1axDGfCHXjTLonkP5r1UKsGYbwXcs0og945lO9KpQBbthFsxyJ92DOO6USf-lWwC2bBHHfSLYg";
+
 export type FakeSubscription = {
   endpoint: string;
+  /** CAL-073. Absent on `fakeSubscription(...)`: "the engine does not
+   *  report the key". */
+  options?: { applicationServerKey: ArrayBuffer | null };
+  /** CAL-073. Absent on `fakeSubscription(...)`. */
+  unsubscribe?: Mock<() => Promise<boolean>>;
   toJSON(): {
     endpoint: string;
     expirationTime: null;
@@ -53,6 +63,39 @@ export function fakeSubscription(
       keys === undefined
         ? { endpoint, expirationTime: null }
         : { endpoint, expirationTime: null, keys: { ...keys } },
+  };
+}
+
+/**
+ * CAL-073 Contract, Block 5: a subscription that reports the key it was made
+ * under, as Chrome, Firefox and Safari 16+ do. `applicationServerKey` is the
+ * key's bytes (or `null`, "reported as null"); it is stored as a fresh
+ * `ArrayBuffer` of exactly that length - a copy, never a view over a larger
+ * buffer - which is what a browser hands back. `unsubscribe` is a mock that
+ * resolves `true` ("ok"), resolves `false` ("false") or rejects ("reject").
+ */
+export function subscriptionUnderKey(
+  endpoint: string,
+  keys: { p256dh?: string; auth?: string } | undefined,
+  applicationServerKey: readonly number[] | null,
+  unsubscribe: "ok" | "false" | "reject" = "ok",
+): FakeSubscription & {
+  options: { applicationServerKey: ArrayBuffer | null };
+  unsubscribe: Mock<() => Promise<boolean>>;
+} {
+  const stored =
+    applicationServerKey === null
+      ? null
+      : new Uint8Array(applicationServerKey).buffer;
+  return {
+    ...fakeSubscription(endpoint, keys),
+    options: { applicationServerKey: stored },
+    unsubscribe: vi.fn(async () => {
+      if (unsubscribe === "reject") {
+        throw new DOMException("Unsubscribe failed", "AbortError");
+      }
+      return unsubscribe === "ok";
+    }),
   };
 }
 
