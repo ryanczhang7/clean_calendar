@@ -3392,6 +3392,230 @@ describe('"All events in the series" on a move moves the series by the same days
   });
 });
 
+// CAL-075 AC-1 to AC-4 (Contract Blocks 1, 2 and 6): after a keyboard move
+// confirmed "All events in the series", focus follows the occurrence the
+// owner acted on to its new date - the same series id, its occurrence date
+// shifted by the move's days - rather than the pre-move key, which on a
+// whole-series move names a chip that is gone (AC-1) or a different
+// occurrence (AC-2, AC-3). "This event only" keeps CAL-074's behaviour: the
+// override is keyed by the original date (AC-4). Block 1's fixtures and
+// writes, read out. MECHANICAL: a chip is found by its month cell or its
+// week column (`data-day`), never by document order, because seven Walk
+// chips share one name; each test waits for the move's write and the
+// redrawn chips before it reads focus, so a red here is the focus, not a
+// timing artefact.
+describe("a whole-series keyboard move keeps focus on the moved occurrence (CAL-075 AC-1 to AC-4)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const WALK_NAME = "Walk, Gym, 07:00 to 08:00, repeats daily";
+
+  /** Block 1, AC-3: a daily Walk from Monday 16 November, 07:00 - 08:00. */
+  function walkFrom16Nov(): Event {
+    return {
+      ...timed("Walk", nov(16, 7), nov(16, 8)),
+      recurrence: { freq: "daily", until: null, tz: DEVICE_TZ },
+    };
+  }
+
+  /**
+   * Where focus is: the day of the cell or column holding the focused
+   * element (`data-day`), its accessible name and its chip key. A chip in
+   * the wrong cell reads as that cell's day; focus on no chip reads as
+   * null names.
+   */
+  const focusAt = () => {
+    const active = document.activeElement;
+    return {
+      day: active?.closest("[data-day]")?.getAttribute("data-day") ?? null,
+      name: active?.getAttribute("aria-label") ?? null,
+      key: active?.getAttribute("data-chip-key") ?? null,
+    };
+  };
+
+  /** The one Walk chip in the week column marked `data-day={day}`. */
+  function walkChipIn(day: string): HTMLElement {
+    const column = document.querySelector<HTMLElement>(`[data-day="${day}"]`);
+    expect(column, `no column marked data-day=${day}`).not.toBeNull();
+    const chips = within(column as HTMLElement).queryAllByRole("button", {
+      name: WALK_NAME,
+    });
+    expect(chips, `Walk chips in ${day}'s column`).toHaveLength(1);
+    return chips[0] as HTMLElement;
+  }
+
+  /** Walk's chips in the week grid, as the day column each sits in. */
+  const walkDays = (grid: HTMLElement) =>
+    within(grid)
+      .queryAllByRole("button", { name: WALK_NAME })
+      .map((chip) => chip.closest("[data-day]")?.getAttribute("data-day"));
+
+  it('AC-1: Alt+→ on the 18 November chip, "All events in the series": focus is on the Spin chip in Thursday 19 November\'s cell', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      spin.id,
+      { startsAt: nov(5, 10), endsAt: nov(5, 11) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    // Weekly from Thursday 5 November: 5, 12, 19, 26 November, 3 December.
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Thursday 19 November"))).toHaveLength(1),
+    );
+    for (const day of SPIN_WEDNESDAYS) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(0);
+    }
+    expect(spinIn(grid)).toHaveLength(5);
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2026-11-19",
+        name: SPIN_10_NAME,
+        key: `${spin.id}@2026-11-19`,
+      }),
+    );
+    expect(spinChipOn(grid, "Thursday 19 November")).toHaveFocus();
+  });
+
+  it("AC-2: Alt+↓ on the 11 November chip, \"All events in the series\": focus is on the Spin chip in Wednesday 18 November's cell, not 11 November's", async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 11 November").focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      spin.id,
+      { startsAt: nov(11, 10), endsAt: nov(11, 11) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    // Weekly from Wednesday 11 November: 11, 18, 25 November, 2 December.
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Wednesday 4 November"))).toHaveLength(0),
+    );
+    expect(spinIn(grid)).toHaveLength(4);
+    for (const day of SPIN_WEDNESDAYS.slice(1)) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2026-11-18",
+        name: SPIN_10_NAME,
+        key: `${spin.id}@2026-11-18`,
+      }),
+    );
+    expect(spinChipOn(grid, "Wednesday 18 November")).toHaveFocus();
+    expect(spinChipOn(grid, "Wednesday 11 November")).not.toHaveFocus();
+  });
+
+  it("AC-3: Alt+→ on the daily Walk's Tuesday 17 November block in the week, \"All events in the series\": focus is on the chip in Wednesday 18 November's column, not Tuesday's", async () => {
+    const walk = walkFrom16Nov();
+    useMoves([walk]);
+    const { user, actions, over } = renderSeriesPage("/week/2026-11-18");
+    const grid = await settledGrid("Week of 16 November 2026");
+    await waitFor(() =>
+      expect(walkDays(grid)).toStrictEqual([
+        "2026-11-16",
+        "2026-11-17",
+        "2026-11-18",
+        "2026-11-19",
+        "2026-11-20",
+        "2026-11-21",
+        "2026-11-22",
+      ]),
+    );
+    walkChipIn("2026-11-17").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      walk.id,
+      { startsAt: nov(17, 7), endsAt: nov(17, 8) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    // Daily from Tuesday 17 November: six chips, none on Monday the 16th.
+    await waitFor(() =>
+      expect(walkDays(grid)).toStrictEqual([
+        "2026-11-17",
+        "2026-11-18",
+        "2026-11-19",
+        "2026-11-20",
+        "2026-11-21",
+        "2026-11-22",
+      ]),
+    );
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2026-11-18",
+        name: WALK_NAME,
+        key: `${walk.id}@2026-11-18`,
+      }),
+    );
+    expect(walkChipIn("2026-11-18")).toHaveFocus();
+    expect(
+      document.activeElement?.closest('[data-day="2026-11-17"]'),
+    ).toBeNull();
+  });
+
+  it('AC-4: Alt+→ on the 18 November chip, "This event only": focus is on the Spin chip in Thursday 19 November\'s cell, still keyed @2026-11-18', async () => {
+    const spin = spinFrom4Nov();
+    useMoves([spin]);
+    const { user, actions, over } = renderSeriesPage("/month/2026-11");
+    const grid = await novemberWithSpin();
+    spinChipOn(grid, "Wednesday 18 November").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(19, 10), endsAt: nov(19, 11) },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(spinIn(monthCell(grid, "Thursday 19 November"))).toHaveLength(1),
+    );
+    expect(spinIn(monthCell(grid, "Wednesday 18 November"))).toHaveLength(0);
+    for (const day of SPIN_WEDNESDAYS.filter(
+      (d) => d !== "Wednesday 18 November",
+    )) {
+      expect(spinIn(monthCell(grid, day)), day).toHaveLength(1);
+    }
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2026-11-19",
+        name: SPIN_10_NAME,
+        key: `${spin.id}@2026-11-18`,
+      }),
+    );
+    expect(spinChipOn(grid, "Thursday 19 November")).toHaveFocus();
+  });
+});
+
 // CAL-045 Contract, Blocks 3 and 4: the page's one new prop, `sheetSync`,
 // reaches the sheet as its `sync`. CAL-013's renderUndoPage harness with a
 // fake SheetSync of three vi.fns; the event's store row carries
