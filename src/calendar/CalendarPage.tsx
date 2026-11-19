@@ -1,4 +1,4 @@
-import { format } from "date-fns";
+import { addDays, differenceInCalendarDays, format, parseISO } from "date-fns";
 import {
   type JSX,
   useEffect,
@@ -112,6 +112,17 @@ const focused = (): HTMLElement | null =>
  */
 const chipOf = (event: Event): HTMLElement | null =>
   document.querySelector<HTMLElement>(`[data-chip-key="${chipKey(event)}"]`);
+
+/**
+ * `event` as the occurrence it became after a whole-series move by `days`
+ * calendar days (CAL-075 Block 3): `date` shifted as a local calendar date.
+ */
+function movedOccurrence(event: Event, date: string, days: number): Event {
+  return {
+    ...event,
+    occurrenceDate: format(addDays(parseISO(date), days), "yyyy-MM-dd"),
+  };
+}
 
 /**
  * The selection of a period: in a month, the current selection when it lies
@@ -323,6 +334,7 @@ function useEventEdits(
     }
     const { span, text } = asked;
     let ok = false;
+    let moved = event;
     if (scope === "occurrence") {
       // PO decision 5: the Undo writes the prior override's times back, null
       // where it had none.
@@ -354,8 +366,11 @@ function useEventEdits(
         text,
         (row) => actions.updateEvent(event.id, before, row.updatedAt),
       );
+      // CAL-075 Block 2: the occurrence moved with its series, by whole days.
+      const days = differenceInCalendarDays(span.startsAt, event.startsAt);
+      moved = movedOccurrence(event, date, days);
     }
-    if (ok && asked.focusAfter) focusChip(event);
+    if (ok && asked.focusAfter) focusChip(moved);
   };
 
   const onConfirm = (scope: EditScope) => {
