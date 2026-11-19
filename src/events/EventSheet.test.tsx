@@ -2919,6 +2919,49 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
         expect(reminders.clearReminder).not.toHaveBeenCalled();
         expect(overrides.setOverride).not.toHaveBeenCalled();
       });
+
+      // CAL-072 AC-1 (Contract Block 2): on "This event only" the series'
+      // All day is not written, so "At time" converts with the series'
+      // STORED All day (timed -> 0), whatever the date's All day now is.
+      it('a timed date of a timed series (template 15), All day switched on and "At time" picked, "This event only": setOverride carrying allDay: true once, then setReminder(series id, 0) once - the series\' timed "At time", not -540', async () => {
+        const { user, actions, reminders, overrides, series, onClose } =
+          await openStored(false, 15);
+        await waitFor(() => expect(reminderSelect()).toHaveValue("15"));
+        expect(allDaySwitch()).not.toBeChecked();
+        await user.click(allDaySwitch());
+        await user.selectOptions(reminderSelect(), "At time");
+        await user.click(save());
+        await answerThisEventOnly(user);
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        expect(overrides.setOverride).toHaveBeenCalledTimes(1);
+        const [eventId, date, fields] =
+          overrides.setOverride.mock.calls[0] ?? [];
+        expect([eventId, date]).toStrictEqual([series.id, "2026-10-21"]);
+        expect(fields).toMatchObject({ allDay: true });
+        expect(reminders.setReminder.mock.calls).toStrictEqual([
+          [series.id, 0],
+        ]);
+        expect(reminders.clearReminder).not.toHaveBeenCalled();
+        expect(actions.updateEvent).not.toHaveBeenCalled();
+      });
+
+      // CAL-072 AC-2 (Contract Block 2, PO decision 1): with All day switched
+      // in this sheet the field's basis is what an "All events" save would
+      // write, so the 09:00 helper shows before the scope is known, and goes
+      // when the switch is turned back off. Nothing is saved.
+      it('a timed date of a timed series stored "At time" (0): switching All day on describes the Reminder as "At 09:00 on the day", switching it back off removes the helper', async () => {
+        const { user, reminders, overrides } = await openStored(false, 0);
+        await waitFor(() => expect(reminderSelect()).toHaveValue("at"));
+        expect(reminderSelect()).not.toHaveAttribute("aria-describedby");
+        await user.click(allDaySwitch());
+        expect(reminderSelect()).toHaveAccessibleDescription(
+          "At 09:00 on the day",
+        );
+        await user.click(allDaySwitch());
+        expect(reminderSelect()).not.toHaveAttribute("aria-describedby");
+        expect(reminders.setReminder).not.toHaveBeenCalled();
+        expect(overrides.setOverride).not.toHaveBeenCalled();
+      });
     });
   });
 });
