@@ -367,6 +367,29 @@ describe("the real tree's reference lines are not reported (AC-5)", () => {
   });
 });
 
+/**
+ * CAL-076: the largest duration vitest has reported for the whole-tree case
+ * in an instrumented run of the whole unit project (`--coverage`), over every
+ * row of CAL-076's "Measurements" table (`## Notes`). 7290 ms is CAL-069 RED
+ * on 2026-11-17, a run that timed out on a loaded host (`coverage` 253 s);
+ * CAL-071 GATES recorded 6985 ms, and CAL-076 RED's five runs on this
+ * Windows machine (12 logical CPUs) 719-2664 ms. Alone the case is ~150 ms.
+ * No CI figure exists. A new, larger figure raises this and the budget below.
+ */
+const SCAN_MAX_RECORDED_MS = 7290;
+
+/**
+ * CAL-076: the whole-tree case's budget, by the quarter rule (`tdd-cycle`:
+ * every test under a quarter of its timeout): the smallest multiple of 5000
+ * ms, vitest's default, at least 4 x SCAN_MAX_RECORDED_MS. 4 x 7290 is
+ * 29 160, so 30 s. Written out, not computed, so the check below compares
+ * two numbers somebody wrote.
+ */
+const SCAN_TIMEOUT_MS = 30_000;
+
+const WHOLE_TREE_CASE =
+  "no tracked text file assigns a literal to any of the six secret names";
+
 describe("no secret value appears in the repository (AC-5)", () => {
   test("the scan enumerates the tracked tree through git, not nothing (515 files at CAL-030 RED)", () => {
     expect(FILES.length).toBeGreaterThanOrEqual(400);
@@ -375,7 +398,27 @@ describe("no secret value appears in the repository (AC-5)", () => {
     expect(FILES).not.toContain("node_modules/yaml/package.json");
   });
 
-  test("no tracked text file assigns a literal to any of the six secret names", () => {
+  test(WHOLE_TREE_CASE, { timeout: SCAN_TIMEOUT_MS }, () => {
     expect(scanTree(FILES)).toEqual([]);
+  });
+
+  test("the whole-tree case runs on its measured budget, not vitest's 5000 ms default (CAL-076 AC-1)", ({
+    task,
+  }) => {
+    const wholeTree = task.suite?.tasks.find(
+      (t) => t.type === "test" && t.name === WHOLE_TREE_CASE,
+    );
+    expect(wholeTree?.type).toBe("test");
+    expect(wholeTree?.type === "test" ? wholeTree.timeout : undefined).toBe(
+      SCAN_TIMEOUT_MS,
+    );
+  });
+});
+
+describe("the whole-tree case's budget is derived from the measurements (CAL-076 AC-2)", () => {
+  test("SCAN_TIMEOUT_MS is the smallest multiple of 5000 ms at least 4 x SCAN_MAX_RECORDED_MS", () => {
+    expect(SCAN_TIMEOUT_MS).toBe(
+      Math.ceil((4 * SCAN_MAX_RECORDED_MS) / 5000) * 5000,
+    );
   });
 });
