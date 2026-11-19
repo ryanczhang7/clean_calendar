@@ -15,7 +15,9 @@ import {
   fakeSubscription,
   installPushBrowser,
   type PushBrowser,
+  subscriptionUnderKey,
   VAPID_KEY,
+  VAPID_KEY_A,
 } from "../test/push";
 import {
   isInstalledAndroidPwa,
@@ -353,6 +355,184 @@ describe("registerThisDevice - never rejects (Block 2)", () => {
         status: "error",
       });
       expect(repo.upsert).toHaveBeenCalledTimes(1);
+    },
+  );
+});
+
+// CAL-073 Contract, Blocks 1-3 and 6. A device whose subscription was made
+// under an earlier VAPID key (key A) re-subscribes under the current one (key
+// B); one under B, or one whose key the engine does not report, is kept.
+// MECHANICAL: call counts, the unsubscribe-before-subscribe order, the
+// subscribe options and the upsert argument are written out whole. The
+// expected bytes of B come from Node's decoder (nodeDecode), never from
+// vapidKeyBytes. Stored keys are exact-length ArrayBuffer copies
+// (subscriptionUnderKey).
+describe("registerThisDevice - the subscription's key against the current VAPID key (CAL-073)", () => {
+  const OLD_ENDPOINT = "https://push.example.test/send/old-key-device";
+  const OLD_KEYS = { p256dh: "BOld_p256dh-key", auth: "old-auth_3" };
+  const B = (): number[] => nodeDecode(VAPID_KEY);
+
+  /** The upsert of CREATED, the subscription subscribe() resolves to. */
+  const createdUpsert = (userAgent: string): unknown[][] => [
+    [
+      {
+        endpoint: "https://push.example.test/send/created-device",
+        p256dh: "BCreated-p256dh_key",
+        auth: "created_auth-2",
+        userAgent,
+      },
+    ],
+  ];
+  /** The upsert of the old subscription itself. */
+  const oldUpsert = (userAgent: string): unknown[][] => [
+    [
+      {
+        endpoint: OLD_ENDPOINT,
+        p256dh: "BOld_p256dh-key",
+        auth: "old-auth_3",
+        userAgent,
+      },
+    ],
+  ];
+
+  it("AC-1: a subscription under a different key is unsubscribed once, then re-subscribed once with exactly {userVisibleOnly: true, applicationServerKey: the current key}, and the NEW endpoint is upserted", async () => {
+    expect(nodeDecode(VAPID_KEY_A)).toHaveLength(65);
+    expect(nodeDecode(VAPID_KEY_A)[0]).toBe(0x04);
+    expect(nodeDecode(VAPID_KEY_A)).not.toStrictEqual(B());
+    const old = subscriptionUnderKey(
+      OLD_ENDPOINT,
+      OLD_KEYS,
+      nodeDecode(VAPID_KEY_A),
+    );
+    browser = installPushBrowser({
+      permission: "granted",
+      existing: old,
+      userAgent: ANDROID_UA,
+    });
+    vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+    const repo = okRepo();
+    await expect(registerThisDevice(repo)).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+    expect(browser.subscribe).toHaveBeenCalledTimes(1);
+    const unsubscribedAt = old.unsubscribe.mock.invocationCallOrder[0] ?? 0;
+    const subscribedAt = browser.subscribe.mock.invocationCallOrder[0] ?? 0;
+    expect(unsubscribedAt).toBeLessThan(subscribedAt);
+    const options = browser.subscribe.mock.calls[0]?.[0];
+    expect(Object.keys(options ?? {}).sort()).toStrictEqual([
+      "applicationServerKey",
+      "userVisibleOnly",
+    ]);
+    expect(options?.userVisibleOnly).toBe(true);
+    const key = options?.applicationServerKey;
+    expect(key).toBeInstanceOf(Uint8Array);
+    expect([...(key as Uint8Array)]).toStrictEqual(B());
+    expect(repo.upsert.mock.calls).toStrictEqual(createdUpsert(ANDROID_UA));
+    expect(browser.getSubscription).toHaveBeenCalledTimes(1);
+    expect(browser.requestPermission).not.toHaveBeenCalled();
+  });
+
+  it("AC-2: a subscription under exactly the current key is kept - no unsubscribe, no subscribe - and its own endpoint is upserted", async () => {
+    const current = subscriptionUnderKey(OLD_ENDPOINT, OLD_KEYS, B());
+    browser = installPushBrowser({
+      permission: "granted",
+      existing: current,
+      userAgent: DESKTOP_UA,
+    });
+    vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+    const repo = okRepo();
+    await expect(registerThisDevice(repo)).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(current.unsubscribe).not.toHaveBeenCalled();
+    expect(browser.subscribe).not.toHaveBeenCalled();
+    expect(repo.upsert.mock.calls).toStrictEqual(oldUpsert(DESKTOP_UA));
+  });
+
+  it("AC-3: a subscription whose applicationServerKey reads null is kept as unknown - no unsubscribe, no subscribe - and its own endpoint is upserted", async () => {
+    const unknown = subscriptionUnderKey(OLD_ENDPOINT, OLD_KEYS, null);
+    expect(unknown.options.applicationServerKey).toBeNull();
+    browser = installPushBrowser({
+      permission: "granted",
+      existing: unknown,
+      userAgent: DESKTOP_UA,
+    });
+    vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+    const repo = okRepo();
+    await expect(registerThisDevice(repo)).resolves.toStrictEqual({
+      status: "ok",
+    });
+    expect(unknown.unsubscribe).not.toHaveBeenCalled();
+    expect(browser.subscribe).not.toHaveBeenCalled();
+    expect(repo.upsert.mock.calls).toStrictEqual(oldUpsert(DESKTOP_UA));
+  });
+
+  it.each([
+    ["rejects", "reject"],
+    ["resolves false", "false"],
+  ] as const)(
+    "AC-4: when unsubscribing the old-key subscription %s, resolves {error} - no subscribe, nothing upserted",
+    async (_label, failure) => {
+      const old = subscriptionUnderKey(
+        OLD_ENDPOINT,
+        OLD_KEYS,
+        nodeDecode(VAPID_KEY_A),
+        failure,
+      );
+      browser = installPushBrowser({
+        permission: "granted",
+        existing: old,
+        userAgent: ANDROID_UA,
+      });
+      vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+      const repo = okRepo();
+      await expect(registerThisDevice(repo)).resolves.toStrictEqual({
+        status: "error",
+      });
+      expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(browser.subscribe).not.toHaveBeenCalled();
+      expect(repo.upsert).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([
+    [
+      "(a) the current key with only its last byte changed",
+      (b: number[]) => b.map((x, i) => (i === b.length - 1 ? x ^ 0x01 : x)),
+    ],
+    [
+      "(b) the current key with only its first byte changed",
+      (b: number[]) => b.map((x, i) => (i === 0 ? x ^ 0x01 : x)),
+    ],
+    [
+      "(c) the first 64 bytes of the current key",
+      (b: number[]) => b.slice(0, 64),
+    ],
+    [
+      "(d) the current key followed by one extra byte",
+      (b: number[]) => [...b, 0x00],
+    ],
+  ] as const)(
+    "AC-5: a stored key that is %s counts as different: one unsubscribe, one subscribe, the new endpoint upserted",
+    async (_label, derive) => {
+      const stored = derive(B());
+      expect(stored).not.toStrictEqual(B());
+      const old = subscriptionUnderKey(OLD_ENDPOINT, OLD_KEYS, stored);
+      expect(old.options.applicationServerKey?.byteLength).toBe(stored.length);
+      browser = installPushBrowser({
+        permission: "granted",
+        existing: old,
+        userAgent: ANDROID_UA,
+      });
+      vi.stubEnv("VITE_VAPID_PUBLIC_KEY", VAPID_KEY);
+      const repo = okRepo();
+      await expect(registerThisDevice(repo)).resolves.toStrictEqual({
+        status: "ok",
+      });
+      expect(old.unsubscribe).toHaveBeenCalledTimes(1);
+      expect(browser.subscribe).toHaveBeenCalledTimes(1);
+      expect(repo.upsert.mock.calls).toStrictEqual(createdUpsert(ANDROID_UA));
     },
   );
 });
