@@ -2,7 +2,7 @@
 id: EPIC-07
 title: Reminders that fire with the app closed
 status: todo
-stories: [CAL-026, CAL-057, CAL-027, CAL-028, CAL-029, CAL-058, CAL-073]
+stories: [CAL-026, CAL-057, CAL-027, CAL-028, CAL-029, CAL-058, CAL-073, CAL-072]
 ---
 
 ## Goal
@@ -34,6 +34,8 @@ permission stops receiving and is pruned.
    URL CAL-028's notification navigates to)
 7. CAL-073 — a device re-subscribes when the VAPID key has changed (CAL-027
    review follow-up)
+8. CAL-072 — the reminder's All-day basis on a repeating date is pinned, and
+   the live-template rule lives once (CAL-057 review follow-up)
 
 ## Deliberately not in this epic
 

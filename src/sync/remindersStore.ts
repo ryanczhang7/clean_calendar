@@ -26,20 +26,21 @@ export const remindersStore: RemindersStore = createCachedRemindersStore(
 );
 
 /**
- * The event's live template: `occurrenceDate` null and `deletedAt == null` (a
- * row with no `deletedAt` key, streamed before CAL-026, is live); else null.
+ * A live template: `occurrenceDate` null and `deletedAt == null` (a row with
+ * no `deletedAt` key, streamed before CAL-026, is live). The one place the
+ * rule is written; liveTemplate and the calendar's chips both read it.
  */
+export function isLiveTemplate(reminder: Reminder): boolean {
+  return reminder.occurrenceDate === null && reminder.deletedAt == null;
+}
+
+/** The event's live template (see isLiveTemplate); else null. */
 export function liveTemplate(
   reminders: readonly Reminder[],
   eventId: string,
 ): Reminder | null {
   return (
-    reminders.find(
-      (r) =>
-        r.eventId === eventId &&
-        r.occurrenceDate === null &&
-        r.deletedAt == null,
-    ) ?? null
+    reminders.find((r) => r.eventId === eventId && isLiveTemplate(r)) ?? null
   );
 }
 

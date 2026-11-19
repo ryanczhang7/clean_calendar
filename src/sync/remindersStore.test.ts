@@ -14,6 +14,7 @@ import { createCachedRemindersStore } from "./cachedStores";
 import { db as appDb, type CalendarDb } from "./db";
 import type { SyncResult } from "./hydrate";
 import {
+  isLiveTemplate,
   liveTemplate,
   type RemindersStore,
   remindersStore,
@@ -96,6 +97,50 @@ describe("liveTemplate(reminders, eventId) (AC-5, Block 8)", () => {
   it("a cached template with no deletedAt key (streamed before this story) is live", () => {
     const { deletedAt: _d, ...legacy } = template;
     expect(liveTemplate([legacy as Reminder], EVENT_ID)).toStrictEqual(legacy);
+  });
+});
+
+// CAL-072 AC-3, Contract Block 3: the one rule for "a live template",
+// exported so that liveTemplate and CalendarPage's chip map share it. The
+// truth table row for row; it reads occurrenceDate and deletedAt only.
+describe("isLiveTemplate(reminder) (CAL-072 AC-3, Block 3)", () => {
+  it("a template (occurrenceDate null) that is not deleted is live", () => {
+    expect(isLiveTemplate(template)).toBe(true);
+  });
+
+  it("a cleared template (deletedAt set) is not live", () => {
+    expect(cleared.occurrenceDate).toBeNull();
+    expect(isLiveTemplate(cleared)).toBe(false);
+  });
+
+  it("a per-occurrence row (occurrenceDate set) that is not deleted is not a live template", () => {
+    expect(materialised.deletedAt).toBeNull();
+    expect(isLiveTemplate(materialised)).toBe(false);
+  });
+
+  it("a per-occurrence row that is also deleted is not a live template", () => {
+    expect(
+      isLiveTemplate(
+        reminder(5, { occurrenceDate: "2026-10-27", deletedAt: T3 }),
+      ),
+    ).toBe(false);
+  });
+
+  it("a template with no deletedAt key (streamed before CAL-026) is live: == null, not === null", () => {
+    const { deletedAt: _d, ...legacy } = template;
+    expect(isLiveTemplate(legacy as Reminder)).toBe(true);
+  });
+
+  it("which event it belongs to, whether it was sent and its minutes do not decide it", () => {
+    expect(
+      isLiveTemplate(
+        reminder(6, {
+          eventId: OTHER_EVENT_ID,
+          minutesBefore: -540,
+          sentAt: "2026-10-27T08:45:00.000001+00:00",
+        }),
+      ),
+    ).toBe(true);
   });
 });
 
