@@ -4,8 +4,8 @@ title: Only Edit(path) deny rules protect the state files
 slug: only-edit-path-deny-rules-protect-the-st
 epic: 
 type: fix
-status: todo
-phase: PLANNED
+status: done
+phase: DONE
 branch: story/HARNESS-050-only-edit-path-deny-rules-protect-the-st
 depends_on: [HARNESS-047]      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [.claude/settings.json, .claude/tests/settings.test.sh, .claude/state/README.md, .claude/harness/rules.md, docs/wiki/audits/state-deny-2026-09-10.md]         # files this story expects to write; `plan.sh conflicts` reads it
@@ -267,6 +267,9 @@ the amended block says.**
   `bash scripts/mutate.sh .claude/tests/settings.test.sh 's|^SETTINGS=.*|SETTINGS="$REPO_ROOT/.claude/state/dv1-<a|b>.json"|' -- bash scripts/selftest.sh settings`
   after writing the two copies, confirm the suite is green again on the
   restored file, and paste the output here.
+  WAIVED (2026-11-19): closed without a cycle. The fix arrived by harness
+  refresh and the dead-rule check it would probe already passes here
+  (`settings: 71 passed, 0 failed`); see Notes.
 - **DV-2 - the runtime claim behind the fix. Owner: REVIEW.** Condition: in
   a throwaway, logged-in, interactive Claude Code session started in a
   checkout of this story's branch at the PR head (so `.claude/settings.json`
@@ -280,6 +283,9 @@ the amended block says.**
   the story stops at REVIEW rather than merging: put it to the user with the
   observation. Nothing in this repository can run this, which is why it is
   REVIEW's.
+  WAIVED (2026-11-19): closed without a cycle, so there is no PR head to
+  check out. Unrun here and upstream; it stays an open observation for the
+  harness upstream, not for this repository. See Notes.
 
 ## Amendments
 
@@ -300,14 +306,17 @@ name, below the table.
 | RED | `test-developer` | `opus` | writing the failing tests, the negative controls and the handoff is development work, and opus is judged the stronger model for it |
 | GREEN | `feature-developer` | `opus` | the failure mode of a weaker model here is reaching green by weakening a test, which is the one thing this harness exists to prevent |
 | GATES | `feature-developer` | `opus` | same risk as GREEN, and a gate failure is where "make it stop complaining" is most tempting |
+| DIFF-REVIEW | `lead-po` | `fable` | reading a whole diff for the defect no test was written for is judgement against the contract, and it is where a wrong call ships; a finding it labels goes back to GATES or RED, on opus |
 | REVIEW | `lead-po` | `fable` | reading review feedback against the contract is orchestration judgement, and a wrong call here ships; a fix it finds goes back to GATES or RED, on opus |
 | SCAFFOLD | `lead-po` | `opus` | source, tests and config in one indivisible derivation - code, with no failing test in front of any of it, so the stronger development model |
+| ADJUDICATE | `lead-po` | `fable` | a claim that an acceptance criterion, a threshold or a frozen test is wrong is judged against the contract by a fresh dispatch on different inputs, never by the orchestrator that wants the answer; needed in any phase, so it is last |
 
 **Resolved:**
 
 <!-- One line per dispatch, as it happened: phase, agent, the model that
      actually ran, and — if a phase was planned for one model and ran on
      another — what that changed. A choice with no verdict is folklore. -->
+- PLANNED, `lead-po`, planned `fable`: resolved `claude-fable-5-2` (Fable 5.2), 2026-11-19, no override reported. Verdict: story found already delivered by refresh; not planned for RED (see `## Notes`).
 ## Out of scope
 
 - Any change to what is protected: the two state files stay the only `no`
@@ -363,3 +372,50 @@ name, below the table.
   HARNESS-047 shares `.claude/settings.json` and
   `.claude/tests/settings.test.sh`; resolved by `depends_on`, not by running
   the two side by side.
+- **PLANNED check, 2026-11-19 (`lead-po`, dispatched): NOT READY FOR RED - the
+  story's change is already in this tree.** This file is the copy that came
+  with this repository's first commit (`def99d2`, 2026-10-10), taken from
+  `D:\agentic-dev-harness` while HARNESS-050 was still PLANNED there. Upstream
+  then ran it to DONE (merged in its PR #134, harness release 94), and this
+  repository received the result through `scripts/refresh-harness.sh`
+  (`f290f90`, release 93 to 119; now release 130). Read against the tree at
+  `dacae1d`:
+  - `.claude/settings.json` `deny` already holds no `Write(...)` or
+    `MultiEdit(...)` rule. It is eight elements, not C-1's seven:
+    `Edit(./.claude/state/attest.log)` sits after the two `Edit` rules (the
+    suite attributes it to HARNESS-084 AC-6). HARNESS-047's two `Bash` lines
+    are the last two elements and its position assertion is present.
+  - `.claude/tests/settings.test.sh` already has no `TOOLS`, has
+    `good_settings` (no `settings_for`), the dead-rule check, and describes
+    named `HARNESS-050 AC-5` and `HARNESS-050 AC-6`.
+    `grep -rn 'settings_for\|TOOLS' .claude/tests scripts` finds no caller: its only
+    hits are unrelated names (`TOOLS_LINE`, `GOOD_TOOLS`, `NEW_TOOLS`) and a
+    `floors.conf` comment.
+  - `.claude/state/README.md` and the `.claude/state/**` bullet of `rules.md`
+    already carry C-3's wording.
+  - `.claude/tests/floors.conf` declares `settings | 70`, not 27 (047 raised
+    it to 39, 050 to 70). Measured: `bash scripts/selftest.sh settings` gives
+    `settings: 71 passed, 0 failed`, 25.7 s wall.
+  - All four harness files are byte-identical (CR stripped) to upstream's at
+    release 134.
+  So every AC-1..AC-6 assertion exists and passes; RED cannot write a test
+  that fails, and GREEN has nothing to build. The Contract was NOT rewritten
+  to match: there is no work for it to describe. Two things the upstream story
+  left that this tree does not have:
+  1. `docs/wiki/audits/state-deny-2026-09-10.md` here lacks the
+     `## Update, 2026-10-10` section (audits are not refreshed). Docs only.
+  2. DV-2 was never run upstream: its audit says "as of 2026-10-11 it was not
+     run before the story merged, so that half is unconfirmed". Whether the
+     `Edit` rule refuses a `Write` tool call is still an unobserved claim,
+     here and upstream. It needs the user, in a throwaway interactive
+     session; it does not need a story cycle.
+  HARNESS-051 is in the same position (PLANNED here, DONE upstream). Put to
+  the user: close both here without a cycle, and where DV-2's observation
+  should be recorded (upstream is the harness's home; a fix made here would be
+  overwritten by the next refresh).
+- Closed as DONE without a cycle (2026-11-19), by the user's decision
+  ("Close it as done"): the change was delivered by the harness refresh
+  to release 134, every AC-1..AC-6 assertion is present and passing, and no
+  branch, PR or gate run was made. DV-1 and DV-2 are WAIVED for that reason.
+  The audit's missing `## Update, 2026-10-10` section and DV-2 are left to
+  the upstream harness. HARNESS-051 is not closed by this entry.
