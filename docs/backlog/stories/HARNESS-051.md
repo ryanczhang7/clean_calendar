@@ -4,8 +4,8 @@ title: plan.sh refuses an id with no story file instead of recommending from not
 slug: plan-sh-refuses-an-id-with-no-story-file
 epic: 
 type: fix
-status: todo
-phase: PLANNED
+status: done
+phase: DONE
 branch: story/HARNESS-051-plan-sh-refuses-an-id-with-no-story-file
 depends_on: []      # story ids; phase.sh refuses to start this story until they are DONE
 touches: [scripts/plan.sh, .claude/tests/plan.test.sh]         # files this story expects to write; `plan.sh conflicts` reads it
@@ -268,6 +268,9 @@ says.
         -- bash scripts/selftest.sh plan
 
   Paste the failing assertion names and the restore line here.
+  WAIVED (2026-11-19): closed without a cycle. The fix arrived by harness
+  refresh, so there is no GREEN line to remove; the suite already passes
+  (`plan: 287 passed, 0 failed`). See Notes.
 
 That is the rules.md budget: one defect-put-back for the central claim. No
 test here is written against existing behaviour that already passes
@@ -454,3 +457,63 @@ settled-by-measurement or oracle-free. Pin exactly; leave nothing open-ended.
 - `bash scripts/plan.sh HARNESS-051` recommends `/advance-story` because the
   story carries a Deferred verification (DV-1) that GATES must stop and run.
 
+- **NOT READY FOR RED (2026-11-19)** - PLANNED check by a dispatched
+  `lead-po`: the story's change is already in this tree. This file is the
+  PLANNED copy that came from `D:\agentic-dev-harness`; upstream then ran the
+  story to DONE (its `c78917d`, "HARNESS-051 DONE: merged as #135"), and this
+  repository received `scripts/plan.sh` and `.claude/tests/plan.test.sh`
+  through `scripts/refresh-harness.sh` (`f290f90`, release 93 to 119, the last
+  commit here to touch `scripts/plan.sh`). Read against the tree at `8577431`
+  (`.claude/harness/VERSION` here says 130; upstream's says 135):
+  - Both files this story `touches:` are byte-identical (CR stripped) to
+    upstream's:
+
+        $ for f in scripts/plan.sh .claude/tests/plan.test.sh; do cmp -s <(tr -d '\r' < $f) <(tr -d '\r' < /d/agentic-dev-harness/$f) && echo "$f identical"; done
+        scripts/plan.sh identical
+        .claude/tests/plan.test.sh identical
+
+  - AC-1..AC-4 already hold, each run with stdin from `/dev/null`:
+
+        == plan.sh next NO-SUCH-999
+        exit=2 stdout_bytes=0 stderr_lines=1
+        plan: no story at docs/backlog/stories/NO-SUCH-999.md
+        == plan.sh models NO-SUCH-999
+        exit=2 stdout_bytes=0 stderr_lines=1
+        plan: no story at docs/backlog/stories/NO-SUCH-999.md
+        == plan.sh NO-SUCH-999
+        exit=2 stdout_bytes=0 stderr_lines=1
+        plan: no story at docs/backlog/stories/NO-SUCH-999.md
+        == plan.sh write NO-SUCH-999
+        exit=2 stdout_bytes=0 stderr_lines=1
+        plan: no story at docs/backlog/stories/NO-SUCH-999.md
+
+    and no `docs/backlog/stories/NO-SUCH-999.md*` was left behind. The Context's
+    negative control (stdout non-empty and exit 0 for `next`/`models`, two
+    stderr lines for the bare form) no longer reproduces.
+  - `.claude/tests/plan.test.sh:849` already carries
+    `describe "HARNESS-051: next, models and the bare id refuse a story that
+    has no file"`, with assertions named `AC-1:`, `AC-2:`, `AC-3:` (line
+    printed exactly once, whole of stderr, empty stdout, exit 2, for each) and
+    `AC-4 control:`.
+  - The suite is green, which is AC-5 (`floors.conf` declares `plan | 287`):
+
+        $ time bash scripts/selftest.sh plan
+        plan: 287 passed, 0 failed
+        assertion floors: all 1 suite(s) met their declared floor (287 assertions executed, 287 declared).
+        1 harness suite(s) passed.
+        real	35m37.222s
+
+    The wall time was measured while another worktree's full self-test was
+    running on the same host (user 4m28s, sys 7m54s); it is not a figure for
+    the suite on a quiet machine.
+  So RED cannot write a test that fails and GREEN has nothing to build. The
+  Contract, Deferred verifications and Model guidance were NOT rewritten, and
+  `plan.sh write` was not run: there is no work for them to describe. Whether
+  upstream ran this story's DV-1 was not checked. Put to the user: close this
+  story as DONE without a cycle, as HARNESS-050 was.
+- Closed as DONE without a cycle (2026-11-19), by the user's decision
+  ("Close it as done"): the change was delivered by the harness refresh,
+  `scripts/plan.sh` and `.claude/tests/plan.test.sh` match upstream, AC-1..AC-5
+  are present and passing, and no branch, PR or gate run was made. DV-1 is
+  WAIVED for that reason; whether upstream ran it is left to the upstream
+  harness.
