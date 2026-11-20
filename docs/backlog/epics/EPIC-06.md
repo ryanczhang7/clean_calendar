@@ -2,7 +2,7 @@
 id: EPIC-06
 title: Recurring events
 status: todo
-stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075]
+stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075, CAL-077]
 ---
 
 ## Goal
@@ -30,6 +30,7 @@ all others; deleting one occurrence leaves the rest.
 3. CAL-025 — edit or delete one occurrence or the whole series
 4. CAL-074 — (fix) two occurrences of one series on the same day are told apart
 5. CAL-075 — (fix) a whole-series keyboard move keeps focus on the moved occurrence
+6. CAL-077 — (fix) a yearly series moved by keyboard across the end of February keeps focus, and the toast names the landing date
 
 ## Deliberately not in this epic
 
