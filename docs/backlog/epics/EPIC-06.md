@@ -2,7 +2,7 @@
 id: EPIC-06
 title: Recurring events
 status: todo
-stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075, CAL-077]
+stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075, CAL-077, CAL-078]
 ---
 
 ## Goal
@@ -31,6 +31,7 @@ all others; deleting one occurrence leaves the rest.
 4. CAL-074 — (fix) two occurrences of one series on the same day are told apart
 5. CAL-075 — (fix) a whole-series keyboard move keeps focus on the moved occurrence
 6. CAL-077 — (fix) a yearly series moved by keyboard across the end of February keeps focus, and the toast names the landing date
+7. CAL-078 — (fix) a one-day yearly event on 28 February is drawn on one day in a leap year
 
 ## Deliberately not in this epic
 
