@@ -3616,6 +3616,189 @@ describe("a whole-series keyboard move keeps focus on the moved occurrence (CAL-
   });
 });
 
+// CAL-077 Contract, Blocks 1 to 6. A yearly series re-anchors every
+// occurrence on the series row's month and day (`expand`), so a whole-series
+// move across the end of February lands the 2028 occurrence one day away from
+// "old date plus days". Focus and the toast follow where the acted-on
+// occurrence LANDS (AC-1 to AC-4); "This event only" keeps the asked date
+// (AC-5, a regression guard). Block 1's table, read out: each test waits for
+// the move's write and the redrawn chip before it reads focus or the toast,
+// so a red here is the focus or the text, not a timing artefact. MECHANICAL.
+// With D = 28 the 2028 occurrence is drawn on 28 AND 29 February before the
+// move (Notes, PO-1, not this story's): the chip is taken from Monday
+// 28 February's cell and no chip count is asserted before the move.
+describe("a yearly series moved across the end of February keeps focus, and the toast names the landing date (CAL-077 AC-1 to AC-5)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const BIRTHDAY_NAME = "Birthday, Gym, all day, repeats yearly";
+
+  /** Block 1: an all-day yearly Birthday from `date` February 2026. */
+  function birthdayFrom(date: number): Event {
+    return {
+      ...timed(
+        "Birthday",
+        new Date(2026, 1, date),
+        new Date(2026, 1, date + 1),
+      ),
+      allDay: true,
+      recurrence: { freq: "yearly", until: null, tz: DEVICE_TZ },
+    };
+  }
+
+  /** CAL-075's reader, declared here because its copy is local to that describe. */
+  const focusAt = () => {
+    const active = document.activeElement;
+    return {
+      day: active?.closest("[data-day]")?.getAttribute("data-day") ?? null,
+      name: active?.getAttribute("aria-label") ?? null,
+      key: active?.getAttribute("data-chip-key") ?? null,
+    };
+  };
+
+  const birthdayIn = (el: HTMLElement) =>
+    within(el).queryAllByRole("button", { name: BIRTHDAY_NAME });
+
+  function birthdayChipOn(grid: HTMLElement, day: string): HTMLElement {
+    const [chip] = birthdayIn(monthCell(grid, day));
+    expect(chip, `no Birthday chip on ${day}`).toBeDefined();
+    return chip as HTMLElement;
+  }
+
+  /** February 2028's grid once a Birthday chip is drawn on `day`. */
+  async function februaryWithBirthdayOn(day: string): Promise<HTMLElement> {
+    const grid = await settledGrid("February 2028");
+    await waitFor(() =>
+      expect(birthdayIn(monthCell(grid, day)).length).toBeGreaterThan(0),
+    );
+    return grid;
+  }
+
+  /**
+   * AC-1 and AC-2's move of `birthday` (from 25 February, already seeded
+   * with `useMoves`), confirmed for the whole series, up to the redrawn chip.
+   */
+  async function moveSeries25FebByAWeek(birthday: Event): Promise<HTMLElement> {
+    const { user, actions, over } = renderSeriesPage("/month/2028-02");
+    const grid = await februaryWithBirthdayOn("Friday 25 February");
+    expect(birthdayIn(grid)).toHaveLength(1);
+    birthdayChipOn(grid, "Friday 25 February").focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      birthday.id,
+      { startsAt: new Date(2026, 2, 4), endsAt: new Date(2026, 2, 5) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(birthdayIn(monthCell(grid, "Saturday 4 March"))).toHaveLength(1),
+    );
+    expect(birthdayIn(grid)).toHaveLength(1);
+    return grid;
+  }
+
+  /**
+   * AC-3 and AC-4's move of `birthday` (from 28 February, already seeded
+   * with `useMoves`), confirmed for the whole series, up to the redrawn chip.
+   */
+  async function moveSeries28FebByADay(birthday: Event): Promise<HTMLElement> {
+    const { user, actions, over } = renderSeriesPage("/month/2028-02");
+    const grid = await februaryWithBirthdayOn("Monday 28 February");
+    birthdayChipOn(grid, "Monday 28 February").focus();
+    await user.keyboard("{Alt>}{ArrowRight}{/Alt}");
+    await confirmScope(
+      user,
+      await changeDialog(),
+      "All events in the series",
+      "Save",
+    );
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(1));
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      birthday.id,
+      { startsAt: new Date(2026, 2, 1), endsAt: new Date(2026, 2, 2) },
+      STAMP,
+    ]);
+    expect(over.setOverride).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(birthdayIn(monthCell(grid, "Wednesday 1 March"))).toHaveLength(1),
+    );
+    expect(birthdayIn(monthCell(grid, "Monday 28 February"))).toHaveLength(0);
+    expect(birthdayIn(monthCell(grid, "Tuesday 29 February"))).toHaveLength(0);
+    expect(birthdayIn(grid)).toHaveLength(1);
+    return grid;
+  }
+
+  it('AC-1: Alt+↓ on the Friday 25 February 2028 chip of a yearly series from 25 February 2026, "All events in the series": focus is on the Birthday chip in Saturday 4 March\'s cell', async () => {
+    const birthday = birthdayFrom(25);
+    useMoves([birthday]);
+    const grid = await moveSeries25FebByAWeek(birthday);
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2028-03-04",
+        name: BIRTHDAY_NAME,
+        key: `${birthday.id}@2028-03-04`,
+      }),
+    );
+    expect(birthdayChipOn(grid, "Saturday 4 March")).toHaveFocus();
+  });
+
+  it('AC-2: the same whole-series move toasts "Moved to Sat 4 Mar", the day the occurrence is drawn, with Undo', async () => {
+    const birthday = birthdayFrom(25);
+    useMoves([birthday]);
+    await moveSeries25FebByAWeek(birthday);
+    await expectUndoToast("Moved to Sat 4 Mar");
+  });
+
+  it('AC-3: Alt+→ on the Monday 28 February 2028 chip of a yearly series from 28 February 2026, "All events in the series": focus is on the Birthday chip in Wednesday 1 March\'s cell', async () => {
+    const birthday = birthdayFrom(28);
+    useMoves([birthday]);
+    const grid = await moveSeries28FebByADay(birthday);
+    await waitFor(() =>
+      expect(focusAt()).toStrictEqual({
+        day: "2028-03-01",
+        name: BIRTHDAY_NAME,
+        key: `${birthday.id}@2028-03-01`,
+      }),
+    );
+    expect(birthdayChipOn(grid, "Wednesday 1 March")).toHaveFocus();
+  });
+
+  it('AC-4: the same whole-series move toasts "Moved to Wed 1 Mar", not the asked Tuesday 29 February, with Undo', async () => {
+    const birthday = birthdayFrom(28);
+    useMoves([birthday]);
+    await moveSeries28FebByADay(birthday);
+    await expectUndoToast("Moved to Wed 1 Mar");
+  });
+
+  it('AC-5: Alt+↓ on the Friday 25 February 2028 chip, "This event only": the toast still names the asked day, "Moved to Fri 3 Mar", and the chip is in Friday 3 March\'s cell', async () => {
+    const birthday = birthdayFrom(25);
+    useMoves([birthday]);
+    const { user, actions, over } = renderSeriesPage("/month/2028-02");
+    const grid = await februaryWithBirthdayOn("Friday 25 February");
+    birthdayChipOn(grid, "Friday 25 February").focus();
+    await user.keyboard("{Alt>}{ArrowDown}{/Alt}");
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(1));
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      birthday.id,
+      "2028-02-25",
+      { startsAt: new Date(2028, 2, 3), endsAt: new Date(2028, 2, 4) },
+    ]);
+    expect(actions.updateEvent).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(birthdayIn(monthCell(grid, "Friday 3 March"))).toHaveLength(1),
+    );
+    expect(birthdayIn(monthCell(grid, "Friday 25 February"))).toHaveLength(0);
+    await expectUndoToast("Moved to Fri 3 Mar");
+  });
+});
+
 // CAL-045 Contract, Blocks 3 and 4: the page's one new prop, `sheetSync`,
 // reaches the sheet as its `sync`. CAL-013's renderUndoPage harness with a
 // fake SheetSync of three vi.fns; the event's store row carries

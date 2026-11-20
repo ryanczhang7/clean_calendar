@@ -2,6 +2,7 @@ import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   deletedLabel,
   deletedSeriesLabel,
+  landedStart,
   movedLabel,
   moveEvent,
   moveToDay,
@@ -300,6 +301,37 @@ describe("seriesSpan moves the series by the occurrence's delta (CAL-025 Block 5
     expect(series).toStrictEqual(span(at(11, 4, 10), at(11, 4, 11)));
     expect(shown).toStrictEqual(span(at(11, 18, 10), at(11, 18, 11)));
     expect(next).toStrictEqual(span(at(11, 20, 10), at(11, 20, 11)));
+  });
+});
+
+// CAL-077 Contract, Block 2 (AC-1..4): after "All events in the series"
+// moves a yearly series, the acted-on occurrence lands on the moved series
+// row's date and time, `k` years on, where `k` is the shown occurrence's year
+// minus the series row's year. Added on the return to RED (R-1): the page
+// tests use one all-day fixture with k = 2 and a moved row that stays in
+// 2026, so neither the time of day nor the year arithmetic was pinned.
+// MECHANICAL; every instant is local-time, in the zone pinned above.
+describe("landedStart: a moved yearly series' occurrence lands on the moved row, k years on (CAL-077 Block 2)", () => {
+  it("keeps the time of day: a 25 Feb 2026 09:00 row moved to 4 Mar 2026 09:00, shown in 2028, lands 4 Mar 2028 09:00", () => {
+    const out = landedStart(
+      "yearly",
+      new Date(2026, 1, 25, 9, 0),
+      new Date(2026, 2, 4, 9, 0),
+      new Date(2028, 1, 25, 9, 0),
+      new Date(2028, 2, 3, 9, 0),
+    );
+    expect(out.getTime()).toBe(new Date(2028, 2, 4, 9, 0).getTime());
+  });
+
+  it("adds k to the moved row's year across New Year: a 31 Dec 2026 row moved to 1 Jan 2027, shown 31 Dec 2028, lands 1 Jan 2029, not 1 Jan 2028", () => {
+    const out = landedStart(
+      "yearly",
+      new Date(2026, 11, 31),
+      new Date(2027, 0, 1),
+      new Date(2028, 11, 31),
+      new Date(2029, 0, 1),
+    );
+    expect(out.getTime()).toBe(new Date(2029, 0, 1).getTime());
   });
 });
 
