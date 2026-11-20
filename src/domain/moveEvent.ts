@@ -1,4 +1,5 @@
 import { differenceInCalendarDays, format } from "date-fns";
+import type { Freq } from "../../shared/recurrence";
 import type { Event } from "../data/rows";
 
 // CAL-013 Contract, Block 1. Pure arithmetic for moving, nudging and resizing
@@ -114,4 +115,32 @@ export function seriesSpan(series: Span, shown: Span, next: Span): Span {
 /** "Deleted {title} and all its occurrences" (voice.md, Toasts). */
 export function deletedSeriesLabel(title: string): string {
   return `Deleted ${title} and all its occurrences`;
+}
+
+/**
+ * CAL-077 Contract, Blocks 2 and 3. Where the occurrence shown at `shownStart`
+ * lands after "All events" moves the series from `seriesStart` to
+ * `movedSeriesStart`: occurrence k of the old series is occurrence k of the
+ * moved one. Daily and weekly land where asked; yearly lands on the moved
+ * row's local month, day and time of day, k years on.
+ */
+export function landedStart(
+  freq: Freq,
+  seriesStart: Date,
+  movedSeriesStart: Date,
+  shownStart: Date,
+  askedStart: Date,
+): Date {
+  if (freq !== "yearly") return askedStart;
+  const k = shownStart.getFullYear() - seriesStart.getFullYear();
+  const m = movedSeriesStart;
+  return new Date(
+    m.getFullYear() + k,
+    m.getMonth(),
+    m.getDate(),
+    m.getHours(),
+    m.getMinutes(),
+    m.getSeconds(),
+    m.getMilliseconds(),
+  );
 }

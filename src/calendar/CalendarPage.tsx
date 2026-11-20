@@ -16,6 +16,7 @@ import { dayKey, monthGrid } from "../domain/monthGrid";
 import {
   deletedLabel,
   deletedSeriesLabel,
+  landedStart,
   movedLabel,
   moveEvent,
   moveToDay,
@@ -357,18 +358,31 @@ function useEventEdits(
       );
     } else if (series !== undefined) {
       const before = { startsAt: series.startsAt, endsAt: series.endsAt };
+      const next = seriesSpan(series, event, span);
+      // CAL-077 Block 2: a yearly occurrence lands on the moved row's date,
+      // which can differ from the asked day across the end of February.
+      const yearly = series.recurrence?.freq === "yearly";
+      const landing = landedStart(
+        series.recurrence?.freq ?? "daily",
+        series.startsAt,
+        next.startsAt,
+        event.startsAt,
+        span.startsAt,
+      );
       ok = await written(
-        actions.updateEvent(
-          event.id,
-          seriesSpan(series, event, span),
-          series.updatedAt,
-        ),
-        text,
+        actions.updateEvent(event.id, next, series.updatedAt),
+        yearly
+          ? movedLabel({ ...span, startsAt: landing }, event.allDay)
+          : text,
         (row) => actions.updateEvent(event.id, before, row.updatedAt),
       );
-      // CAL-075 Block 2: the occurrence moved with its series, by whole days.
-      const days = differenceInCalendarDays(span.startsAt, event.startsAt);
-      moved = movedOccurrence(event, date, days);
+      if (yearly) {
+        moved = { ...event, occurrenceDate: format(landing, "yyyy-MM-dd") };
+      } else {
+        // CAL-075 Block 2: the occurrence moved with its series, by whole days.
+        const days = differenceInCalendarDays(span.startsAt, event.startsAt);
+        moved = movedOccurrence(event, date, days);
+      }
     }
     if (ok && asked.focusAfter) focusChip(moved);
   };
