@@ -108,15 +108,9 @@ function dateOf(wall: Wall): string {
   return new Date(wall).toISOString().slice(0, 10);
 }
 
-// Shift a wall time by k calendar steps, keeping h:m:s.ms. With `strict`, a
-// yearly shift onto a date that does not exist (29 Feb) gives null; without
-// it, Date.UTC rolls it over (used only for ends).
-function shift(
-  wall: Wall,
-  freq: Freq,
-  k: number,
-  strict: boolean,
-): Wall | null {
+// Shift a wall time by k calendar steps, keeping h:m:s.ms. A yearly shift
+// onto a date that does not exist (29 Feb) gives null.
+function shift(wall: Wall, freq: Freq, k: number): Wall | null {
   const d = new Date(wall);
   const y = d.getUTCFullYear();
   const m = d.getUTCMonth();
@@ -124,7 +118,7 @@ function shift(
   const time = wall - Date.UTC(y, m, day);
   if (freq === "yearly") {
     const shifted = Date.UTC(y + k, m, day);
-    if (strict && new Date(shifted).getUTCDate() !== day) return null;
+    if (new Date(shifted).getUTCDate() !== day) return null;
     return shifted + time;
   }
   const days = freq === "weekly" ? 7 * k : k;
@@ -148,7 +142,7 @@ export function expand(
 
   const out: Occurrence[] = [];
   for (let k = 0; ; k++) {
-    const sWall = shift(startWall, freq, k, true);
+    const sWall = shift(startWall, freq, k);
     if (sWall === null) continue;
     const occurrenceDate = dateOf(sWall);
     if (until !== null && occurrenceDate > until) break;
@@ -159,8 +153,11 @@ export function expand(
       end = series.endsAt.getTime();
     } else {
       start = fromWall(sWall, f);
-      // The end shifts by the same calendar step, not by elapsed ms.
-      end = fromWall(shift(endWall, freq, k, false) as Wall, f);
+      // The end keeps the row's length on the wall clock of `tz`, not in
+      // elapsed ms (an all-day event still ends at local midnight on a DST
+      // day) and not re-anchored on the row's end month and day (28 Feb to
+      // 1 Mar is one day in 2026 and two in 2028).
+      end = fromWall(sWall + (endWall - startWall), f);
     }
     if (start >= rangeEnd) break;
     if (!(end > rangeStart)) continue;
