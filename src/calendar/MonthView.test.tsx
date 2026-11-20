@@ -12,6 +12,7 @@ import { MemoryRouter, useLocation } from "react-router";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Event, Kind } from "../data/rows";
 import type { KindsSnapshot } from "../sync/kindsStore";
+import { occurrencesIn } from "../sync/useOccurrences";
 import { installMatchMedia } from "../test/media";
 import { EmptyMonth } from "./EmptyMonth";
 import type { ChipCommand } from "./EventChip";
@@ -1265,5 +1266,77 @@ describe("moving and deleting from the month (CAL-013 Block 5)", () => {
     const event = swim();
     renderMoving({ events: [event] });
     expect(swimChip()).toHaveAttribute("data-event-id", event.id);
+  });
+});
+
+// CAL-078 AC-2, Contract Block 4. MECHANICAL: the cell names, the chip count
+// and the key count are read out of the criterion. The real expander behind
+// the real mapping to Event (`occurrencesIn`), the real MonthView; the series
+// is stored in the device's zone, so the case holds in any host zone.
+describe("a one-day yearly event on 28 February in a leap year (CAL-078 AC-2)", () => {
+  const TZ = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+  function birthday(): Event {
+    return {
+      ...event(
+        "Birthday",
+        GYM,
+        new Date(2026, 1, 28),
+        new Date(2026, 2, 1),
+        true,
+      ),
+      recurrence: { freq: "yearly", until: null, tz: TZ },
+    };
+  }
+
+  function renderFebruary2028(series: Event) {
+    // February 2028's grid: Monday 31 January to Sunday 12 March (Block 4).
+    const events = occurrencesIn(
+      [series],
+      [],
+      new Date(2028, 0, 31),
+      new Date(2028, 2, 13),
+    );
+    renderMonth({
+      events,
+      year: 2028,
+      month: 2,
+      today: new Date(2028, 1, 10, 15, 30),
+      selected: new Date(2028, 1, 10),
+    });
+    return screen.getByRole("grid", { name: "February 2028" });
+  }
+
+  it("draws the Birthday chip once, in Monday 28 February's cell, named with 1 event", () => {
+    const g = renderFebruary2028(birthday());
+    const monday = within(g).getByRole("gridcell", {
+      name: "Monday 28 February, 1 event",
+    });
+    expect(monday).toHaveAttribute("data-day", "2028-02-28");
+    expect(chipNames(monday)).toStrictEqual([
+      "Birthday, Gym, all day, repeats yearly",
+    ]);
+  });
+
+  it("leaves Tuesday 29 February's cell with no chip, named with no events", () => {
+    const g = renderFebruary2028(birthday());
+    const tuesday = within(g).getByRole("gridcell", {
+      name: "Tuesday 29 February, no events",
+    });
+    expect(tuesday).toHaveAttribute("data-day", "2028-02-29");
+    expect(chipNames(tuesday)).toStrictEqual([]);
+  });
+
+  it("holds exactly one element keyed <id>@2028-02-28 in the whole grid, inside 28 February's cell", () => {
+    const series = birthday();
+    const g = renderFebruary2028(series);
+    const keyed = g.querySelectorAll(
+      `[data-chip-key="${series.id}@2028-02-28"]`,
+    );
+    expect(keyed).toHaveLength(1);
+    expect(keyed[0]?.closest('[role="gridcell"]')).toHaveAttribute(
+      "data-day",
+      "2028-02-28",
+    );
   });
 });

@@ -577,6 +577,230 @@
           "notes": null
         }
       ]
+    },
+    {
+      "name": "CAL-078 AC-1: a one-day 28 February yearly all-day series is one calendar day long in 2027, 2028 and 2029",
+      "series": {
+        "id": "s78a",
+        "title": "Birthday",
+        "kindId": "k78",
+        "startsAt": "2026-02-28T00:00:00.000Z",
+        "endsAt": "2026-03-01T00:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-01-01T00:00:00.000Z",
+        "end": "2030-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s78a",
+          "occurrenceDate": "2027-02-28",
+          "title": "Birthday",
+          "kindId": "k78",
+          "startsAt": "2027-02-28T00:00:00.000Z",
+          "endsAt": "2027-03-01T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s78a",
+          "occurrenceDate": "2028-02-28",
+          "title": "Birthday",
+          "kindId": "k78",
+          "startsAt": "2028-02-28T00:00:00.000Z",
+          "endsAt": "2028-02-29T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s78a",
+          "occurrenceDate": "2029-02-28",
+          "title": "Birthday",
+          "kindId": "k78",
+          "startsAt": "2029-02-28T00:00:00.000Z",
+          "endsAt": "2029-03-01T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-078 AC-1: a one-day 28 February yearly all-day series has no occurrence over a range opening on 29 February 2028",
+      "series": {
+        "id": "s78a",
+        "title": "Birthday",
+        "kindId": "k78",
+        "startsAt": "2026-02-28T00:00:00.000Z",
+        "endsAt": "2026-03-01T00:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2028-02-29T00:00:00.000Z",
+        "end": "2028-03-10T00:00:00.000Z"
+      },
+      "expected": []
+    },
+    {
+      "name": "CAL-078 AC-3a: a three-day 27 February yearly all-day series is three days in 2028 (27 to 29 February) and in 2027",
+      "series": {
+        "id": "s78b",
+        "title": "Trip",
+        "kindId": "k78",
+        "startsAt": "2026-02-27T00:00:00.000Z",
+        "endsAt": "2026-03-02T00:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-01-01T00:00:00.000Z",
+        "end": "2029-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s78b",
+          "occurrenceDate": "2027-02-27",
+          "title": "Trip",
+          "kindId": "k78",
+          "startsAt": "2027-02-27T00:00:00.000Z",
+          "endsAt": "2027-03-02T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s78b",
+          "occurrenceDate": "2028-02-27",
+          "title": "Trip",
+          "kindId": "k78",
+          "startsAt": "2028-02-27T00:00:00.000Z",
+          "endsAt": "2028-03-01T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-078 AC-3b: a timed two-hour yearly series from 23:00 on 28 February is two hours long in 2028, ending 01:00 on 29 February",
+      "series": {
+        "id": "s78c",
+        "title": "Late show",
+        "kindId": "k78",
+        "startsAt": "2026-02-28T23:00:00.000Z",
+        "endsAt": "2026-03-01T01:00:00.000Z",
+        "allDay": false,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2028-01-01T00:00:00.000Z",
+        "end": "2029-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s78c",
+          "occurrenceDate": "2028-02-28",
+          "title": "Late show",
+          "kindId": "k78",
+          "startsAt": "2028-02-28T23:00:00.000Z",
+          "endsAt": "2028-02-29T01:00:00.000Z",
+          "allDay": false,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-078 AC-3c: a two-day yearly all-day series stored on 28 February 2028 is two days in 2029 (28 February and 1 March)",
+      "series": {
+        "id": "s78d",
+        "title": "Retreat",
+        "kindId": "k78",
+        "startsAt": "2028-02-28T00:00:00.000Z",
+        "endsAt": "2028-03-01T00:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2029-01-01T00:00:00.000Z",
+        "end": "2030-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s78d",
+          "occurrenceDate": "2029-02-28",
+          "title": "Retreat",
+          "kindId": "k78",
+          "startsAt": "2029-02-28T00:00:00.000Z",
+          "endsAt": "2029-03-02T00:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-078 AC-4a: a one-day 28 March yearly all-day series ends at local midnight on the day London's clocks go forward (2027) and in 2028",
+      "series": {
+        "id": "s78e",
+        "title": "Spring",
+        "kindId": "k78",
+        "startsAt": "2026-03-28T00:00:00.000Z",
+        "endsAt": "2026-03-29T00:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "yearly", "until": null, "tz": "Europe/London" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-01-01T00:00:00.000Z",
+        "end": "2029-01-01T00:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s78e",
+          "occurrenceDate": "2027-03-28",
+          "title": "Spring",
+          "kindId": "k78",
+          "startsAt": "2027-03-28T00:00:00.000Z",
+          "endsAt": "2027-03-28T23:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s78e",
+          "occurrenceDate": "2028-03-28",
+          "title": "Spring",
+          "kindId": "k78",
+          "startsAt": "2028-03-27T23:00:00.000Z",
+          "endsAt": "2028-03-28T23:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
     }
   ]
 }
