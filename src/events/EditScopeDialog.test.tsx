@@ -147,6 +147,29 @@ describe.each(["change", "delete"] as const)(
       expect(onCancel).not.toHaveBeenCalled();
     });
 
+    // CAL-080 Contract, Block 4. Going back to the default after leaving it.
+    // State (T1) and confirm (T2) are separate on purpose: the Host closes
+    // the dialog on confirm, so the radios cannot be read after it (PO-1),
+    // and in one combined test a state failure would hide the onConfirm one.
+    it('going back: "All events in the series" then "This event only" leaves "This event only" checked and "All events in the series" not (CAL-080)', async () => {
+      const { user } = await openDialog(kind);
+      await user.click(allEvents());
+      expect(allEvents()).toBeChecked();
+      expect(thisOnly()).not.toBeChecked();
+      await user.click(thisOnly());
+      expect(thisOnly()).toBeChecked();
+      expect(allEvents()).not.toBeChecked();
+    });
+
+    it(`going back then ${CONFIRM[kind]} calls onConfirm("occurrence") once, never "series" (CAL-080)`, async () => {
+      const { user, onConfirm, onCancel } = await openDialog(kind);
+      await user.click(allEvents());
+      await user.click(thisOnly());
+      await user.click(screen.getByRole("button", { name: CONFIRM[kind] }));
+      expect(onConfirm.mock.calls).toStrictEqual([["occurrence"]]);
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
     it("Cancel calls onCancel once and never onConfirm; focus returns to the opener", async () => {
       const { user, onConfirm, onCancel, opener } = await openDialog(kind);
       await user.click(allEvents());
