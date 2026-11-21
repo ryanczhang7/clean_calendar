@@ -376,6 +376,76 @@ describe("CAL-079: a start in a spring-forward gap (Contract Block 2)", () => {
   });
 });
 
+// CAL-083. An all-day series is read as whole local dates (Contract Block 2,
+// PO-1 candidate a). Cuba, 8 March 2026: 00:00 CST (-05:00) becomes 01:00 CDT
+// (-04:00) at 05:00Z. Every instant is read out of Contract Block 4, not
+// derived here.
+describe("CAL-083: an all-day series stored beside a midnight clock change (Contract Block 2)", () => {
+  const HAVANA = "America/Havana";
+  const triples = (os: Occurrence[]) =>
+    os.map((o) => [
+      o.occurrenceDate,
+      o.startsAt.toISOString(),
+      o.endsAt.toISOString(),
+    ]);
+
+  it("T1: a daily three-day all-day Havana row (5-7 March 2026) keeps its count of dates: the occurrences starting 6, 7 and 8 March end at the first instant of 9, 10 and 11 March (04:00Z), not an hour later", () => {
+    const got = expand(
+      series({
+        title: "Festival",
+        allDay: true,
+        startsAt: at("2026-03-05T05:00:00.000Z"),
+        endsAt: at("2026-03-08T05:00:00.000Z"),
+        recurrence: { freq: "daily", until: null, tz: HAVANA },
+      }),
+      [],
+      range("2026-03-08T05:00:00.000Z", "2026-03-09T04:00:00.000Z"),
+    );
+    expect(triples(got)).toEqual([
+      ["2026-03-06", "2026-03-06T05:00:00.000Z", "2026-03-09T04:00:00.000Z"],
+      ["2026-03-07", "2026-03-07T05:00:00.000Z", "2026-03-10T04:00:00.000Z"],
+      ["2026-03-08", "2026-03-08T05:00:00.000Z", "2026-03-11T04:00:00.000Z"],
+    ]);
+  });
+
+  it("T2: a timed daily Havana row on the same two instants as the all-day H7 row (7 March 05:00Z to 8 March 05:00Z, allDay false) is unchanged: the wall rule still gives 8 March ending 06:00Z and 9 and 10 March ending 05:00Z", () => {
+    const got = expand(
+      series({
+        allDay: false,
+        startsAt: at("2026-03-07T05:00:00.000Z"),
+        endsAt: at("2026-03-08T05:00:00.000Z"),
+        recurrence: { freq: "daily", until: null, tz: HAVANA },
+      }),
+      [],
+      range("2026-03-09T05:00:00.000Z", "2026-03-11T04:00:00.000Z"),
+    );
+    expect(triples(got)).toEqual([
+      ["2026-03-08", "2026-03-08T05:00:00.000Z", "2026-03-09T06:00:00.000Z"],
+      ["2026-03-09", "2026-03-09T04:00:00.000Z", "2026-03-10T05:00:00.000Z"],
+      ["2026-03-10", "2026-03-10T04:00:00.000Z", "2026-03-11T05:00:00.000Z"],
+    ]);
+    expect(got.every((o) => !o.allDay)).toBe(true);
+  });
+
+  it("T3 (PO-2 A): an all-day daily row whose stored instants are not local midnights in tz (00:00Z, i.e. 19:00 New York) stays on the wall rule and is not snapped to whole dates: 19:00 to 19:00 local across 8 March 2026", () => {
+    const got = expand(
+      series({
+        allDay: true,
+        startsAt: at("2026-03-01T00:00:00.000Z"),
+        endsAt: at("2026-03-02T00:00:00.000Z"),
+        recurrence: { freq: "daily", until: null, tz: "America/New_York" },
+      }),
+      [],
+      range("2026-03-08T00:00:00.000Z", "2026-03-10T00:00:00.000Z"),
+    );
+    expect(triples(got)).toEqual([
+      ["2026-03-07", "2026-03-08T00:00:00.000Z", "2026-03-08T23:00:00.000Z"],
+      ["2026-03-08", "2026-03-08T23:00:00.000Z", "2026-03-09T23:00:00.000Z"],
+      ["2026-03-09", "2026-03-09T23:00:00.000Z", "2026-03-10T23:00:00.000Z"],
+    ]);
+  });
+});
+
 describe("range is half-open and judged on original times (Block 4)", () => {
   it("returns [] for a range entirely before the series", () => {
     expect(
