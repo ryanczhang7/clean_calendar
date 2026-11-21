@@ -206,8 +206,8 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const b = on14("B", [9, 30], [10, 30]);
     expect(overlapColumns([a, b])).toStrictEqual(
       new Map([
-        ["A", cols(0, 2)],
-        ["B", cols(1, 2)],
+        [a, cols(0, 2)],
+        [b, cols(1, 2)],
       ]),
     );
   });
@@ -218,9 +218,9 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const c = on14("C", [10, 0], [11, 0]);
     expect(overlapColumns([a, b, c])).toStrictEqual(
       new Map([
-        ["A", cols(0, 2)],
-        ["B", cols(1, 2)],
-        ["C", cols(0, 2)],
+        [a, cols(0, 2)],
+        [b, cols(1, 2)],
+        [c, cols(0, 2)],
       ]),
     );
   });
@@ -231,9 +231,9 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const b = on14("b", [9, 0], [10, 0], "Bravo");
     expect(overlapColumns([c, a, b])).toStrictEqual(
       new Map([
-        ["a", cols(0, 3)],
-        ["b", cols(1, 3)],
-        ["c", cols(2, 3)],
+        [a, cols(0, 3)],
+        [b, cols(1, 3)],
+        [c, cols(2, 3)],
       ]),
     );
   });
@@ -243,8 +243,8 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const b = on14("B", [10, 0], [11, 0]);
     expect(overlapColumns([a, b])).toStrictEqual(
       new Map([
-        ["A", cols(0, 1)],
-        ["B", cols(0, 1)],
+        [a, cols(0, 1)],
+        [b, cols(0, 1)],
       ]),
     );
     // The same boundary seen by the cluster rule rather than the column
@@ -255,17 +255,16 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const c = on14("C", [10, 0], [11, 0]);
     expect(overlapColumns([x, y, c])).toStrictEqual(
       new Map([
-        ["X", cols(0, 2)],
-        ["Y", cols(1, 2)],
-        ["C", cols(0, 1)],
+        [x, cols(0, 2)],
+        [y, cols(1, 2)],
+        [c, cols(0, 1)],
       ]),
     );
   });
 
   it("a lone event takes the full width: column 0 of 1", () => {
-    expect(overlapColumns([on14("A", [9, 0], [10, 0])])).toStrictEqual(
-      new Map([["A", cols(0, 1)]]),
-    );
+    const a = on14("A", [9, 0], [10, 0]);
+    expect(overlapColumns([a])).toStrictEqual(new Map([[a, cols(0, 1)]]));
   });
 
   it("two clusters in one day are sized apart: the 09-10 pair in halves, 14-15 alone at full width", () => {
@@ -274,9 +273,9 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const z = on14("Z", [14, 0], [15, 0]);
     expect(overlapColumns([z, y, x])).toStrictEqual(
       new Map([
-        ["X", cols(0, 2)],
-        ["Y", cols(1, 2)],
-        ["Z", cols(0, 1)],
+        [x, cols(0, 2)],
+        [y, cols(1, 2)],
+        [z, cols(0, 1)],
       ]),
     );
   });
@@ -287,9 +286,9 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const later = on14("later", [9, 30], [10, 0], "Bravo");
     expect(overlapColumns([later, short, long])).toStrictEqual(
       new Map([
-        ["long", cols(0, 3)],
-        ["short", cols(1, 3)],
-        ["later", cols(2, 3)],
+        [long, cols(0, 3)],
+        [short, cols(1, 3)],
+        [later, cols(2, 3)],
       ]),
     );
   });
@@ -298,12 +297,29 @@ describe("overlapColumns(events) - AC-2, Block 1's worked examples", () => {
     const hotel = ev("H", oct(14), oct(15), "Hotel", true);
     const a = on14("A", [9, 0], [10, 0]);
     expect(overlapColumns([hotel, a])).toStrictEqual(
-      new Map([["A", cols(0, 1)]]),
+      new Map([[a, cols(0, 1)]]),
     );
   });
 
   it("no events give an empty map", () => {
     expect(overlapColumns([])).toStrictEqual(new Map());
+  });
+
+  // CAL-081 Contract Block 5, T3. Two occurrences of one series share an
+  // `id` (CAL-074); when they fall in different clusters each keeps its own
+  // entry, keyed by the very object passed in.
+  it("two events sharing an id in different clusters each keep their own entry: the 00:00 Late shift halves with X, the 23:00 Night stays full width", () => {
+    const late = ev("S", oct(14, 0), oct(14, 1), "Late shift");
+    const night = ev("S", oct(14, 23), oct(15, 0), "Night");
+    const x = on14("X", [0, 30], [1, 30]);
+    const layout = overlapColumns([late, night, x]);
+    expect(layout).toStrictEqual(
+      new Map([
+        [late, cols(0, 2)],
+        [x, cols(1, 2)],
+        [night, cols(0, 1)],
+      ]),
+    );
   });
 });
 

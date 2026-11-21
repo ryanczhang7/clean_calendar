@@ -138,7 +138,7 @@ export function TimeGrid(props: {
             c.endsAt,
             hourHeight,
           );
-          const { column, columns: n } = layout.get(c.id) ?? {
+          const { column, columns: n } = layout.get(c) ?? {
             column: 0,
             columns: 1,
           };

@@ -1080,4 +1080,33 @@ describe("two occurrences of one series on one day are two blocks (CAL-074 Block
       [night, "down", block],
     ]);
   });
+
+  // CAL-081 AC-1 / AC-2, Contract Blocks 5 and 6. Each occurrence takes the
+  // column share of ITS OWN overlap cluster, not the share of whichever
+  // cluster last wrote the shared id. Blocks are found by accessible name,
+  // never by top; `[lateShift, night, oneOff]` is the order DV-1 predicts by.
+  // Late shift is asserted LAST so that, against today's defect (it fails
+  // there), the one-off and Night assertions have already run and been seen
+  // to pass; under DV-1 Night fails instead, before Late shift is reached.
+  it("AC-1: with a one-off at 00:30-01:30, the Late shift block and the one-off take a half each, and the 23:00 Night block the whole column", () => {
+    const { lateShift, night } = occurrences();
+    const oneOff = event("Handover", oct(14, 0, 30), oct(14, 1, 30));
+    renderDay([lateShift, night, oneOff]);
+    const block = (name: string) =>
+      blockOf(screen.getByRole("button", { name }));
+    expectHorizontal(block("Handover, Gym, 00:30 to 01:30"), 50, 50);
+    expectHorizontal(block(NIGHT_NAME), 0, 100);
+    expectHorizontal(block(LATE_SHIFT_NAME), 0, 50);
+  });
+
+  it("AC-2: with a one-off at 23:30-23:45, the Night block and the one-off take a half each, and the 00:00 Late shift block the whole column", () => {
+    const { lateShift, night } = occurrences();
+    const oneOff = event("Handover", oct(14, 23, 30), oct(14, 23, 45));
+    renderDay([lateShift, night, oneOff]);
+    const block = (name: string) =>
+      blockOf(screen.getByRole("button", { name }));
+    expectHorizontal(block("Handover, Gym, 23:30 to 23:45"), 50, 50);
+    expectHorizontal(block(NIGHT_NAME), 0, 50);
+    expectHorizontal(block(LATE_SHIFT_NAME), 0, 100);
+  });
 });
