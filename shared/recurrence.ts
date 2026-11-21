@@ -153,11 +153,18 @@ export function expand(
       end = series.endsAt.getTime();
     } else {
       start = fromWall(sWall, f);
-      // The end keeps the row's length on the wall clock of `tz`, not in
-      // elapsed ms (an all-day event still ends at local midnight on a DST
-      // day) and not re-anchored on the row's end month and day (28 Feb to
-      // 1 Mar is one day in 2026 and two in 2028).
-      end = fromWall(sWall + (endWall - startWall), f);
+      if (!series.allDay && toWall(start, f) !== sWall) {
+        // A timed start that does not exist on the clock (a spring-forward
+        // gap) moves the whole occurrence by the gap: it keeps its length
+        // in elapsed time, so it cannot end at or before its start.
+        end = start + (endWall - startWall);
+      } else {
+        // The end keeps the row's length on the wall clock of `tz`, not in
+        // elapsed ms (an all-day event still ends at local midnight on a DST
+        // day) and not re-anchored on the row's end month and day (28 Feb to
+        // 1 Mar is one day in 2026 and two in 2028).
+        end = fromWall(sWall + (endWall - startWall), f);
+      }
     }
     if (start >= rangeEnd) break;
     if (!(end > rangeStart)) continue;

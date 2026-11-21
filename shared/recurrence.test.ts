@@ -242,7 +242,7 @@ describe("DST resolution of a shifted wall time (Block 3)", () => {
   it("resolves a wall time that does not exist (01:30 on 29 March 2026 in London) with the pre-transition offset, to 01:30Z", () => {
     // Daily 01:30-03:30 London, from Friday 27 March 2026 (GMT, +00:00).
     // 29 March: clocks go 01:00 GMT -> 02:00 BST at 01:00Z, so 01:30 is
-    // skipped; the GMT reading gives 01:30Z. 03:30 BST = 02:30Z.
+    // skipped; the GMT reading gives 01:30Z. two hours after the start, 04:30 BST = 03:30Z.
     const s = series({
       startsAt: at("2026-03-27T01:30:00.000Z"),
       endsAt: at("2026-03-27T03:30:00.000Z"),
@@ -255,7 +255,7 @@ describe("DST resolution of a shifted wall time (Block 3)", () => {
     );
     expect(dates(got)).toEqual(["2026-03-29"]);
     expect(got[0]?.startsAt.toISOString()).toBe("2026-03-29T01:30:00.000Z");
-    expect(got[0]?.endsAt.toISOString()).toBe("2026-03-29T02:30:00.000Z");
+    expect(got[0]?.endsAt.toISOString()).toBe("2026-03-29T03:30:00.000Z");
   });
 
   it("resolves a wall time that exists twice (01:30 on 25 October 2026 in London) to the earlier, BST, instant 00:30Z", () => {
@@ -305,6 +305,74 @@ describe("DST resolution of a shifted wall time (Block 3)", () => {
       ["2026-10-31", "2026-10-31T00:00:00.000Z", "2026-11-02T00:00:00.000Z"],
     ]);
     expect(got.every((o) => o.allDay)).toBe(true);
+  });
+});
+
+// CAL-079. A shifted start in a spring-forward gap. US clocks, 8 March 2026:
+// 02:00 EST (-05:00) becomes 03:00 EDT (-04:00) at 07:00Z. Every instant is
+// read out of the story's criteria and Contract Block 3, not derived here.
+describe("CAL-079: a start in a spring-forward gap (Contract Block 2)", () => {
+  const NEW_YORK = "America/New_York";
+  const MARCH_8 = () =>
+    range("2026-03-08T00:00:00.000Z", "2026-03-09T00:00:00.000Z");
+  const nightShift = (startsAt: string, endsAt: string) =>
+    series({
+      startsAt: at(startsAt),
+      endsAt: at(endsAt),
+      recurrence: { freq: "daily", until: null, tz: NEW_YORK },
+    });
+
+  it("AC-1: starts the 8 March occurrence of a daily 02:30 New York series at 07:30Z, the pre-transition (EST) reading, not the evening before", () => {
+    const got = expand(
+      nightShift("2026-03-07T07:30:00.000Z", "2026-03-07T08:00:00.000Z"),
+      [],
+      MARCH_8(),
+    );
+    expect(dates(got)).toEqual(["2026-03-08"]);
+    expect(starts(got)).toEqual(["2026-03-08T07:30:00.000Z"]);
+  });
+
+  it("AC-2: a daily 02:15-03:15 New York series has no occurrence on 8 March ending at or before its start, and that one is 07:15Z to 08:15Z", () => {
+    const got = expand(
+      nightShift("2026-03-07T07:15:00.000Z", "2026-03-07T08:15:00.000Z"),
+      [],
+      MARCH_8(),
+    );
+    expect(got.length).toBeGreaterThan(0);
+    const notAfterStart = got
+      .filter((o) => !(o.endsAt.getTime() > o.startsAt.getTime()))
+      .map((o) => [
+        o.occurrenceDate,
+        o.startsAt.toISOString(),
+        o.endsAt.toISOString(),
+      ]);
+    expect(notAfterStart).toEqual([]);
+    expect(
+      got.map((o) => [
+        o.occurrenceDate,
+        o.startsAt.toISOString(),
+        o.endsAt.toISOString(),
+      ]),
+    ).toEqual([
+      ["2026-03-08", "2026-03-08T07:15:00.000Z", "2026-03-08T08:15:00.000Z"],
+    ]);
+  });
+
+  it("AC-3: occurrence 0 of a weekly London series stored at the second 01:30 of 25 October 2026 starts at exactly 01:30Z (GMT), not the BST 00:30Z, and 1 November at 01:30Z", () => {
+    const got = expand(
+      series({
+        startsAt: at("2026-10-25T01:30:00.000Z"),
+        endsAt: at("2026-10-25T02:30:00.000Z"),
+        recurrence: weekly(),
+      }),
+      [],
+      range("2026-10-24T00:00:00.000Z", "2026-11-02T00:00:00.000Z"),
+    );
+    expect(dates(got)).toEqual(["2026-10-25", "2026-11-01"]);
+    expect(starts(got)).toEqual([
+      "2026-10-25T01:30:00.000Z",
+      "2026-11-01T01:30:00.000Z",
+    ]);
   });
 });
 
