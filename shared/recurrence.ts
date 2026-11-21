@@ -136,6 +136,18 @@ export function expand(
   const endWall = toWall(series.endsAt.getTime(), f);
   const rangeStart = range.start.getTime();
   const rangeEnd = range.end.getTime();
+  // A whole-day row (an all-day row whose stored instants are both the first
+  // instant of a local date in `tz`) is read as whole local dates: `days` of
+  // them, so a row stored beside a midnight clock change does not hand its
+  // 25- or 23-hour wall length to the rest of the series (CAL-083).
+  const dayStart = (wall: Wall): Wall => Math.floor(wall / DAY_MS) * DAY_MS;
+  const firstInstant = (instant: number): boolean =>
+    fromWall(dayStart(toWall(instant, f)), f) === instant;
+  const wholeDays =
+    series.allDay &&
+    firstInstant(series.startsAt.getTime()) &&
+    firstInstant(series.endsAt.getTime());
+  const days = (dayStart(endWall) - dayStart(startWall)) / DAY_MS;
 
   const byDate = new Map<string, Override>();
   for (const o of overrides) byDate.set(o.occurrenceDate, o);
@@ -151,6 +163,9 @@ export function expand(
     if (k === 0) {
       start = series.startsAt.getTime();
       end = series.endsAt.getTime();
+    } else if (wholeDays) {
+      start = fromWall(dayStart(sWall), f);
+      end = fromWall(dayStart(sWall) + days * DAY_MS, f);
     } else {
       start = fromWall(sWall, f);
       if (!series.allDay && toWall(start, f) !== sWall) {

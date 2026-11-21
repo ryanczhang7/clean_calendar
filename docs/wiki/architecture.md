@@ -119,6 +119,11 @@ exist on the clock (a spring-forward gap), a timed occurrence moves whole by
 the gap and keeps its elapsed length (the series' wall-clock length, so a
 row stored across a fall-back hour is still as long as CAL-078 makes it);
 an all-day one still ends at local midnight (CAL-079).
+An all-day series is read as whole calendar days: each later occurrence runs
+from the first instant of its local date to the first instant of the date
+after its last day, for as many dates as the stored row covers, so a row
+stored beside a clock change at midnight (Havana, 8 March 2026) does not hand
+a 25-hour or 23-hour day to the rest of the series (CAL-083).
 
 **Reminders.** The scheduler runs every minute. It (1) materialises reminder
 rows for occurrences of recurring events falling in the next 48 h that do not
