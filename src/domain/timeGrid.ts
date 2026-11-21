@@ -63,20 +63,21 @@ function startOrder(a: Event, b: Event): number {
   );
 }
 
-/** AC-2. Column index and column count per event id, for the timed events of ONE day. */
+/** AC-2. Column index and column count per event object (not its id: two occurrences of one series share one), for the timed events of ONE day. */
 export function overlapColumns(
   events: Event[],
-): Map<string, { column: number; columns: number }> {
-  const result = new Map<string, { column: number; columns: number }>();
+): Map<Event, { column: number; columns: number }> {
+  const result = new Map<Event, { column: number; columns: number }>();
   const sorted = events.filter((e) => !e.allDay).sort(startOrder);
 
-  let cluster: { id: string; column: number }[] = [];
+  let cluster: { event: Event; column: number }[] = [];
   let columnEnds: number[] = [];
   let clusterEnd = Number.NEGATIVE_INFINITY;
 
   const close = () => {
     const columns = columnEnds.length;
-    for (const { id, column } of cluster) result.set(id, { column, columns });
+    for (const { event, column } of cluster)
+      result.set(event, { column, columns });
     cluster = [];
     columnEnds = [];
   };
@@ -96,7 +97,7 @@ export function overlapColumns(
     );
     if (column === -1) column = columnEnds.length;
     columnEnds[column] = end;
-    cluster.push({ id: event.id, column });
+    cluster.push({ event, column });
     clusterEnd = Math.max(clusterEnd, end);
   }
   close();
