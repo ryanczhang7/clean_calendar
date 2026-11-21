@@ -116,8 +116,9 @@ series' length on the wall clock of `recurrence.tz`, so a one-day event is one
 day in every year: a 28 February birthday ends at the midnight after 28
 February, also in a leap year (CAL-078). When an occurrence's start does not
 exist on the clock (a spring-forward gap), a timed occurrence moves whole by
-the gap and keeps its elapsed length, so it never ends at or before its
-start; an all-day one still ends at local midnight (CAL-079).
+the gap and keeps its elapsed length (the series' wall-clock length, so a
+row stored across a fall-back hour is still as long as CAL-078 makes it);
+an all-day one still ends at local midnight (CAL-079).
 
 **Reminders.** The scheduler runs every minute. It (1) materialises reminder
 rows for occurrences of recurring events falling in the next 48 h that do not
