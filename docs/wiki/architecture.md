@@ -111,7 +111,10 @@ runs in `send-reminders` under Deno to decide which upcoming occurrences need
 a `reminders` row. One implementation, two runtimes, one test suite under
 Vitest plus a smoke test under Deno asserting the same fixture results.
 Occurrences keep their wall-clock time in the series' `tz` across DST; a yearly
-series on 29 February occurs only in leap years.
+series on 29 February occurs only in leap years. An occurrence keeps the
+series' length on the wall clock of `recurrence.tz`, so a one-day event is one
+day in every year: a 28 February birthday ends at the midnight after 28
+February, also in a leap year (CAL-078).
 
 **Reminders.** The scheduler runs every minute. It (1) materialises reminder
 rows for occurrences of recurring events falling in the next 48 h that do not
