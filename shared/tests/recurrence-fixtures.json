@@ -988,6 +988,289 @@
           "notes": null
         }
       ]
+    },
+    {
+      "name": "CAL-083 AC-1: a daily all-day Havana series stored on 7 March 2026, the day before the midnight clock change, gives 8, 9 and 10 March each ending at the first instant of the next local date (04:00Z), not an hour into it",
+      "series": {
+        "id": "s83a",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-07T05:00:00.000Z",
+        "endsAt": "2026-03-08T05:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-08T05:00:00.000Z",
+        "end": "2026-03-11T04:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83a",
+          "occurrenceDate": "2026-03-08",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-08T05:00:00.000Z",
+          "endsAt": "2026-03-09T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s83a",
+          "occurrenceDate": "2026-03-09",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-09T04:00:00.000Z",
+          "endsAt": "2026-03-10T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s83a",
+          "occurrenceDate": "2026-03-10",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-10T04:00:00.000Z",
+          "endsAt": "2026-03-11T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-2: a daily all-day Havana series stored on 7 March 2026 has exactly one occurrence, 9 March, on the local day 9 March; 8 March does not spill into it",
+      "series": {
+        "id": "s83b",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-07T05:00:00.000Z",
+        "endsAt": "2026-03-08T05:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-09T04:00:00.000Z",
+        "end": "2026-03-10T04:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83b",
+          "occurrenceDate": "2026-03-09",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-09T04:00:00.000Z",
+          "endsAt": "2026-03-10T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-3: a yearly all-day Havana series stored on 7 March 2026 is one whole local day on 7 March 2027, 05:00Z to 05:00Z, not 25 hours",
+      "series": {
+        "id": "s83c",
+        "title": "Anniversary",
+        "kindId": "k83",
+        "startsAt": "2026-03-07T05:00:00.000Z",
+        "endsAt": "2026-03-08T05:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": {
+          "freq": "yearly",
+          "until": null,
+          "tz": "America/Havana"
+        }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2027-01-01T05:00:00.000Z",
+        "end": "2028-01-01T05:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83c",
+          "occurrenceDate": "2027-03-07",
+          "title": "Anniversary",
+          "kindId": "k83",
+          "startsAt": "2027-03-07T05:00:00.000Z",
+          "endsAt": "2027-03-08T05:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-4: a daily all-day Havana series stored on 8 March 2026, the day of the midnight clock change, starts 9 and 10 March at local midnight (04:00Z), not at 01:00",
+      "series": {
+        "id": "s83d",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-08T05:00:00.000Z",
+        "endsAt": "2026-03-09T04:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-09T04:00:00.000Z",
+        "end": "2026-03-11T04:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83d",
+          "occurrenceDate": "2026-03-09",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-09T04:00:00.000Z",
+          "endsAt": "2026-03-10T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s83d",
+          "occurrenceDate": "2026-03-10",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-10T04:00:00.000Z",
+          "endsAt": "2026-03-11T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-5: a daily all-day Havana control series stored on 6 March 2026, away from the change, gives the same three occurrences as AC-1 instant for instant",
+      "series": {
+        "id": "s83e",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-06T05:00:00.000Z",
+        "endsAt": "2026-03-07T05:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-08T05:00:00.000Z",
+        "end": "2026-03-11T04:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83e",
+          "occurrenceDate": "2026-03-08",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-08T05:00:00.000Z",
+          "endsAt": "2026-03-09T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s83e",
+          "occurrenceDate": "2026-03-09",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-09T04:00:00.000Z",
+          "endsAt": "2026-03-10T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        },
+        {
+          "seriesId": "s83e",
+          "occurrenceDate": "2026-03-10",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-10T04:00:00.000Z",
+          "endsAt": "2026-03-11T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-5: occurrence 0 of the daily all-day Havana series stored on 7 March 2026 is the row's own two instants, 7 March 05:00Z to 8 March 05:00Z",
+      "series": {
+        "id": "s83f",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-07T05:00:00.000Z",
+        "endsAt": "2026-03-08T05:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-07T05:00:00.000Z",
+        "end": "2026-03-08T05:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83f",
+          "occurrenceDate": "2026-03-07",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-07T05:00:00.000Z",
+          "endsAt": "2026-03-08T05:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
+    },
+    {
+      "name": "CAL-083 AC-5: occurrence 0 of the daily all-day Havana series stored on 8 March 2026 is the row's own two instants, 8 March 05:00Z to 9 March 04:00Z",
+      "series": {
+        "id": "s83g",
+        "title": "Morning market",
+        "kindId": "k83",
+        "startsAt": "2026-03-08T05:00:00.000Z",
+        "endsAt": "2026-03-09T04:00:00.000Z",
+        "allDay": true,
+        "location": null,
+        "notes": null,
+        "recurrence": { "freq": "daily", "until": null, "tz": "America/Havana" }
+      },
+      "overrides": [],
+      "range": {
+        "start": "2026-03-08T05:00:00.000Z",
+        "end": "2026-03-09T04:00:00.000Z"
+      },
+      "expected": [
+        {
+          "seriesId": "s83g",
+          "occurrenceDate": "2026-03-08",
+          "title": "Morning market",
+          "kindId": "k83",
+          "startsAt": "2026-03-08T05:00:00.000Z",
+          "endsAt": "2026-03-09T04:00:00.000Z",
+          "allDay": true,
+          "location": null,
+          "notes": null
+        }
+      ]
     }
   ]
 }
