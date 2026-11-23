@@ -402,6 +402,86 @@ Deno.test("AC-1: isServiceRole is true only for a bearer JWT whose role claim is
   );
 });
 
+// CAL-085: the base64url spellings and the three-segment rule, each pinned by
+// a fixture whose own property is asserted first.
+
+const CAL085_HEAD = SERVICE_JWT.split(".")[0]!;
+const CAL085_ROLE_ONLY = b64url(JSON.stringify({ role: "service_role" }));
+
+Deno.test("CAL-085 AC-1: a service-role JWT whose middle segment has '-' and no '_' is service role and answers 200, not 401", async () => {
+  const token = jwt({ ...SERVICE_CLAIMS, n: "~~~>" });
+  const middle = token.split(".")[1]!;
+  assert(middle.includes("-"), `middle segment ${middle} has no '-'`);
+  assert(!middle.includes("_"), `middle segment ${middle} has a '_'`);
+  assertEquals(
+    isServiceRole(request(`Bearer ${token}`)),
+    true,
+    "a '-' in the middle segment is not decoded as base64url '+'",
+  );
+  const { status } = await run(
+    world({ reminders: [R_NOW] }),
+    request(`Bearer ${token}`),
+  );
+  assertEquals(status, 200, "a service-role run with a '-' was refused");
+});
+
+Deno.test("CAL-085 AC-2: a service-role JWT whose middle segment has length % 4 = 3 is service role (one '=' of padding restored)", () => {
+  const token = jwt({ ...SERVICE_CLAIMS, n: "ab" });
+  const middle = token.split(".")[1]!;
+  assertEquals(
+    middle.length % 4,
+    3,
+    `middle segment ${middle} does not have length % 4 = 3`,
+  );
+  assertEquals(
+    isServiceRole(request(`Bearer ${token}`)),
+    true,
+    "a middle segment of length % 4 = 3 is not padded correctly",
+  );
+});
+
+async function assertSegmentCountRefused(token: string, segments: number) {
+  const parts = token.split(".");
+  assertEquals(parts.length, segments, `${token} has ${parts.length} segments`);
+  assertEquals(parts[1], CAL085_ROLE_ONLY, "second segment is not the payload");
+  assertEquals(
+    CAL085_ROLE_ONLY,
+    "eyJyb2xlIjoic2VydmljZV9yb2xlIn0",
+    "the AC-3 payload segment is not the measured one",
+  );
+  assertEquals(
+    isServiceRole(request(`Bearer ${CAL085_HEAD}.${CAL085_ROLE_ONLY}.c2ln`)),
+    true,
+    "positive control: the same payload in a three-segment token is service role",
+  );
+  assertEquals(
+    isServiceRole(request(`Bearer ${token}`)),
+    false,
+    `a ${segments}-segment token was accepted as service role`,
+  );
+  const w = world({ reminders: [R_NOW] });
+  const { status, body } = await run(w, request(`Bearer ${token}`));
+  assertEquals(status, 401, `a ${segments}-segment token was not refused`);
+  assertEquals(body, { error: "unauthorized" });
+  assertEquals(
+    w.keys(),
+    [],
+    `a ${segments}-segment token read before refusing`,
+  );
+  assertEquals(w.pushes.length, 0);
+}
+
+Deno.test("CAL-085 AC-3: a two-segment token whose second segment is a service_role payload is not service role, 401 and fetches nothing", async () => {
+  await assertSegmentCountRefused(`${CAL085_HEAD}.${CAL085_ROLE_ONLY}`, 2);
+});
+
+Deno.test("CAL-085 AC-3: a four-segment token whose second segment is a service_role payload is not service role, 401 and fetches nothing", async () => {
+  await assertSegmentCountRefused(
+    `${CAL085_HEAD}.${CAL085_ROLE_ONLY}.c2ln.c2ln`,
+    4,
+  );
+});
+
 Deno.test("AC-1: a request with no bearer token is 401 unauthorized and fetches nothing", async () => {
   const w = world({ reminders: [R_NOW] });
   const { status, body } = await run(w, request(null));
