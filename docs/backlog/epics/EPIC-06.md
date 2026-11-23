@@ -2,7 +2,7 @@
 id: EPIC-06
 title: Recurring events
 status: todo
-stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075, CAL-077, CAL-078, CAL-079, CAL-080, CAL-081, CAL-082, CAL-083]
+stories: [CAL-023, CAL-024, CAL-056, CAL-025, CAL-074, CAL-075, CAL-077, CAL-078, CAL-079, CAL-080, CAL-081, CAL-082, CAL-083, CAL-084]
 ---
 
 ## Goal
@@ -37,9 +37,11 @@ all others; deleting one occurrence leaves the rest.
 10. CAL-081 — (fix) two occurrences of one series on one day are laid out in columns of their own
 11. CAL-082 — (fix) the edit-scope answer writes the occurrence's own series and override, and closes the dialog
 12. CAL-083 — (fix) an all-day repeating event stored beside a midnight clock change covers whole local days
+13. CAL-084 — (fix) the Undo of a This event only move restores its own series' override, not another series' on the same date
 
 8 to 11 were filed by the mutation audit of 2026-11-21 (`docs/wiki/audits/EPIC-06-2026-11-21.md`).
 12 was filed on 2026-11-21 from a finding made while planning CAL-079 (CAL-079, `## Notes`); it waits on CAL-079.
+13 was filed by the mutation re-audit of 2026-11-23 (`docs/wiki/audits/EPIC-06-2026-11-23.md`); it is test-only.
 
 ## Deliberately not in this epic
 
