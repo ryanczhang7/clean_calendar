@@ -3579,6 +3579,107 @@ describe("the edit-scope answer writes the occurrence's own series and override,
   });
 });
 
+// CAL-084 AC-1 and AC-2 (Contract Blocks 1 to 6): the series half of the
+// Undo's prior-override lookup. CAL-082 AC-3 seeded overrides of Spin alone,
+// so a lookup keyed by date only still read Spin's own row. Here a second
+// series (Yoga, weekly from Wednesday 4 November, 07:00-08:00) holds an
+// override dated 18 November at 12:00-13:00: the Undo must not write Yoga's
+// times back onto Spin. MECHANICAL: every expected value is read from
+// CalendarPage.tsx:339-358. Both tests pass on arrival and are earned by the
+// :345 mutant (Deferred verifications DV-1). Each seeded override row has its
+// own id, distinct from overrideOf's ...099 and from the facade's ...001 on.
+describe("the Undo of a \"This event only\" move restores the moved series' own prior override, not another series' on the same date (CAL-084 AC-1, AC-2)", {
+  timeout: SCOPE_FLOW_TIMEOUT_MS,
+}, () => {
+  const YOGA_OVERRIDE_ID = "30000000-0000-4000-8000-000000000081";
+  const SPIN_OVERRIDE_ID = "30000000-0000-4000-8000-000000000082";
+  const yogaFrom4Nov = (): Event => ({
+    ...timed("Yoga", nov(4, 7), nov(4, 8)),
+    recurrence: { freq: "weekly", until: null, tz: DEVICE_TZ },
+  });
+  const yogaOverride = (yoga: Event): EventOverride =>
+    overrideOf(yoga.id, "2026-11-18", {
+      id: YOGA_OVERRIDE_ID,
+      startsAt: nov(18, 12),
+      endsAt: nov(18, 13),
+    });
+
+  /** Block 2: drag the named Spin block to 14:00, "This event only", Undo. */
+  async function moveThenUndo(
+    spinName: string,
+    expectedRows: [string, string][],
+  ): Promise<FakeOverrideActions> {
+    const { user, overrides, over } = renderSeriesPage("/week/2026-11-18");
+    const grid = await settledGrid("Week of 16 November 2026");
+    const block = await screen.findByRole("button", { name: spinName });
+    expect(
+      overrides
+        .getSnapshot()
+        .overrides.map((o) => [o.eventId, o.occurrenceDate]),
+    ).toStrictEqual(expectedRows);
+    dragTo(
+      block,
+      within(grid).getByRole("gridcell", {
+        name: "Wednesday 18 November, 14:00",
+      }),
+    );
+    await confirmScope(user, await changeDialog(), "This event only", "Save");
+    await expectUndoToast("Moved to Wed 18 Nov, 14:00");
+    await user.click(undoButton());
+    await waitFor(() => expect(over.setOverride).toHaveBeenCalledTimes(2));
+    return over;
+  }
+
+  it('AC-1: with only another series\' override on 18 November, the 18 November Spin block moved to 14:00, "This event only", then Undo: the second setOverride is (Spin id, "2026-11-18", { startsAt: null, endsAt: null })', async () => {
+    const spin = spinFrom4Nov();
+    const yoga = yogaFrom4Nov();
+    useMoves([spin, yoga]);
+    overrideRows = [yogaOverride(yoga)];
+    const over = await moveThenUndo(SPIN_10_NAME, [[yoga.id, "2026-11-18"]]);
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 14), endsAt: nov(18, 15) },
+    ]);
+    expect(over.setOverride.mock.calls[1]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: null, endsAt: null },
+    ]);
+  });
+
+  it('AC-2: with another series\' override on 18 November first in the store and Spin\'s own 16:00-17:00 second, the 18 November Spin block moved to 14:00, "This event only", then Undo: the second setOverride is (Spin id, "2026-11-18", { 18 Nov 16:00, 18 Nov 17:00 })', async () => {
+    const spin = spinFrom4Nov();
+    const yoga = yogaFrom4Nov();
+    useMoves([spin, yoga]);
+    overrideRows = [
+      yogaOverride(yoga),
+      overrideOf(spin.id, "2026-11-18", {
+        id: SPIN_OVERRIDE_ID,
+        startsAt: nov(18, 16),
+        endsAt: nov(18, 17),
+      }),
+    ];
+    const over = await moveThenUndo(
+      "Spin, Gym, 16:00 to 17:00, repeats weekly",
+      [
+        [yoga.id, "2026-11-18"],
+        [spin.id, "2026-11-18"],
+      ],
+    );
+    expect(over.setOverride.mock.calls[0]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 14), endsAt: nov(18, 15) },
+    ]);
+    expect(over.setOverride.mock.calls[1]).toStrictEqual([
+      spin.id,
+      "2026-11-18",
+      { startsAt: nov(18, 16), endsAt: nov(18, 17) },
+    ]);
+  });
+});
+
 // CAL-075 AC-1 to AC-4 (Contract Blocks 1, 2 and 6): after a keyboard move
 // confirmed "All events in the series", focus follows the occurrence the
 // owner acted on to its new date - the same series id, its occurrence date
