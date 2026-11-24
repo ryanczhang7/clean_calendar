@@ -2590,6 +2590,40 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
       expect(reminders.setReminder).not.toHaveBeenCalled();
       expect(reminders.clearReminder).not.toHaveBeenCalled();
     });
+
+    // CAL-087 AC-1, AC-2: only a stored "At time" is rewritten by a switch.
+    // A numbered reminder means the same minutes either way, so it is kept.
+    it("CAL-087 AC-1: a timed event stored 30 minutes before, All day turned on, saved with Reminder untouched: updateEvent once, setReminder and clearReminder never", async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(DENTIST),
+        { store: remindersStoreOf([template(DENTIST.id, 30)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      expect(allDaySwitch()).not.toBeChecked();
+      await user.click(allDaySwitch());
+      expect(reminderSelect()).toHaveValue("30");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent).toHaveBeenCalledTimes(1);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([]);
+      expect(reminders.clearReminder.mock.calls).toStrictEqual([]);
+    });
+
+    it("CAL-087 AC-2: an all-day event stored 1 day before (1440), All day turned off, saved with Reminder untouched: updateEvent once, setReminder and clearReminder never", async () => {
+      const { user, actions, reminders, onClose } = await openWithReminders(
+        edit(TRIP),
+        { store: remindersStoreOf([template(TRIP.id, 1440)]) },
+      );
+      await waitFor(() => expect(reminderSelect()).toHaveValue("1440"));
+      expect(allDaySwitch()).toBeChecked();
+      await user.click(allDaySwitch());
+      expect(reminderSelect()).toHaveValue("1440");
+      await user.click(save());
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(actions.updateEvent).toHaveBeenCalledTimes(1);
+      expect(reminders.setReminder.mock.calls).toStrictEqual([]);
+      expect(reminders.clearReminder.mock.calls).toStrictEqual([]);
+    });
   });
 
   describe("an occurrence (Block 4: one template per event, the series')", () => {
@@ -2868,6 +2902,41 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
         ).toBeNull();
         expect(reminders.setReminder.mock.calls).toStrictEqual([
           [series.id, 0],
+        ]);
+        expect(reminders.clearReminder).not.toHaveBeenCalled();
+        expect(overrides.setOverride).not.toHaveBeenCalled();
+        expect(actions.updateEvent).not.toHaveBeenCalled();
+      });
+
+      // CAL-087 AC-3: the mirror of the case above. The series is all-day
+      // and the date's override made it timed, so the series' All day (true)
+      // and the date's (false) differ, and "At time" converts with the
+      // series': -540, not 0.
+      it('CAL-087 AC-3: an all-day series (template 15), a date overridden to timed, "At time" picked and saved with no other change: setReminder(series id, -540) once - not 0 - with no scope question', async () => {
+        const series: Event = {
+          ...weeklySeries(),
+          allDay: true,
+          startsAt: oct(14),
+          endsAt: oct(15),
+        };
+        const occurrence = occurrenceOf(series, false);
+        const overrides = fakeOverrides();
+        const { user, actions, reminders, onClose } = await openWithReminders(
+          (opener) => ({ mode: "edit", event: occurrence, series, opener }),
+          { store: remindersStoreOf([template(series.id, 15)]), overrides },
+        );
+        await waitFor(() => expect(reminderSelect()).toHaveValue("15"));
+        // The date really is timed, unlike its series.
+        expect(allDaySwitch()).not.toBeChecked();
+        await user.selectOptions(reminderSelect(), "At time");
+        expect(reminderSelect()).toHaveValue("at");
+        await user.click(save());
+        await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+        expect(
+          screen.queryByRole("alertdialog", { name: "Change which events?" }),
+        ).toBeNull();
+        expect(reminders.setReminder.mock.calls).toStrictEqual([
+          [series.id, -540],
         ]);
         expect(reminders.clearReminder).not.toHaveBeenCalled();
         expect(overrides.setOverride).not.toHaveBeenCalled();
