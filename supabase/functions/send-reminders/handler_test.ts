@@ -224,6 +224,8 @@ type WorldOptions = {
   /** Outcomes per subscription id, consumed in order; exhausted means "sent". */
   outcomes?: Record<string, PushOutcome[]>;
   deleteRoute?: Route;
+  /** CAL-086: the `sent_at` PATCH per reminder id; a 204 when absent. */
+  patchRoutes?: Record<string, Route>;
   sendPush?: null;
   /** CAL-029: the series read's rows; every run answers it, `[]` by default. */
   series?: SeriesRow[];
@@ -253,12 +255,14 @@ function world(opts: WorldOptions = {}) {
     [MATERIALISE]: opts.materialiseRoute ??
       (() => new Response(null, { status: 201 })),
   };
+  const patchRoute = (id: string): Route =>
+    opts.patchRoutes?.[id] ?? (() => new Response(null, { status: 204 }));
   for (const r of opts.reminders ?? []) {
-    routes[patchKey(r.id)] = () => new Response(null, { status: 204 });
+    routes[patchKey(r.id)] = patchRoute(r.id);
   }
   for (const s of opts.series ?? []) {
     for (const r of s.reminders) {
-      routes[patchKey(r.id)] = () => new Response(null, { status: 204 });
+      routes[patchKey(r.id)] = patchRoute(r.id);
     }
   }
   for (const s of subs) {
@@ -991,6 +995,106 @@ Deno.test("AC-4: a DELETE that fails is logged and changes neither the response 
       `${label}: the failed delete was not logged with the subscription id`,
     );
   }
+});
+
+// ================================================================ CAL-086
+//
+// CAL-086 Contract Block 2: the run's failure lines, compared whole. Every log
+// line is a literal read out of the criteria, never built from the handler's
+// template, and `w.log` is compared as an array with assertEquals.
+
+Deno.test("CAL-086 AC-1: a sent_at PATCH that throws is logged by reminder id and the next reminder is still pushed and marked", async () => {
+  const w = world({
+    reminders: [R_4_AGO, R_NOW],
+    subscriptions: [sub("sub-086-ok")],
+    patchRoutes: {
+      "r-4-ago": () => {
+        throw new TypeError("connection reset");
+      },
+    },
+  });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 2,
+    sent: 2,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(
+    w.timeline,
+    [
+      CANDIDATES,
+      SERIES,
+      SUBSCRIPTIONS,
+      "push sub-086-ok " + R_4_AGO.event.id,
+      patchKey("r-4-ago"),
+      "push sub-086-ok " + R_NOW.event.id,
+      patchKey("r-now"),
+    ],
+    "the second reminder was not pushed and then marked after the first PATCH threw",
+  );
+  assertEquals(
+    w.log,
+    ["send-reminders: marking reminder r-4-ago sent failed: connection reset"],
+    "the thrown sent_at PATCH was not logged as exactly one line naming the reminder",
+  );
+});
+
+Deno.test("CAL-086 AC-2: a gone subscription whose DELETE answers 204 logs nothing", async () => {
+  const w = world({
+    reminders: [R_NOW],
+    subscriptions: [sub("sub-086-gone")],
+    outcomes: { "sub-086-gone": [{ status: "gone", code: 410 }] },
+  });
+  const { status, body } = await run(w);
+  // Positive control: the prune was reached, so an empty log means something.
+  assertEquals(
+    w.calls.filter((c) => c.method === "DELETE").map((c) => c.key),
+    [deleteKey("sub-086-gone")],
+    "the run never reached the prune, so its empty log proves nothing",
+  );
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 1,
+    sent: 0,
+    pruned: 1,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(w.log, [], "a successful DELETE was logged as a failure");
+});
+
+Deno.test("CAL-086 AC-3: a DELETE that throws is logged as exactly its message, not the error's string form", async () => {
+  const w = world({
+    reminders: [R_NOW],
+    subscriptions: [sub("sub-086-reset")],
+    outcomes: { "sub-086-reset": [{ status: "gone", code: 410 }] },
+    deleteRoute: () => {
+      throw new TypeError("connection reset");
+    },
+  });
+  const { status, body } = await run(w);
+  assertEquals(
+    w.calls.filter((c) => c.method === "DELETE").map((c) => c.key),
+    [deleteKey("sub-086-reset")],
+  );
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 1,
+    sent: 0,
+    pruned: 1,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(
+    w.log,
+    [
+      "send-reminders: delete of subscription sub-086-reset failed: connection reset",
+    ],
+    "the thrown DELETE was not logged as exactly one line with the error's message",
+  );
 });
 
 // ================================================================ CAL-029
