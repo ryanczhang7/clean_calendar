@@ -2473,6 +2473,34 @@ describe("CAL-057 the Reminder field in the sheet (AC-2, AC-3, AC-4, Block 4)", 
       expect(onClose).not.toHaveBeenCalled();
     });
 
+    it("CAL-088: a reminder-only save that was refused can be saved again: the second Save writes and closes", async () => {
+      const reminders = fakeReminders();
+      reminders.setReminder.mockResolvedValueOnce({
+        status: "error",
+        code: "23503",
+        message: "foreign key",
+      });
+      const { user, onClose } = await openWithReminders(edit(DENTIST), {
+        store: remindersStoreOf([template(DENTIST.id, 30)]),
+        reminders,
+      });
+      await waitFor(() => expect(reminderSelect()).toHaveValue("30"));
+      await user.selectOptions(reminderSelect(), "1 hour before");
+      await user.click(save());
+      expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+      expect(onClose).not.toHaveBeenCalled();
+      await user.click(save());
+      await waitFor(() =>
+        expect(reminders.setReminder).toHaveBeenCalledTimes(2),
+      );
+      expect(reminders.setReminder.mock.calls).toStrictEqual([
+        [DENTIST.id, 60],
+        [DENTIST.id, 60],
+      ]);
+      await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+      expect(reminders.clearReminder).not.toHaveBeenCalled();
+    });
+
     it("an event without a reminder, set to 10 minutes and saved: setReminder(id, 10)", async () => {
       const { user, reminders } = await openWithReminders(edit(DENTIST));
       expect(await findReminderSelect()).toHaveValue("none");
