@@ -199,6 +199,11 @@ transaction - and prefills the capture screen (CAL-022).
   is a storage bucket and a story.
 - **Resending a reminder** after a crash between push and `sent_at` is
   possible; the window is one minute.
+- **A `sent_at` write the database refuses** (a non-2xx answer) leaves the
+  reminder unmarked, so it is pushed again each minute while it is due: up
+  to six pushes, each replacing the last on the device. Accepted (the
+  owner, 2026-11-24): at least once beats losing one. The run still answers
+  200; CAL-090 makes the run log the refusal.
 - **Supabase free tier pauses** inactive projects after 7 days. Daily use keeps
   it alive; CAL-030 documents the unpause.
 - The Realtime channel **does not deliver while the PWA is closed**; sync
