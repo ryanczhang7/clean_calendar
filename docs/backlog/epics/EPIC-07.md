@@ -2,7 +2,7 @@
 id: EPIC-07
 title: Reminders that fire with the app closed
 status: todo
-stories: [CAL-026, CAL-057, CAL-027, CAL-028, CAL-029, CAL-058, CAL-073, CAL-072, CAL-085, CAL-086, CAL-087, CAL-088]
+stories: [CAL-026, CAL-057, CAL-027, CAL-028, CAL-029, CAL-058, CAL-073, CAL-072, CAL-085, CAL-086, CAL-087, CAL-088, CAL-089]
 ---
 
 ## Goal
@@ -45,6 +45,9 @@ permission stops receiving and is pruned.
     time" on a timed date of an all-day series is 09:00 (same audit)
 12. CAL-088 — a reminder-only save that failed can be saved again (same
     audit)
+13. CAL-089 — a save that was refused can be saved again, and a second Save
+    while one is in flight writes once (EPIC-07 follow-up audit,
+    `docs/wiki/audits/EPIC-07-2026-11-24.md`)
 
 ## Deliberately not in this epic
 
