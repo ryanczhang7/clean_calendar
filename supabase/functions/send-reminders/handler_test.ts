@@ -1097,6 +1097,80 @@ Deno.test("CAL-086 AC-3: a DELETE that throws is logged as exactly its message, 
   );
 });
 
+// ================================================================ CAL-090
+//
+// CAL-090 Contract Block 3: a sent_at PATCH that answers non-2xx is logged.
+// The log line is a literal read out of AC-1, never built from the handler's
+// template, and `w.log` is compared whole with assertEquals.
+
+Deno.test("CAL-090 AC-1: a sent_at PATCH that answers 500 is logged by reminder id and the next reminder is still pushed and marked", async () => {
+  const w = world({
+    reminders: [R_4_AGO, R_NOW],
+    subscriptions: [sub("sub-090-refused")],
+    patchRoutes: {
+      "r-4-ago": () => new Response(null, { status: 500 }),
+      "r-now": () => new Response(null, { status: 204 }),
+    },
+  });
+  const { status, body } = await run(w);
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 2,
+    sent: 2,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(
+    w.timeline,
+    [
+      CANDIDATES,
+      SERIES,
+      SUBSCRIPTIONS,
+      "push sub-090-refused " + R_4_AGO.event.id,
+      patchKey("r-4-ago"),
+      "push sub-090-refused " + R_NOW.event.id,
+      patchKey("r-now"),
+    ],
+    "each reminder was not pushed once and then PATCHed once, the first before the second",
+  );
+  assertEquals(
+    w.log,
+    ["send-reminders: marking reminder r-4-ago sent failed: 500"],
+    "the refused sent_at PATCH was not logged as exactly one line naming the reminder and its status",
+  );
+});
+
+Deno.test("CAL-090 AC-2: a sent_at PATCH that answers 200 is a success and logs nothing", async () => {
+  const w = world({
+    reminders: [R_NOW],
+    subscriptions: [sub("sub-090-ok")],
+    patchRoutes: {
+      "r-now": () => new Response(null, { status: 200 }),
+    },
+  });
+  const { status, body } = await run(w);
+  // Positive control: the PATCH was reached, so an empty log means something.
+  assertEquals(
+    w.calls.filter((c) => c.method === "PATCH").map((c) => c.key),
+    [patchKey("r-now")],
+    "the run never reached the sent_at PATCH, so its empty log proves nothing",
+  );
+  assertEquals(status, 200);
+  assertEquals(body, {
+    due: 1,
+    sent: 1,
+    pruned: 0,
+    failed: 0,
+    materialised: 0,
+  });
+  assertEquals(
+    w.log,
+    [],
+    "a 200 answer to the sent_at PATCH was logged as a failure",
+  );
+});
+
 // ================================================================ CAL-029
 //
 // CAL-029 Contract Blocks 3 and 4: the run reads the series after the
