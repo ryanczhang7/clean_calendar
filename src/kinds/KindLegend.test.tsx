@@ -339,6 +339,23 @@ describe("closing the legend and returning focus (AC-2, Block 2)", () => {
     await vi.waitFor(() => expect(legendButton()).toHaveFocus());
   });
 
+  it("a pointer going down on a text field outside the legend closes it and leaves focus in that field (CAL-091 AC-2)", async () => {
+    repo.listAll.mockResolvedValue(rows(MOVIES));
+    const { user, onToggle } = await renderLegend();
+    await openWithClick(user);
+    const notes = screen.getByLabelText("Notes");
+    await user.click(notes);
+    expect(queryLegend()).toBeNull();
+    expect(onToggle).toHaveBeenLastCalledWith(false);
+    // CAL-091 Contract Block 3: the focus decision runs in a setTimeout(0)
+    // queued during the pointerdown. A negative claim polled with
+    // vi.waitFor can pass before that timer runs, so wait one macrotask of
+    // our own, queued after the component's, and assert once after it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(document.activeElement).toBe(notes);
+    expect(legendButton()).not.toHaveFocus();
+  });
+
   it("a pointer going down inside the legend leaves it open", async () => {
     repo.listAll.mockResolvedValue(rows(MOVIES));
     const { user } = await renderLegend();
@@ -450,6 +467,35 @@ describe("the L shortcut (AC-2, Block 2)", () => {
     await user.keyboard("l");
     expect(legend()).toBeInTheDocument();
   });
+
+  // CAL-091 Contract Block 2: every key that is not L must leave the legend
+  // alone. Pressed on <body>, not on Legend, because Enter and Space on a
+  // focused button click it, and Legend opens on click.
+  it.each([
+    ["k", "k"],
+    ["Enter", "{Enter}"],
+    ["Space", " "],
+    ["Tab", "{Tab}"],
+    ["ArrowDown", "{ArrowDown}"],
+    ["ArrowUp", "{ArrowUp}"],
+    ["ArrowLeft", "{ArrowLeft}"],
+    ["ArrowRight", "{ArrowRight}"],
+  ])(
+    "%s pressed outside a text field does not toggle the legend (CAL-091 AC-1)",
+    async (_name, keys) => {
+      repo.listAll.mockResolvedValue(rows(MOVIES));
+      const { user, onToggle } = await renderLegend();
+      expect(document.activeElement).toBe(document.body);
+      await user.keyboard(keys);
+      expect(onToggle).not.toHaveBeenCalled();
+      expect(queryLegend()).toBeNull();
+      // The listener is live: L from a non-text control opens it. Focus is
+      // set explicitly because Tab has moved it into the Notes input.
+      legendButton().focus();
+      await user.keyboard("l");
+      expect(legend()).toBeInTheDocument();
+    },
+  );
 });
 
 describe("activating a legend link (AC-3, Block 2)", () => {

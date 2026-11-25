@@ -2,7 +2,7 @@
 id: EPIC-02
 title: Event kinds with default colours
 status: todo
-stories: [CAL-006, CAL-007, CAL-008]
+stories: [CAL-006, CAL-007, CAL-008, CAL-091, CAL-092, CAL-093, CAL-094]
 ---
 
 ## Goal
@@ -30,6 +30,14 @@ the kinds page allows the same edits later; a kind's chip text always meets
 1. CAL-006 — the eleven default kinds are seeded on first sign-in
 2. CAL-007 — kinds walkthrough: rename, recolour, delete, add, then continue
 3. CAL-008 — kind legend in the shell and the kinds settings page (kinds only; per-kind counts cut from v1, see `components.md`, PO decisions)
+4. CAL-091 — the kind legend's shortcut answers only L, and an outside click keeps
+   the focus it gave (first mutation audit, `docs/wiki/audits/EPIC-02-2026-11-25.md`)
+5. CAL-092 — the kind editor sends one save per press, never navigates, and lets a
+   refused save be retried (same audit)
+6. CAL-093 — the kind editor opens without the delete question, and the dark
+   group's Custom opens the dark hex (same audit)
+7. CAL-094 — the colour walks keep a red's hue, and a colour at exactly 4.50:1
+   passes (same audit)
 
 ## Deliberately not in this epic
 
