@@ -370,6 +370,109 @@ describe("renaming a kind (AC-2, Block 5)", () => {
   );
 });
 
+// --- CAL-092: the submit path -----------------------------------------------
+// Earned by the mutants in CAL-092's ## Deferred verifications (DV-1..DV-5);
+// every test here passes on arrival against the shipped editor.
+
+describe("the submit path (CAL-092)", () => {
+  it("pressing Save prevents the form's own submission (CAL-092 AC-1)", async () => {
+    const { user, dialog, actions } = renderEditor({ kind: GYM });
+    await replaceText(user, nameInput(), "Workouts");
+    const prevented: boolean[] = [];
+    const listener = (event: Event) => {
+      prevented.push(event.defaultPrevented);
+    };
+    document.addEventListener("submit", listener);
+    try {
+      await user.click(saveButton(dialog));
+      expect(prevented).toStrictEqual([true]);
+      expect(actions.updateKind).toHaveBeenCalledTimes(1);
+    } finally {
+      document.removeEventListener("submit", listener);
+    }
+  });
+
+  it("a second press while the add is pending sends nothing more (CAL-092 AC-2)", async () => {
+    const actions = fakeActions();
+    let finish: (r: Result<Kind>) => void = () => {};
+    actions.addKind.mockImplementation(
+      () =>
+        new Promise<Result<Kind>>((done) => {
+          finish = done;
+        }),
+    );
+    const { user, dialog, onClose } = renderEditor({ kind: null, actions });
+    await user.type(nameInput(), "Reading");
+    await user.click(saveButton(dialog));
+    await user.click(saveButton(dialog));
+    expect(actions.addKind).toHaveBeenCalledTimes(1);
+    expect(onClose).not.toHaveBeenCalled();
+    finish({ status: "ok", row: kind(99, "Reading", "#7E3FB8", "#CFA8F0") });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(actions.addKind).toHaveBeenCalledTimes(1);
+  });
+
+  it("after a refused save, pressing Save again sends it again and closes (CAL-092 AC-3)", async () => {
+    const actions = fakeActions();
+    actions.updateKind.mockResolvedValueOnce({ status: "offline" });
+    const { user, dialog, onClose } = renderEditor({ kind: GYM, actions });
+    await replaceText(user, nameInput(), "Workouts");
+    await user.click(saveButton(dialog));
+    await within(dialog).findByRole("alert");
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(saveButton(dialog));
+    expect(actions.updateKind).toHaveBeenCalledTimes(2);
+    expect(actions.updateKind).toHaveBeenNthCalledWith(1, GYM, {
+      name: "Workouts",
+    });
+    expect(actions.updateKind).toHaveBeenNthCalledWith(2, GYM, {
+      name: "Workouts",
+    });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows no alert while a save is pending (CAL-092 AC-4)", async () => {
+    const actions = fakeActions();
+    let finish: (r: Result<Kind>) => void = () => {};
+    actions.updateKind.mockImplementation(
+      () =>
+        new Promise<Result<Kind>>((done) => {
+          finish = done;
+        }),
+    );
+    const { user, dialog, onClose } = renderEditor({ kind: GYM, actions });
+    await replaceText(user, nameInput(), "Workouts");
+    await user.click(saveButton(dialog));
+    expect(actions.updateKind).toHaveBeenCalledTimes(1);
+    expect(saveButton(dialog)).toHaveAttribute("aria-busy", "true");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    finish({ status: "ok", row: { ...GYM, name: "Workouts" } });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("shows no alert while the retry of a refused save is pending (CAL-092 AC-4)", async () => {
+    const actions = fakeActions();
+    let finish: (r: Result<Kind>) => void = () => {};
+    actions.updateKind.mockImplementation(
+      () =>
+        new Promise<Result<Kind>>((done) => {
+          finish = done;
+        }),
+    );
+    actions.updateKind.mockResolvedValueOnce({ status: "offline" });
+    const { user, dialog, onClose } = renderEditor({ kind: GYM, actions });
+    await replaceText(user, nameInput(), "Workouts");
+    await user.click(saveButton(dialog));
+    await within(dialog).findByRole("alert");
+    await user.click(saveButton(dialog));
+    expect(actions.updateKind).toHaveBeenCalledTimes(2);
+    expect(saveButton(dialog)).toHaveAttribute("aria-busy", "true");
+    expect(within(dialog).queryByRole("alert")).toBeNull();
+    finish({ status: "ok", row: { ...GYM, name: "Workouts" } });
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+});
+
 // --- AC-3 -------------------------------------------------------------------
 
 const ENTERTAINMENT_LIGHT_PREVIEW =
