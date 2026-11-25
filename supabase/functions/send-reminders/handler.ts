@@ -290,7 +290,7 @@ export async function handleSendReminders(
       }
     }
     try {
-      await deps.fetch(`${base}/reminders?id=eq.${row.id}`, {
+      const res = await deps.fetch(`${base}/reminders?id=eq.${row.id}`, {
         method: "PATCH",
         headers: {
           ...auth,
@@ -299,6 +299,11 @@ export async function handleSendReminders(
         },
         body: JSON.stringify({ sent_at: deps.now().toISOString() }),
       });
+      if (!res.ok) {
+        deps.log(
+          `send-reminders: marking reminder ${row.id} sent failed: ${res.status}`,
+        );
+      }
     } catch (err) {
       deps.log(
         `send-reminders: marking reminder ${row.id} sent failed: ${
