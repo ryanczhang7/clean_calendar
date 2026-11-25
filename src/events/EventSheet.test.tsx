@@ -600,6 +600,65 @@ describe("a write that is refused (Block 5, PO decision 6)", () => {
     expect(sheet("Edit event: Dentist")).toBeInTheDocument();
     expect(onClose).not.toHaveBeenCalled();
   });
+
+  // CAL-089 AC-1: the guard (EventSheet.tsx `saving`) is cleared after a
+  // refused write, so Save works again. AC-2: it is set while a write is in
+  // flight, so a second press does not write twice.
+  it("CAL-089 AC-1: an edit refused offline can be saved again: the second Save writes the same patch and closes", async () => {
+    const actions = fakeActions();
+    actions.updateEvent.mockResolvedValueOnce({ status: "offline" });
+    const { user, onClose } = await openSheet(edit(DENTIST), { actions });
+    await user.type(title(), "!");
+    await user.click(save());
+    expect(await screen.findByRole("alert")).toHaveTextContent(SAVE_FAILED);
+    expect(onClose).not.toHaveBeenCalled();
+    await user.click(save());
+    await waitFor(() => expect(actions.updateEvent).toHaveBeenCalledTimes(2));
+    expect(actions.updateEvent.mock.calls[1]).toStrictEqual(
+      actions.updateEvent.mock.calls[0],
+    );
+    expect(actions.updateEvent.mock.calls[0]).toStrictEqual([
+      DENTIST.id,
+      { title: "Dentist!" },
+      UPDATED_AT,
+    ]);
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+  });
+
+  it("CAL-089 AC-2: a second Save while a new event's write is in flight does not create it twice, and the sheet closes once it lands", async () => {
+    const actions = fakeActions();
+    let resolve!: (r: Result<Event>) => void;
+    actions.createEvent.mockImplementationOnce(
+      () =>
+        new Promise<Result<Event>>((r) => {
+          resolve = r;
+        }),
+    );
+    const { user, onClose } = await openSheet(createAllDay(oct(15)), {
+      actions,
+    });
+    await user.type(title(), "Swim");
+    await user.click(save());
+    await waitFor(() => expect(actions.createEvent).toHaveBeenCalledTimes(1));
+    await user.click(save());
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+    const input = actions.createEvent.mock.calls[0]?.[0];
+    if (input === undefined) throw new Error("createEvent was not called");
+    await act(async () => {
+      resolve({
+        status: "ok",
+        row: {
+          ...input,
+          id: "10000000-0000-4000-8000-000000000099",
+          deletedAt: null,
+          createdAt: STAMP,
+          updatedAt: STAMP,
+        },
+      });
+    });
+    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    expect(actions.createEvent).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("an existing event (AC-5, Block 5)", () => {
