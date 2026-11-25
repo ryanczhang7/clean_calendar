@@ -1171,6 +1171,40 @@ Deno.test("CAL-090 AC-2: a sent_at PATCH that answers 200 is a success and logs 
   );
 });
 
+Deno.test("CAL-090 R-1: a sent_at PATCH that answers 400 is logged by reminder id", async () => {
+  const w = world({
+    reminders: [R_NOW],
+    subscriptions: [sub("sub-090-bad-request")],
+    patchRoutes: {
+      "r-now": () => new Response(null, { status: 400 }),
+    },
+  });
+  const { status, body } = await run(w);
+  // Positive control: the PATCH was reached, so the log is about that PATCH.
+  assertEquals(
+    w.calls.filter((c) => c.method === "PATCH").map((c) => c.key),
+    [patchKey("r-now")],
+    "the run never reached the sent_at PATCH, so its log proves nothing",
+  );
+  assertEquals(status, 200, "a refused sent_at PATCH changed the run's status");
+  assertEquals(
+    body,
+    {
+      due: 1,
+      sent: 1,
+      pruned: 0,
+      failed: 0,
+      materialised: 0,
+    },
+    "a refused sent_at PATCH changed the run's counts",
+  );
+  assertEquals(
+    w.log,
+    ["send-reminders: marking reminder r-now sent failed: 400"],
+    "a 400 answer to the sent_at PATCH was not logged as exactly one line naming the reminder and its status",
+  );
+});
+
 // ================================================================ CAL-029
 //
 // CAL-029 Contract Blocks 3 and 4: the run reads the series after the
