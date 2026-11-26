@@ -473,6 +473,38 @@ describe("the submit path (CAL-092)", () => {
   });
 });
 
+describe("the opening state and the dark group's Custom… (CAL-093)", () => {
+  it("opens with the editor as the only dialog, before Delete is pressed (CAL-093 AC-1)", () => {
+    const { dialog, actions } = renderEditor({ kind: GYM });
+    expect(screen.getAllByRole("dialog")).toStrictEqual([dialog]);
+    expect(
+      screen.queryByRole("dialog", { name: "Delete the kind Gym?" }),
+    ).toBeNull();
+    expect(actions.deleteKind).not.toHaveBeenCalled();
+  });
+
+  it("pressing Custom… in the Dark group checks it there and shows the dark hex, leaving the Light group alone (CAL-093 AC-2)", async () => {
+    const { user } = renderEditor({ kind: GYM });
+    await user.click(radio("Dark", "Custom…"));
+    expect(checked("Dark")).toStrictEqual(["Custom…"]);
+    expect(hexInput("Dark")).toHaveValue("#9BD69B");
+    expect(checked("Light")).toStrictEqual(["Gym"]);
+    expect(
+      within(group("Light")).queryByRole("textbox", { name: "Hex" }),
+    ).toBeNull();
+  });
+
+  it("a dark side put into Custom… keeps its hex when a light colour is picked afterwards (CAL-093 AC-3)", async () => {
+    const { user } = renderEditor({ kind: GYM });
+    await user.click(radio("Dark", "Custom…"));
+    expect(hexInput("Dark")).toHaveValue("#9BD69B");
+    await user.click(radio("Light", "Entertainment"));
+    expect(checked("Light")).toStrictEqual(["Entertainment"]);
+    expect(checked("Dark")).toStrictEqual(["Custom…"]);
+    expect(hexInput("Dark")).toHaveValue("#9BD69B");
+  });
+});
+
 // --- AC-3 -------------------------------------------------------------------
 
 const ENTERTAINMENT_LIGHT_PREVIEW =
