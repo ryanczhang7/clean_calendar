@@ -723,6 +723,22 @@ describe("refusing a colour whose text would be hard to read (AC-4, Block 5)", (
   });
 });
 
+describe("a colour at exactly 4.50:1 (CAL-094)", () => {
+  it("a custom light colour at exactly 4.50:1 (#10893E) shows no hard-to-read message and leaves Save enabled (CAL-094 AC-4)", async () => {
+    const { user, dialog } = renderEditor({ kind: null });
+    await user.type(nameInput(), "Pine");
+    await user.click(radio("Light", "Custom…"));
+    await replaceText(user, hexInput("Light"), "#10893E");
+    expect(hexInput("Light")).toHaveValue("#10893E");
+    expect(hexInput("Dark")).toHaveValue("#17C95B");
+    expect(preview("light")).toBe(
+      "Text contrast 4.50:1 · Against background 4.50:1",
+    );
+    expect(within(dialog).queryByText(/Text would be hard to read/)).toBeNull();
+    expect(saveButton(dialog)).toBeEnabled();
+  });
+});
+
 // --- AC-5 -------------------------------------------------------------------
 
 const CONFIRM_BODY =
