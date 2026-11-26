@@ -322,3 +322,30 @@ describe("darkCounterpart (AC-3, Block 1)", () => {
     expect(violations).toStrictEqual([]);
   });
 });
+
+// CAL-094 AC-1 to AC-3 (audit EPIC-02-2026-11-25, Decided 7).
+describe("a red keeps its hue, and the walk stops at exactly 4.50:1 (CAL-094)", () => {
+  it("darkCounterpart keeps a red's hue: #E53935 lightens to #F19593 (CAL-094 AC-1)", () => {
+    expect(darkCounterpart("#E53935")).toBe("#F19593");
+  });
+
+  it("nearestPassing keeps a red's hue: #D9534F (4.33:1) goes two points lighter to #DB5B57 (CAL-094 AC-2)", () => {
+    expect(chipText("#D9534F").ratio).toBe(4.33);
+    expect(nearestPassing("#D9534F")).toStrictEqual({
+      hex: "#DB5B57",
+      direction: "lighter",
+    });
+  });
+
+  it("nearestPassing stops at a colour at exactly 4.50:1: #108D40 (4.28:1) goes one point darker to #10893E (CAL-094 AC-3)", () => {
+    expect(chipText("#108D40").ratio).toBe(4.28);
+    expect(chipText("#10893E")).toStrictEqual({
+      text: "#FFFFFF",
+      ratio: 4.5,
+    });
+    expect(nearestPassing("#108D40")).toStrictEqual({
+      hex: "#10893E",
+      direction: "darker",
+    });
+  });
+});
