@@ -341,3 +341,87 @@ describe("Back returns to the previous calendar route (AC-5, Block 3)", () => {
     expect(screen.queryByRole("heading", { name: "Event kinds" })).toBeNull();
   });
 });
+
+// CAL-095 AC-1 to AC-4 (audit EPIC-02-2026-11-26, Decided 3).
+describe("the editor closes, and ?kind=new waits for the kinds (CAL-095)", () => {
+  /** The radios of one group whose aria-checked is "true", by name. */
+  function checkedIn(dialog: HTMLElement, groupName: string): string[] {
+    return within(within(dialog).getByRole("radiogroup", { name: groupName }))
+      .getAllByRole("radio")
+      .filter((r) => r.getAttribute("aria-checked") === "true")
+      .map((r) => r.getAttribute("aria-label") ?? r.textContent ?? "");
+  }
+
+  /** /kinds with Movies and Gym, "Edit Movies" open, its Name retyped to Films. */
+  async function openMoviesAndTypeFilms() {
+    const { user } = await renderPage();
+    await user.click(
+      await screen.findByRole("button", { name: "Edit Movies" }),
+    );
+    const dialog = screen.getByRole("dialog", { name: "Edit Movies" });
+    const name = within(dialog).getByRole("textbox", { name: "Name" });
+    await user.clear(name);
+    await user.type(name, "Films");
+    expect(name).toHaveValue("Films");
+    return { user, dialog };
+  }
+
+  function expectNothingSaved() {
+    expect(repo.update).not.toHaveBeenCalled();
+    expect(repo.insert).not.toHaveBeenCalled();
+    expect(repo.insertMany).not.toHaveBeenCalled();
+    expect(repo.remove).not.toHaveBeenCalled();
+    expect(rowNames()).toStrictEqual(["Movies", "Gym"]);
+  }
+
+  it("after a Save that succeeds no dialog is open, and the list reads Films, Gym (CAL-095 AC-1)", async () => {
+    const renamed = { ...MOVIES, name: "Films", updatedAt: LATER };
+    repo.listAll
+      .mockResolvedValueOnce(rows(MOVIES, GYM))
+      .mockResolvedValue(rows(renamed, GYM));
+    repo.update.mockResolvedValue({ status: "ok", row: renamed });
+    const { user, dialog } = await openMoviesAndTypeFilms();
+    await user.click(within(dialog).getByRole("button", { name: "Save" }));
+    expect(
+      await screen.findByRole("button", { name: "Edit Films" }),
+    ).toBeInTheDocument();
+    expect(repo.update).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(rowNames()).toStrictEqual(["Films", "Gym"]);
+  });
+
+  it("Cancel closes the editor and saves nothing (CAL-095 AC-2)", async () => {
+    repo.listAll.mockResolvedValue(rows(MOVIES, GYM));
+    const { user, dialog } = await openMoviesAndTypeFilms();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expectNothingSaved();
+  });
+
+  it("Escape closes the editor and saves nothing (CAL-095 AC-3)", async () => {
+    repo.listAll.mockResolvedValue(rows(MOVIES, GYM));
+    const { user } = await openMoviesAndTypeFilms();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expectNothingSaved();
+  });
+
+  it("?kind=new opens nothing while the store is loading, then Add kind on Entertainment, the first pair Movies leaves unused (CAL-095 AC-4)", async () => {
+    let answer: (r: ListResult<Kind>) => void = () => {};
+    repo.listAll.mockReturnValue(
+      new Promise<ListResult<Kind>>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await renderPage({ search: "?kind=new", prime: false });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    answer(rows(MOVIES));
+    const dialog = await screen.findByRole("dialog", { name: "Add kind" });
+    expect(checkedIn(dialog, "Light theme colour")).toStrictEqual([
+      "Entertainment",
+    ]);
+    expect(checkedIn(dialog, "Dark theme colour")).toStrictEqual([
+      "Entertainment",
+    ]);
+  });
+});
